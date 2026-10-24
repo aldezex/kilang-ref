@@ -36,8 +36,138 @@ kind:    unit (go test)      file: internal/driver/cli_test.go
 case:    `Main` sin argumentos
 input:   []
 expect:  código de salida 2; stdout vacío; stderr exactamente
-         "usage: ki <command> [args]\ncommands: --version\n"
-why:     es el único test que fija la lista entera; los demás tests de uso solo miran el prefijo para
-         no cambiar con cada comando nuevo, así que si la lista saliera vacía o con `--version` mal
-         escrito, solo este lo vería
+         "usage: ki <command> [args]\ncommands: --version, version\n"
+why:     es el único test que fija la lista entera, con su orden y sus separadores; los demás tests de
+         uso solo miran el prefijo para no cambiar con cada comando nuevo, así que si `version` faltara
+         en la lista o saliera antes que `--version`, solo este lo vería
 ref:     TestCLI/usage_lists_commands
+
+[T01.05] cli.version_command                               level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con el comando `version`, como `ki version`
+input:   ["version"]
+expect:  código de salida 0; stdout exactamente "ki " + Version + " (" + runtime.Version() + ")\n",
+         idéntico al de `Main` con `--version`; stderr vacío
+why:     `version` y `--version` son dos formas de preguntar lo mismo; si una imprimiera otra cosa,
+         o nada, tendrías que recordar cuál es la buena, y un informe de fallo podría llevar la equivocada
+ref:     TestCLI/version_command
+
+[T01.06] cli.version_rejects_unknown_flag                  level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `version` y un flag que el comando no define, con el stderr del propio proceso
+         (`os.Stderr`) apuntando a un fichero temporal mientras corre
+input:   ["version", "-x"]
+expect:  código de salida 2; stdout vacío; stderr exactamente
+         "ki version: flag provided but not defined: -x\nusage: ki version\n"; y el fichero que hace
+         de `os.Stderr`, vacío
+why:     con `flag.ExitOnError`, el paquete `flag` llamaría a `os.Exit` desde dentro de `Main` y
+         el test, que ejecuta `Main` en proceso, moriría con él; con `ContinueOnError` el error vuelve
+         a `ki`, que lo da en su formato: el comando, el mensaje de `flag` y la línea `usage:` que te
+         dice cómo se escribe bien. Y sin `SetOutput(io.Discard)`, `flag` escribiría además su propio
+         mensaje y su ayuda en el stderr real del proceso, por delante de las dos líneas de `ki`
+ref:     TestCLI/version_rejects_unknown_flag
+
+[T01.07] cli.version_flag_rejects_extra_args               level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `--version` o con `version` y un argumento posicional de más; una tabla de dos
+         filas (`flag` y `command`)
+input:   ["--version", "extra"] y ["version", "extra"]
+expect:  en las dos filas, código de salida 2 y stdout vacío; stderr exactamente
+         "ki --version: unexpected argument \"extra\"\nusage: ki --version\n" en la primera y
+         "ki version: unexpected argument \"extra\"\nusage: ki version\n" en la segunda
+why:     una palabra de más suele ser una errata; si `ki` la ignorara en silencio creerías que la usó.
+         El mensaje nombra el comando tal como lo escribiste, `--version` o `version`, aunque los dos
+         compartan el mismo código: así ves cuál de las dos formas la rechazó
+ref:     TestCLI/version_flag_rejects_extra_args
+
+[T01.08] toolchain.go_mod_lines                            level: core
+kind:    unit (go test)      file: internal/toolchain/toolchain_test.go
+case:    el `go.mod` del repositorio, leído desde `internal/toolchain` como `../../go.mod`;
+         una tabla de tres filas (`go_line`, `toolchain_line`, `ignore_build`)
+expect:  el fichero tiene una línea idéntica, entera, a cada una de "go 1.27", "toolchain go1.27.3"
+         e "ignore ./build"
+why:     `go mod init` escribe `go 1.27.3` y el capítulo 1 lo cambia a `go 1.27` más `toolchain go1.27.3`;
+         como el test compara líneas enteras, un `go 1.27.3` olvidado no pasa por `go 1.27`. Y sin
+         `ignore ./build`, `./...` entraría en lo que dejes bajo `build/`
+ref:     TestGoMod/lines
+
+[T01.09] toolchain.go_mod_no_dependencies                  level: core
+kind:    unit (go test)      file: internal/toolchain/toolchain_test.go
+case:    las líneas del `go.mod` del repositorio
+expect:  ninguna línea empieza por "require"
+why:     Ki solo usa la biblioteca estándar; un `go get` hecho sin querer, o un import de `golang.org/x/…`
+         que `go mod tidy` resuelve por ti, añade una línea `require`, y este test falla en ese momento
+ref:     TestGoMod/no_dependencies
+
+[T01.10] toolchain.runtime_version_matches_toolchain_line  level: core
+kind:    unit (go test)      file: internal/toolchain/toolchain_test.go
+case:    la primera palabra tras "toolchain " en la línea `toolchain` del `go.mod`, y `runtime.Version()`
+         del binario de test
+expect:  el `go.mod` tiene una línea `toolchain`, y esa palabra es exactamente `runtime.Version()`
+         (que la línea sea "toolchain go1.27.3" lo fija T01.08)
+why:     con `GOTOOLCHAIN=local`, `go` compila con el Go instalado aunque la línea `toolchain` pida otro
+         parche; este test te avisa si los hechos que el libro cita «en Go 1.27» se están comprobando
+         con un Go distinto del que fija el `go.mod`
+ref:     TestRuntimeVersionMatchesToolchainLine
+
+[T01.11] toolchain.go_mod_init_writes_full_version         level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    `go mod init example.com/m`, con `GOTOOLCHAIN=local`, en un directorio temporal vacío
+expect:  el comando sale con 0, y el `go.mod` que escribe tiene exactamente una línea que empieza por
+         "go ", y es "go 1.27.3" (no "go 1.27")
+why:     en Go 1.27, `go mod init` escribe la versión completa del toolchain instalado, y por eso el
+         capítulo 1 te hace reescribir esa línea; si otra versión cambia ese texto, este test falla y
+         sabes que ese párrafo del libro ya no es cierto
+ref:     TestToolchainFacts/go_mod_init_writes_full_version
+
+[T01.12] toolchain.ignore_directive_hides_build            level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    un módulo temporal con `ignore ./build` en su `go.mod`, un fichero `m.go` (paquete `m`) en la
+         raíz y un `build/x/main.go` que no compila (`func main() { this does not compile }`)
+expect:  `go list ./...` sale con 0 y su stdout es exactamente "example.com/m\n": `build/x` no aparece
+why:     `build/` es donde dejas binarios y módulos de prueba; sin `ignore`, `./...` los incluiría, y un
+         fichero roto que no es parte de `ki` haría fallar `go vet ./...` y `go test ./...`
+ref:     TestToolchainFacts/ignore_directive_hides_build
+
+[T01.13] toolchain.plain_build_has_devel_version           level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    un programa que imprime `debug.ReadBuildInfo().Main.Version`, en un módulo de `t.TempDir()`,
+         que está fuera de cualquier repositorio git, construido con un `go build -o prog .` sin más
+         flags y ejecutado
+expect:  `go build` sale con 0 y el programa imprime exactamente "(devel)\n"
+why:     por eso `ki --version` lleva su propia constante `Version`: fuera de un repositorio git, como
+         aquí, un `go build` normal da `(devel)`; dentro de uno, como el repositorio en el que escribes
+         `ki`, da una pseudo-versión como `v0.0.0-20261024213547-ad33e4c9f4d2`, que cambia con cada
+         commit y lleva `+dirty` si hay cambios sin commit. Ninguna de las dos es un número de versión
+         estable que `ki --version` pueda mostrar
+ref:     TestToolchainFacts/plain_build_has_devel_version
+
+[T01.14] toolchain.race_requires_cgo                       level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    `go test -race` con `CGO_ENABLED=0` sobre un módulo temporal con un test vacío
+expect:  `go` sale con el código 2 y su salida (stdout más stderr) contiene "-race requires cgo"
+why:     el detector de carreras necesita cgo; si un día `go test -race` falla con este mensaje en tu
+         máquina o en la CI, el problema está en el entorno (`CGO_ENABLED`, o falta un compilador de C),
+         no en tu código
+ref:     TestToolchainFacts/race_requires_cgo
+
+[T01.15] toolchain.generic_method_on_concrete_type         level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    un programa temporal con `type Set struct{ items []int }` y el método genérico
+         `func (s *Set) Map[U any](f func(int) U) []U`, llamado con el argumento de tipo inferido
+         (`string`) y explícito (`s.Map[float64]`)
+expect:  `go build` sale con 0 y el programa imprime exactamente "[10 20 30]\n[0.5 1 1.5]\n"
+why:     el libro te presenta los métodos genéricos como novedad de Go 1.27; este test comprueba que
+         el toolchain instalado los compila y los ejecuta como el libro cuenta, con el argumento de tipo
+         inferido y explícito
+ref:     TestToolchainFacts/generic_method_on_concrete_type
+
+[T01.16] toolchain.testflag_lists_shuffle_fuzz_artifacts   level: core
+kind:    unit (go test)      file: internal/toolchain/facts_test.go
+case:    `go help testflag`, con `GOTOOLCHAIN=local`
+expect:  el comando sale con 0 y, para cada uno de `-shuffle`, `-fuzz` y `-artifacts`, su salida tiene
+         una línea que empieza por un tabulador y el flag como primera palabra (así `-fuzztime` no cuenta
+         como `-fuzz`)
+why:     el libro usa estos flags de `go test` y cita su texto «en Go 1.27»; si otra versión los renombra
+         o los quita, este test falla antes de que una orden del libro deje de funcionar
+ref:     TestToolchainFacts/testflag_lists_shuffle_fuzz_artifacts
