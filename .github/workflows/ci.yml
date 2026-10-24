@@ -1,0 +1,73 @@
+# The CI of the repository. On every push to main, on every push of a chapter
+# or milestone tag (ch*, m*) and on every pull request, it runs ci/ci-local.sh,
+# the same script that gates every session tag on this machine: gofmt, go vet,
+# the ki build, go test with and without -race, and the cross-compilation of
+# ./cmd/ki for windows/amd64 and linux/arm64.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['ch*', 'm*']
+  pull_request: {}
+
+# The job only reads the repository, so its token gets no more than that.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # A hung step would otherwise run until GitHub's limit of six hours.
+    timeout-minutes: 15
+    # GitHub's amd64 runner starts the job inside an ubuntu:26.04 container,
+    # the same Ubuntu release as the WSL machine the book is written on.
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    env:
+      # Never let the go command download another toolchain behind our back.
+      GOTOOLCHAIN: local
+      # Empty, so a GOFLAGS inherited from the runner cannot add flags to the
+      # go commands that ci-local.sh runs.
+      GOFLAGS: ""
+    steps:
+      # The bare image has no git, no certificates and no C compiler.
+      # actions/checkout needs git to clone the repository with its history,
+      # and git needs ca-certificates to talk https; go test -race needs cgo,
+      # so gcc and libc6-dev; actions/setup-go unpacks Go with tar. apt gives
+      # up on a failed download unless it is told to retry, so both apt-get
+      # commands try each download up to three times: a mirror that fails once
+      # should not turn the run red.
+      - name: Install system packages
+        run: apt-get update -o Acquire::Retries=3 && apt-get install -y -o Acquire::Retries=3 --no-install-recommends git ca-certificates gcc libc6-dev tar
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          # 0 fetches all the history and every tag, not only the last commit.
+          fetch-depth: 0
+      # setup-go reads the toolchain line of go.mod (go1.27.3) only when
+      # GOTOOLCHAIN is not local in its own environment; under the job's
+      # GOTOOLCHAIN: local it would read the go line (1.27) and install the
+      # newest 1.27.x instead. So this step alone runs with auto. Before it
+      # runs any go command, setup-go sets GOTOOLCHAIN=local again and exports
+      # it to every later step, which also gets it from the job's env.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        env:
+          GOTOOLCHAIN: auto
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Before any check runs, this step stops the job unless the Go that
+      # setup-go installed is exactly go1.27.3, the version of the toolchain
+      # line. The literal changes together with go.mod at every Go upgrade.
+      - name: Check the Go version
+        run: test "$(go version | awk '{print $3}')" = go1.27.3
+      # The checkout belongs to the runner's user, not to root inside the
+      # container, and git refuses to work in a repository that another user
+      # owns. go build asks git for the commit it records in the binary, so
+      # without this line ci-local.sh could not build ki.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Run ci-local
+        run: ci/ci-local.sh

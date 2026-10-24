@@ -46,7 +46,27 @@ Los hechos de R4 y de la revisión técnica que usan las Partes I y II (las fila
 
 ## CI
 
-Aquí van las versiones de `actions/checkout` y `actions/setup-go` que usa `.github/workflows/ci.yml`. Vacío hasta que exista ese workflow.
+`.github/workflows/ci.yml` (ch01-s3) ejecuta `ci/ci-local.sh` en un contenedor `ubuntu:26.04` sobre el runner `ubuntu-latest` (amd64), con `GOTOOLCHAIN=local` y `GOFLAGS` vacío. Usa cada acción en su versión mayor más alta a fecha de 2026-10-25, cuando se escribió:
+
+| Acción | En `ci.yml` | Última release | Publicada | Commit de la etiqueta mayor |
+|---|---|---|---|---|
+| `actions/checkout` | `actions/checkout@v7` | `v7.0.1` | 2026-07-20 | `3d3c42e5aac5`, el mismo que `v7.0.1` |
+| `actions/setup-go` | `actions/setup-go@v7` | `v7.0.0` | 2026-07-16 | `b7ad1dad31e0`, el mismo que `v7.0.0` |
+
+```console
+$ gh api repos/actions/checkout/releases/latest -q .tag_name
+v7.0.1
+$ gh api repos/actions/setup-go/releases/latest -q .tag_name
+v7.0.0
+```
+
+**Qué Go instala `setup-go` con `go-version-file: go.mod`.** Según su código en `v7.0.0` (`resolveVersionInput` y `setGoToolchain` en `src/main.ts`, `parseGoVersionFile` en `src/installer.ts`), lee la línea `toolchain` solo si `GOTOOLCHAIN` no vale `local` en su entorno; si vale `local`, lee la línea `go` (`1.27`) y la toma como un rango: la 1.27.x más alta de la caché de herramientas del runner o, si no hay ninguna, del manifiesto de `actions/go-versions`. Con el `GOTOOLCHAIN: local` del `env` del job, que llega a todos los pasos, instalaría go1.27.3 solo mientras fuera la 1.27.x más alta (el 2026-10-25, la imagen de `ubuntu-latest`, Ubuntu 24.04, no trae ninguna 1.27, y la más alta del manifiesto es la 1.27.3), y desde la primera 1.27.4 el paso «Check the Go version» pararía todos los jobs, también el de cualquier etiqueta empujada desde entonces, porque su línea `toolchain` nunca se leería.
+
+**Decisión (ch01-s3, tras la revisión).** El paso «Set up Go» lleva su propio `env` con `GOTOOLCHAIN: auto`, que vale solo para ese paso. Así `setup-go` lee `toolchain go1.27.3` e instala esa versión exacta; antes de ejecutar ningún `go`, `setGoToolchain` pone `GOTOOLCHAIN=local` en su propio proceso y lo exporta a los pasos siguientes, que además lo reciben del `env` del job. La otra salida que preveía la Tarea 4, `go-version: '1.27.3'` en lugar de `go-version-file: go.mod`, se descartó porque el spec (11.4) fija `go-version-file: go.mod` y `GOTOOLCHAIN=local`, y `TestCIWorkflow/pins_toolchain` fija las dos líneas. Falta confirmarlo en la primera ejecución en GitHub (Tarea 8): el registro del paso «Set up Go» debe mostrar `Setup go version spec 1.27.3`.
+
+El paso «Check the Go version» compara la versión instalada con el literal `go1.27.3`, el mismo número que la línea `toolchain` del `go.mod`. En cada cambio de versión de Go, ese literal de `ci.yml` cambia en el mismo commit que el `go.mod`. `TestCIWorkflow/go_version_matches_toolchain` lo fija: lee la línea `toolchain` del `go.mod` y exige que el paso lleve exactamente ese número.
+
+El workflow declara `permissions: contents: read` (el token solo lee el repositorio) y, en el job, `timeout-minutes: 15`; y pasa `-o Acquire::Retries=3` a los dos `apt-get`, porque `apt` no reintenta una descarga fallida si no se le pide. Las acciones siguen fijadas por su versión mayor, como arriba.
 
 ## Delve
 

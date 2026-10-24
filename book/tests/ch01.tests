@@ -171,3 +171,99 @@ expect:  el comando sale con 0 y, para cada uno de `-shuffle`, `-fuzz` y `-artif
 why:     el libro usa estos flags de `go test` y cita su texto «en Go 1.27»; si otra versión los renombra
          o los quita, este test falla antes de que una orden del libro deje de funcionar
 ref:     TestToolchainFacts/testflag_lists_shuffle_fuzz_artifacts
+
+[T01.17] toolchain.ci_workflow_runs_ci_local               level: core
+kind:    unit (go test)      file: internal/toolchain/ci_test.go
+case:    el workflow de GitHub Actions del repositorio, leído como texto desde `internal/toolchain`
+         como `../../.github/workflows/ci.yml`, sin líneas en blanco ni comentarios; las líneas
+         anidadas bajo `jobs:` > `check:` > `steps:` > `- name: Run ci-local`
+expect:  esas líneas son exactamente una: "run: ci/ci-local.sh"
+why:     la CI de GitHub tiene que ejecutar el mismo script que ejecutas en tu máquina antes de cada
+         etiqueta, y siempre; si el workflow llamara a otra cosa, esa línea quedara comentada con `#`,
+         o el paso llevara además `if: false` o `continue-on-error: true`, un push podría salir en
+         verde sin haber pasado `gofmt`, `go vet`, `-race` ni la compilación cruzada
+ref:     TestCIWorkflow/runs_ci_local
+
+[T01.18] toolchain.ci_workflow_pins_toolchain              level: core
+kind:    unit (go test)      file: internal/toolchain/ci_test.go
+case:    el mismo `ci.yml`, leído como texto; una tabla de tres filas (`job_env`, `setup_go_env`,
+         `setup_go_with`), cada una con la línea que debe estar bajo su propio padre
+input:   `GOTOOLCHAIN: local` bajo `jobs:` > `check:` > `env:`; `GOTOOLCHAIN: auto` bajo el `env:` del
+         paso `- name: Set up Go`; `go-version-file: go.mod` bajo el `with:` de ese mismo paso
+expect:  en cada fila, entre las líneas anidadas bajo ese padre hay una cuyo texto, sin los espacios
+         iniciales, es exactamente la esperada
+why:     son los hechos de la CI que cita el capítulo 1: la versión que instala `setup-go` sale del
+         `go.mod`; `GOTOOLCHAIN: local` en el `env` del job deja escrito en el propio workflow que
+         `go` usa el Go instalado y nunca descarga otro en silencio; y el `GOTOOLCHAIN: auto` del
+         paso «Set up Go», solo de ese paso, es lo que deja a `setup-go` leer la línea `toolchain`.
+         Como el test compara líneas enteras y mira de qué padre cuelgan, un `# GOTOOLCHAIN: local`
+         comentado, un `GOTOOLCHAIN: local+auto`, que sí permite descargas, o el `local` del job y el
+         `auto` del paso intercambiados, no pasan
+ref:     TestCIWorkflow/pins_toolchain
+
+[T01.19] toolchain.ci_workflow_go_version_matches_toolchain level: core
+kind:    unit (go test)      file: internal/toolchain/ci_test.go
+case:    el mismo `ci.yml` y la línea `toolchain` del `go.mod` del repositorio (hoy, "toolchain go1.27.3");
+         las líneas anidadas bajo `jobs:` > `check:` > `steps:` > `- name: Check the Go version`
+expect:  esas líneas son exactamente una: `run: test "$(go version | awk '{print $3}')" = ` seguido de
+         la versión de la línea `toolchain` (hoy, `go1.27.3`)
+why:     el paso «Check the Go version» compara el Go que instaló `setup-go` con un número escrito a
+         mano en el workflow. Si subes el `go.mod` a `toolchain go1.27.4` y el Go de tu máquina,
+         `ci/ci-local.sh` y T01.10 siguen en verde, y la CI se pone roja en el primer push porque el
+         número del workflow se quedó viejo; con este test, el workflow y el `go.mod` cambian juntos o
+         no pasa nada. Tampoco pasa si borras el paso
+ref:     TestCIWorkflow/go_version_matches_toolchain
+
+[T01.20] toolchain.ci_workflow_triggers                    level: core
+kind:    unit (go test)      file: internal/toolchain/ci_test.go
+case:    el mismo `ci.yml`; las líneas anidadas bajo `on:`
+expect:  son exactamente cuatro, en este orden: "push:", "branches: [main]", "tags: ['ch*', 'm*']" y
+         "pull_request: {}"
+why:     la CI debe arrancar con cada push a `main`, con cada etiqueta de capítulo o de hito y con cada
+         pull request, que es lo que promete la cabecera del workflow; sin este test, quitar la etiqueta
+         `ch*` o `pull_request` deja la CI en verde sin ejecutar nunca justo lo que más importa
+ref:     TestCIWorkflow/triggers
+
+[T01.21] main.binary_streams_and_exit_codes                level: core
+kind:    unit (go test)      file: cmd/ki/main_test.go
+case:    el binario de test vuelto a lanzar como proceso hijo, con la variable `KI_TEST_RUN_MAIN=1`, que
+         hace que ejecute `main` en lugar de los tests; una tabla de tres filas (`version`, `no_args`,
+         `unknown_command`)
+input:   ["--version"], [] y ["frobnicate"]
+expect:  `--version`: código de salida 0, stdout exactamente "ki " + Version + " (" + runtime.Version() +
+         ")\n" y stderr vacío. Sin argumentos y con `frobnicate`: código de salida 2, stdout vacío y
+         stderr empieza por "usage: ki <command> [args]\ncommands: "
+why:     los tests de `driver` llaman a `Main` dentro del proceso, así que lo único que ejecutaba
+         `ki --version` de verdad, `main`, no lo ejecutaba ningún test: si pasara `os.Args` en lugar de
+         `os.Args[1:]`, quitara el `os.Exit` o cambiara stdout por stderr, T01.01 a T01.03 seguirían
+         en verde y `ki` se rompería en cuanto lo ejecutaras
+ref:     TestBinary/streams_and_exit_codes
+
+[T01.22] cli.version_help_prints_usage                     level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `--version` o con `version` y un flag de ayuda; una tabla de dos filas (`flag` y
+         `command`)
+input:   ["--version", "-h"] y ["version", "--help"]
+expect:  en las dos filas, código de salida 0 y stderr vacío; stdout exactamente
+         "usage: ki --version\n" en la primera y "usage: ki version\n" en la segunda
+why:     pedir ayuda no es equivocarse al escribir la línea de órdenes; con `flag.ErrHelp` sin tratar,
+         `ki version -h` saldría con el 2 y con el texto interno de `flag`, «flag: help requested», en
+         lugar de decirte cómo se escribe el comando. `flag` con `ExitOnError` también sale con el 0
+         ante una petición de ayuda, pero escribe su ayuda por stderr; `ki` responde por stdout porque
+         es la respuesta que se pidió. Solo responde así cada comando: `ki -h`, `ki --help` y `ki help`
+         siguen siendo una línea de órdenes que `ki` no conoce (código 2, uso por stderr, como T01.03)
+         hasta que el ejercicio 1 añada `ki help`
+ref:     TestCLI/version_help_prints_usage
+
+[T01.23] cli.version_reports_write_error                   level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `--version` o con `version`, con un `io.Writer` que falla siempre con el error
+         "disk full" como stdout; una tabla de dos filas (`flag` y `command`)
+input:   ["--version"] y ["version"]
+expect:  en las dos filas, código de salida 1; stderr exactamente
+         "ki --version: cannot write to stdout: disk full\n" en la primera y
+         "ki version: cannot write to stdout: disk full\n" en la segunda
+why:     si la escritura falla (disco lleno, tubería cerrada) y `ki` lo ignora, `ki --version >
+         /dev/full` sale con 0 y un script cree que obtuvo la versión; el error de escritura es un
+         error como cualquier otro y no se descarta. Lo mismo vale para todos los comandos que añadas
+ref:     TestCLI/version_reports_write_error

@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"strings"
@@ -62,6 +63,12 @@ func processStderr(t *testing.T, f func()) string {
 	return string(data)
 }
 
+// failingWriter is an io.Writer whose every Write fails with err and writes
+// nothing, like a full disk.
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 func TestCLI(t *testing.T) {
 	t.Run("version_prints_version_and_go", func(t *testing.T) {
 		code, out, err := runCLI(t, "--version")
@@ -119,6 +126,39 @@ func TestCLI(t *testing.T) {
 			code, out, err := runCLI(t, tc.cmd, "extra")
 			if code != 2 || out != "" || err != tc.want {
 				t.Errorf("%s: got %d %q %q, want 2 \"\" %q", tc.name, code, out, err, tc.want)
+			}
+		}
+	})
+	t.Run("version_help_prints_usage", func(t *testing.T) {
+		// Asking for help is not a mistake in the command line: the answer is
+		// the usage line on stdout and exit code 0, and it names the command
+		// as it was typed.
+		tests := []struct {
+			name string
+			args []string
+			want string
+		}{
+			{"flag", []string{"--version", "-h"}, "usage: ki --version\n"},
+			{"command", []string{"version", "--help"}, "usage: ki version\n"},
+		}
+		for _, tc := range tests {
+			code, out, err := runCLI(t, tc.args...)
+			if code != 0 || out != tc.want || err != "" {
+				t.Errorf("%s: got %d %q %q, want 0 %q \"\"", tc.name, code, out, err, tc.want)
+			}
+		}
+	})
+	t.Run("version_reports_write_error", func(t *testing.T) {
+		tests := []struct{ name, cmd, want string }{
+			{"flag", "--version", "ki --version: cannot write to stdout: disk full\n"},
+			{"command", "version", "ki version: cannot write to stdout: disk full\n"},
+		}
+		for _, tc := range tests {
+			var errOut strings.Builder
+			stdout := failingWriter{errors.New("disk full")}
+			code := Main([]string{tc.cmd}, strings.NewReader(""), stdout, &errOut)
+			if code != 1 || errOut.String() != tc.want {
+				t.Errorf("%s: got %d %q, want 1 %q", tc.name, code, errOut.String(), tc.want)
 			}
 		}
 	})
