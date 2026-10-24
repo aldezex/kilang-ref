@@ -1,0 +1,498 @@
+<title>Ki: de cero a experto</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a fixed table of contents on the left (the whole book, part by part), one reading column on the right. */
+:root {
+  --paper: #f6f7f9;
+  --sheet: #ffffff;
+  --ink: #1a1e24;
+  --ink-soft: #4a525e;
+  --rule: #dde1e7;
+  --accent: #2346b8;
+  --accent-soft: #e8edfb;
+  --ok: #1d7a46;
+  --ok-soft: #e4f3ea;
+  --warn: #9a5b00;
+  --warn-soft: #fbf0dc;
+  --code-bg: #f0f2f5;
+  --code-ink: #1f2430;
+  --tok-key: #7a2fa8;
+  --tok-str: #1d7a46;
+  --tok-com: #6b7480;
+  --tok-num: #b0451c;
+  --tok-type: #2346b8;
+  --font-body: "Literata", "Georgia", "Times New Roman", serif;
+  --font-ui: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-code: "JetBrains Mono", "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+  --measure: 70ch;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12151a; --sheet: #181c22; --ink: #e4e7ec; --ink-soft: #a4acb8; --rule: #2a3039;
+    --accent: #8ea6ff; --accent-soft: #1f2840; --ok: #6fd39b; --ok-soft: #16301f; --warn: #f0b45a; --warn-soft: #33270f;
+    --code-bg: #0f1216; --code-ink: #d9dee6; --tok-key: #d4a2ff; --tok-str: #8fdcae; --tok-com: #7d8794; --tok-num: #ffab80; --tok-type: #9cb4ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12151a; --sheet: #181c22; --ink: #e4e7ec; --ink-soft: #a4acb8; --rule: #2a3039;
+  --accent: #8ea6ff; --accent-soft: #1f2840; --ok: #6fd39b; --ok-soft: #16301f; --warn: #f0b45a; --warn-soft: #33270f;
+  --code-bg: #0f1216; --code-ink: #d9dee6; --tok-key: #d4a2ff; --tok-str: #8fdcae; --tok-com: #7d8794; --tok-num: #ffab80; --tok-type: #9cb4ff;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 17px; line-height: 1.6; }
+.app { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100%; }
+/* ---------- table of contents ---------- */
+.toc { position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto; border-right: 1px solid var(--rule);
+  background: var(--sheet); font-family: var(--font-ui); font-size: 14px; padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; }
+.brand { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+.brand b { font-family: var(--font-body); font-size: 26px; letter-spacing: -0.01em; }
+.brand span { color: var(--ink-soft); font-size: 13px; line-height: 1.35; }
+.overall { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 18px; }
+.overall .line { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: 13px; }
+.bar { height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); width: 0; }
+.part { margin-top: 16px; }
+.part h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); margin: 0 0 6px; font-weight: 600; }
+.part h3 small { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.toc li a, .toc li .soon { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 6px; align-items: baseline;
+  padding: 5px 6px; border-radius: 6px; color: var(--ink); text-decoration: none; }
+.toc li a:hover { background: var(--accent-soft); }
+.toc li a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.toc li .soon { color: var(--ink-soft); opacity: 0.6; }
+.toc .num { font-variant-numeric: tabular-nums; color: var(--ink-soft); text-align: right; }
+.toc .meta { font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.toc .done .num { color: var(--ok); }
+.toc .done .num::before { content: "✓ "; }
+/* ---------- reading column ---------- */
+main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.page { max-width: var(--measure); margin: 0 auto; }
+.chapter-head { display: grid; gap: 10px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--rule); }
+.eyebrow { font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.chapter-head h1 { font-size: 38px; line-height: 1.15; margin: 0; letter-spacing: -0.015em; text-wrap: balance; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--font-ui); font-size: 13px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 9px; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-soft); background: var(--sheet); }
+.chip b { color: var(--ink); font-weight: 500; }
+.page h2 { font-size: 27px; line-height: 1.25; margin: 44px 0 12px; letter-spacing: -0.01em; text-wrap: balance; }
+.page h3 { font-size: 21px; line-height: 1.3; margin: 32px 0 10px; text-wrap: balance; }
+.page h4 { font-family: var(--font-ui); font-size: 15px; margin: 24px 0 8px; font-weight: 600; }
+.page p, .page li { hyphens: auto; }
+.page a { color: var(--accent); }
+.page code { font-family: var(--font-code); font-size: 0.86em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 4px; }
+.page pre code { background: none; padding: 0; font-size: 13.5px; }
+.page blockquote { margin: 16px 0; padding-left: 14px; border-left: 3px solid var(--rule); color: var(--ink-soft); }
+.page hr { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
+.table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); }
+.page table { border-collapse: collapse; width: 100%; font-family: var(--font-ui); font-size: 13.5px; line-height: 1.45; }
+.page th, .page td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+.page th { font-weight: 600; background: var(--paper); position: sticky; top: 0; }
+.page td code { font-size: 12.5px; }
+/* code blocks: the file they come from and the tag they were taken at */
+figure.code { margin: 18px 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--code-bg); }
+figure.code figcaption { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: baseline;
+  font-family: var(--font-ui); font-size: 12px; color: var(--ink-soft); padding: 7px 12px; border-bottom: 1px solid var(--rule); background: var(--sheet); }
+figure.code figcaption .path { font-family: var(--font-code); color: var(--ink); overflow-wrap: anywhere; }
+figure.code pre { margin: 0; padding: 12px 14px; overflow-x: auto; color: var(--code-ink); }
+.copy { font: inherit; font-size: 12px; color: var(--ink-soft); background: none; border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; }
+.copy:hover { color: var(--accent); border-color: var(--accent); }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in.hljs-keyword { color: var(--tok-key); }
+.hljs-string, .hljs-regexp, .hljs-addition { color: var(--tok-str); }
+.hljs-comment, .hljs-quote { color: var(--tok-com); font-style: italic; }
+.hljs-number, .hljs-literal, .hljs-deletion { color: var(--tok-num); }
+.hljs-type, .hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-built_in { color: var(--tok-type); }
+.hljs-meta { color: var(--tok-com); }
+.hljs-addition { background: var(--ok-soft); }
+.hljs-deletion { background: var(--warn-soft); }
+/* containers: exercises, solutions, comparisons, notes */
+.box { margin: 20px 0; padding: 14px 16px; border-radius: 8px; border: 1px solid var(--rule); background: var(--sheet); }
+.box > :first-child { margin-top: 0; }
+.box > :last-child { margin-bottom: 0; }
+.box-label { font-family: var(--font-ui); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; color: var(--ink-soft); margin-bottom: 6px; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.box.from { border-left: 3px solid var(--accent); }
+.box.from .box-label { color: var(--accent); }
+.box.note { border-left: 3px solid var(--warn); }
+.box.note .box-label { color: var(--warn); }
+.box.bug { border-left: 3px solid var(--tok-num); }
+.box.exercise { border-left: 3px solid var(--ok); }
+.box.exercise.is-done { background: var(--ok-soft); }
+.box.review { border-left: 3px solid var(--ink-soft); }
+.done-toggle { display: inline-flex; gap: 6px; align-items: center; font-family: var(--font-ui); font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--ink-soft); cursor: pointer; }
+.done-toggle input { accent-color: var(--ok); width: 15px; height: 15px; }
+details.fold { margin: 10px 0 20px; border: 1px dashed var(--rule); border-radius: 8px; background: var(--sheet); }
+details.fold > summary { cursor: pointer; padding: 9px 14px; font-family: var(--font-ui); font-size: 13.5px; color: var(--ink-soft); list-style: none; display: flex; gap: 8px; align-items: baseline; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸"; color: var(--accent); }
+details.fold[open] > summary::before { content: "▾"; }
+details.fold[open] > summary { border-bottom: 1px dashed var(--rule); }
+details.fold > .fold-body { padding: 4px 14px 12px; }
+details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
+.end { margin-top: 48px; padding: 18px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; font-family: var(--font-ui); }
+.btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: var(--sheet); cursor: pointer; text-decoration: none; display: inline-block; }
+.btn.secondary { background: none; color: var(--accent); }
+.btn:focus-visible, .copy:focus-visible, .toc a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status { font-family: var(--font-ui); font-size: 13px; color: var(--ink-soft); }
+.welcome { display: grid; gap: 14px; }
+.welcome h1 { font-size: 44px; line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
+.welcome .lead { font-size: 19px; color: var(--ink-soft); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+.card { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); text-decoration: none; color: var(--ink); font-family: var(--font-ui); }
+.card:hover { border-color: var(--accent); }
+.card .eyebrow { font-size: 11px; }
+.card b { font-family: var(--font-body); font-size: 17px; line-height: 1.3; }
+.card small { color: var(--ink-soft); }
+.loading { color: var(--ink-soft); font-family: var(--font-ui); }
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .chapter-head h1 { font-size: 30px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="app">
+  <nav class="toc" id="toc" aria-label="Índice del libro">
+    <div class="brand"><b>Ki</b><span>De cero a experto. Construye tu propio lenguaje funcional en Go.</span></div>
+    <div class="overall" id="overall">
+      <div class="line"><span>Capítulos leídos</span><span id="ov-read">0 / 68</span></div>
+      <div class="bar"><i id="ov-bar"></i></div>
+      <div class="line"><span>Ejercicios hechos</span><span id="ov-ex">0</span></div>
+      <div class="line"><span>Disponibles</span><span id="ov-avail">…</span></div>
+    </div>
+    <div id="parts"><p class="loading">Cargando el índice…</p></div>
+  </nav>
+  <main>
+    <article class="page" id="page"><p class="loading">Cargando el libro…</p></article>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+(() => {
+  "use strict";
+  // Progress keys carry the edition, so marks from another edition never show up here.
+  const EDITION = "go";
+  const state = { outline: null, manifest: null, available: new Map(), progress: {}, chapterCache: new Map(), current: null };
+  const store = { db: null, uid: null };
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, "0");
+  const key = (n) => EDITION + "-ch" + pad(n);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const CONTAINER_LABEL = { exercise: "Ejercicio", solution: "Solución", review: "Pregunta", answer: "Respuesta", note: "Nota", bug: "Bug encontrado" };
+  const MODE_LABEL = { test: "test de referencia", file: "fichero", diff: "cambio", listing: "fragmento" };
+  const FFFD_MARKER = "%%U+FFFD%%";
+
+  // ---------- progress: the db capability when the viewer has it, browser storage otherwise ----------
+  const LOCAL_KEY = "ki-book-progress-" + EDITION + "-v1";
+  function loadLocal() {
+    try { const raw = localStorage.getItem(LOCAL_KEY); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+  }
+  function saveLocal() {
+    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(state.progress)); } catch { /* storage may be blocked */ }
+  }
+  function chapterProgress(n) {
+    const k = key(n);
+    if (!state.progress[k]) state.progress[k] = { read: false, exercises: {} };
+    return state.progress[k];
+  }
+  const pendingWrites = new Map();
+  function persist(n) {
+    saveLocal();
+    if (!store.db || !store.uid) return;
+    const k = key(n);
+    // One write at a time per document: queue the latest body behind any write in flight.
+    const body = JSON.parse(JSON.stringify(chapterProgress(n)));
+    const prev = pendingWrites.get(k) || Promise.resolve();
+    const next = prev.then(() => store.db.collection("data/users/" + store.uid).doc(k).set(body)).catch(() => {
+      const el = $("sync");
+      if (el) el.textContent = "No se pudo guardar en tu cuenta; queda guardado en este navegador.";
+    });
+    pendingWrites.set(k, next);
+  }
+  async function connectStore() {
+    try {
+      if (!window.claude || !window.claude.use) return;
+      const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+      if (!db || !user) return;
+      const uid = await user.id();
+      if (!uid) return;
+      store.db = db; store.uid = uid;
+      db.collection("data/users/" + uid).onSnapshot((snap) => {
+        let changed = false;
+        for (const doc of snap.docs) {
+          if (!doc.id.startsWith(EDITION + "-")) continue;
+          const data = doc.data();
+          if (!data) continue;
+          const remote = { read: !!data.read, exercises: Object.assign({}, data.exercises || {}) };
+          if (JSON.stringify(state.progress[doc.id]) !== JSON.stringify(remote)) { state.progress[doc.id] = remote; changed = true; }
+        }
+        if (changed) { saveLocal(); renderToc(); refreshChapterMarks(); }
+      }, () => { /* a dead subscription leaves browser storage in charge */ });
+    } catch { /* no runtime: browser storage only */ }
+  }
+
+  // ---------- markdown: containers first, then marked, then code captions and folds ----------
+  function parseInfo(info) {
+    const m = /^(\S*)\s*(.*)$/.exec(info || "");
+    const attrs = {};
+    (m ? m[2] : "").replace(/(\w+)="([^"]*)"/g, (_, k, v) => { attrs[k] = v.replace(/&quot;/g, '"').replace(/&#96;/g, "`"); return ""; });
+    return { lang: m ? m[1] : "", attrs };
+  }
+  const renderer = new marked.Renderer();
+  renderer.code = function (code, info) {
+    const { lang, attrs } = parseInfo(info);
+    const language = lang === "ki" ? "rust" : lang === "sh" ? "bash" : lang === "goasm" ? "x86asm" : lang;
+    let html;
+    try {
+      html = language && hljs.getLanguage(language) ? hljs.highlight(code, { language, ignoreIllegals: true }).value : esc(code);
+    } catch { html = esc(code); }
+    const caption = attrs.title || attrs.tag
+      ? `<figcaption><span class="path">${esc(attrs.title || "")}</span><span>${attrs.tag ? "en " + esc(attrs.tag) : ""}${attrs.mode && MODE_LABEL[attrs.mode] ? " · " + MODE_LABEL[attrs.mode] : ""} <button class="copy" type="button">Copiar</button></span></figcaption>`
+      : `<figcaption><span>${esc(lang || "texto")}</span><button class="copy" type="button">Copiar</button></figcaption>`;
+    const figure = `<figure class="code">${caption}<pre><code class="hljs language-${esc(language)}">${html}</code></pre></figure>`;
+    if (attrs.mode === "test") {
+      return `<details class="fold reftest"><summary>Test de referencia${attrs.title ? " · " + esc(attrs.title) : ""}${attrs.hint ? " · " + esc(attrs.hint) : ""}</summary><div class="fold-body">${figure}</div></details>`;
+    }
+    return figure;
+  };
+  renderer.table = function (header, body) {
+    return `<div class="table-wrap"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
+  };
+  marked.setOptions({ renderer, gfm: true });
+
+  function splitContainers(md) {
+    // Returns a list of {kind, arg, text} blocks; plain text has kind "". A ::: line inside a code fence is text.
+    const lines = md.split("\n");
+    const blocks = [];
+    let current = { kind: "", arg: "", lines: [] };
+    let fence = null;
+    for (const line of lines) {
+      const f = /^(`{3,})/.exec(line);
+      if (f) {
+        if (fence === null) fence = f[1]; else if (line.trim().replace(/`/g, "") === "") fence = null;
+      }
+      if (fence === null && !f) {
+        const open = /^:::(\w+)(?:\s+(.*))?$/.exec(line);
+        if (open && current.kind === "") {
+          blocks.push(current);
+          current = { kind: open[1], arg: (open[2] || "").trim(), lines: [] };
+          continue;
+        }
+        if (line.trim() === ":::" && current.kind !== "") {
+          blocks.push(current);
+          current = { kind: "", arg: "", lines: [] };
+          continue;
+        }
+      }
+      current.lines.push(line);
+    }
+    blocks.push(current);
+    return blocks.map((b) => ({ kind: b.kind, arg: b.arg, text: b.lines.join("\n") }));
+  }
+
+  function chapterHtml(md) {
+    const body = md.replace(/^---\n[\s\S]*?\n---\n/, "");
+    let exercise = 0;
+    const out = [];
+    for (const b of splitContainers(body)) {
+      const inner = marked.parse(b.text);
+      switch (b.kind) {
+        case "": out.push(inner); break;
+        case "exercise":
+          exercise += 1;
+          out.push(`<section class="box exercise" data-ex="${exercise}"><div class="box-label"><span>Ejercicio ${exercise}</span>` +
+            `<label class="done-toggle"><input type="checkbox" data-ex="${exercise}"> Hecho</label></div>${inner}</section>`);
+          break;
+        case "solution": out.push(`<details class="fold"><summary>Solución del ejercicio ${exercise}</summary><div class="fold-body">${inner}</div></details>`); break;
+        case "review": out.push(`<section class="box review"><div class="box-label"><span>Pregunta de repaso</span></div>${inner}</section>`); break;
+        case "answer": out.push(`<details class="fold"><summary>Respuesta</summary><div class="fold-body">${inner}</div></details>`); break;
+        case "from": out.push(`<aside class="box from"><div class="box-label"><span>Si vienes de ${esc(b.arg || "otro lenguaje")}</span></div>${inner}</aside>`); break;
+        default: out.push(`<aside class="box ${esc(b.kind)}"><div class="box-label"><span>${esc(CONTAINER_LABEL[b.kind] || b.kind)}</span></div>${inner}</aside>`);
+      }
+    }
+    return { html: out.join("\n"), exercises: exercise };
+  }
+
+  // ---------- views ----------
+  function totals() {
+    let read = 0, ex = 0, exAvail = 0;
+    for (const [n, info] of state.available) {
+      const p = state.progress[key(n)];
+      if (p && p.read) read += 1;
+      if (p) ex += Object.values(p.exercises || {}).filter(Boolean).length;
+      exAvail += info.exercises || 0;
+    }
+    return { read, ex, exAvail };
+  }
+  function allChapters() { return state.outline ? state.outline.parts.reduce((s, p) => s + p.chapters.length, 0) : 68; }
+  function renderOverall() {
+    const t = totals();
+    const all = allChapters();
+    $("ov-read").textContent = `${t.read} / ${all}`;
+    $("ov-bar").style.width = `${(100 * t.read / all).toFixed(1)}%`;
+    $("ov-ex").textContent = t.exAvail ? `${t.ex} / ${t.exAvail}` : String(t.ex);
+    const hours = [...state.available.values()].reduce((s, c) => s + Number(c.hours || 0), 0);
+    $("ov-avail").textContent = `${state.available.size} caps. · ${hours} h`;
+  }
+  function renderToc() {
+    if (!state.outline) return;
+    $("parts").innerHTML = state.outline.parts.map((part) => {
+      const items = part.chapters.map((c) => {
+        const avail = state.available.has(c.chapter);
+        const p = state.progress[key(c.chapter)];
+        if (!avail) return `<li><span class="soon" title="En preparación"><span class="num">${c.chapter}</span><span>${esc(c.title)}</span><span class="meta">${c.hours} h</span></span></li>`;
+        const cur = state.current === c.chapter ? ' aria-current="page"' : "";
+        return `<li class="${p && p.read ? "done" : ""}"><a href="#ch${pad(c.chapter)}"${cur}><span class="num">${c.chapter}</span><span>${esc(c.title)}</span><span class="meta">${c.hours} h</span></a></li>`;
+      }).join("");
+      return `<section class="part"><h3>Parte ${part.part} · ${esc(part.title)} <small>≈ ${part.hours} h → ${esc(part.milestones)}</small></h3><ol>${items}</ol></section>`;
+    }).join("");
+    renderOverall();
+  }
+  function renderWelcome() {
+    state.current = null;
+    renderToc();
+    const t = totals();
+    const sorted = [...state.available.keys()].sort((a, b) => a - b);
+    const next = sorted.find((n) => !(state.progress[key(n)] || {}).read);
+    const cards = sorted.map((n) => {
+      const c = state.available.get(n);
+      const p = state.progress[key(n)];
+      return `<a class="card" href="#ch${pad(n)}"><span class="eyebrow">Capítulo ${n} · ${esc(c.hours)} h${p && p.read ? " · leído" : ""}</span><b>${esc(c.title)}</b><small>${esc(c.milestone)}</small></a>`;
+    }).join("");
+    const totalHours = state.outline ? state.outline.parts.reduce((s, p) => s + p.hours, 0) : 0;
+    $("page").innerHTML = `<section class="welcome">
+      <span class="eyebrow">El libro de Ki · edición en Go</span>
+      <h1>De cero a experto</h1>
+      <p class="lead">Aprendes Go desde cero construyendo, sesión a sesión, el compilador de Ki: un lenguaje funcional con efectos, fibras y tres backends, el último generando ensamblador de Go. Cada sesión termina en verde, con un commit y una etiqueta que puedes comparar con el repositorio de referencia.</p>
+      <div class="facts"><span class="chip">${allChapters()} capítulos</span>${totalHours ? `<span class="chip">≈ ${totalHours} h</span>` : ""}<span class="chip">${state.available.size} disponibles</span><span class="chip">${t.read} leídos</span></div>
+      ${next ? `<p><a class="btn" href="#ch${pad(next)}">${t.read ? "Seguir por el capítulo " + next : "Empezar por el capítulo " + next}</a></p>` : `<p class="status">Los capítulos aparecerán aquí a medida que estén escritos y revisados.</p>`}
+      <div class="cards">${cards}</div>
+      <p class="status" id="sync"></p>
+    </section>`;
+    syncNote();
+  }
+  function syncNote() {
+    const el = $("sync");
+    if (el) el.textContent = store.db ? "Tu progreso se guarda en tu cuenta y te sigue entre dispositivos." : "Tu progreso se guarda en este navegador.";
+  }
+  async function renderChapter(n) {
+    const info = state.available.get(n);
+    if (!info) { renderWelcome(); return; }
+    state.current = n;
+    renderToc();
+    $("page").innerHTML = `<p class="loading">Cargando el capítulo ${n}…</p>`;
+    let md = state.chapterCache.get(n);
+    if (!md) {
+      try {
+        const res = await fetch("book/" + info.file);
+        if (!res.ok) throw new Error(String(res.status));
+        md = (await res.text()).split(FFFD_MARKER).join("\uFFFD");
+        state.chapterCache.set(n, md);
+      } catch (e) {
+        $("page").innerHTML = `<p class="status">No se pudo cargar el capítulo ${n} (${esc(e.message)}). Recarga la página para intentarlo de nuevo.</p>`;
+        return;
+      }
+    }
+    if (state.current !== n) return;
+    const { html, exercises } = chapterHtml(md);
+    info.exercises = exercises;
+    const sessions = (info.tags || []).filter((t) => t.startsWith("ch" + pad(n) + "-")).length;
+    const keys = [...state.available.keys()];
+    const prev = keys.filter((k) => k < n).sort((a, b) => b - a)[0];
+    const nextCh = keys.filter((k) => k > n).sort((a, b) => a - b)[0];
+    $("page").innerHTML = `<header class="chapter-head">
+        <span class="eyebrow">Parte ${esc(info.part)} · Capítulo ${n}</span>
+        <h1>${esc(info.title)}</h1>
+        <div class="facts"><span class="chip"><b>${esc(info.hours)} h</b></span><span class="chip">${sessions} sesiones</span><span class="chip">Hito: <b>${esc(info.milestone || "")}</b></span><span class="chip">Etiquetas <b>ch${pad(n)}-s1…ch${pad(n)}</b></span></div>
+      </header>
+      ${html}
+      <div class="end">
+        <span class="status" id="end-status"></span>
+        <span style="display:flex; gap:8px; flex-wrap:wrap">
+          ${prev ? `<a class="btn secondary" href="#ch${pad(prev)}">← Capítulo ${prev}</a>` : ""}
+          <button class="btn" id="mark-read" type="button"></button>
+          ${nextCh ? `<a class="btn secondary" href="#ch${pad(nextCh)}">Capítulo ${nextCh} →</a>` : ""}
+        </span>
+      </div>`;
+    refreshChapterMarks();
+    renderOverall();
+    window.scrollTo(0, 0);
+  }
+  function refreshChapterMarks() {
+    const n = state.current;
+    if (!n) return;
+    const p = chapterProgress(n);
+    document.querySelectorAll("section.exercise").forEach((sec) => {
+      const on = !!(p.exercises || {})[sec.dataset.ex];
+      sec.classList.toggle("is-done", on);
+      const box = sec.querySelector("input[type=checkbox]");
+      if (box) box.checked = on;
+    });
+    const btn = $("mark-read");
+    if (btn) btn.textContent = p.read ? "Leído ✓ (desmarcar)" : "Marcar como leído";
+    const st = $("end-status");
+    if (st) {
+      const doneEx = Object.values(p.exercises || {}).filter(Boolean).length;
+      const total = (state.available.get(n) || {}).exercises || 0;
+      st.textContent = `${doneEx} de ${total} ejercicios hechos` + (store.db ? " · guardado en tu cuenta" : " · guardado en este navegador");
+    }
+  }
+
+  // ---------- events ----------
+  document.addEventListener("change", (ev) => {
+    const box = ev.target.closest && ev.target.closest("section.exercise input[type=checkbox]");
+    if (!box || !state.current) return;
+    const p = chapterProgress(state.current);
+    p.exercises = Object.assign({}, p.exercises, { [box.dataset.ex]: box.checked });
+    persist(state.current);
+    refreshChapterMarks(); renderToc();
+  });
+  document.addEventListener("click", (ev) => {
+    const copy = ev.target.closest && ev.target.closest("button.copy");
+    if (copy) {
+      const pre = copy.closest("figure").querySelector("pre");
+      navigator.clipboard.writeText(pre.innerText).then(() => { copy.textContent = "Copiado"; setTimeout(() => (copy.textContent = "Copiar"), 1500); })
+        .catch(() => { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
+      return;
+    }
+    if (ev.target.id === "mark-read" && state.current) {
+      const p = chapterProgress(state.current);
+      p.read = !p.read;
+      persist(state.current);
+      refreshChapterMarks(); renderToc();
+    }
+  });
+  function route() {
+    const m = /^#ch(\d{2})$/.exec(location.hash);
+    if (m) renderChapter(Number(m[1])); else renderWelcome();
+  }
+  window.addEventListener("hashchange", route);
+
+  // ---------- boot ----------
+  async function boot() {
+    state.progress = loadLocal();
+    try {
+      const [outline, manifest] = await Promise.all([
+        fetch("book/outline.json").then((r) => r.json()),
+        fetch("book/manifest.json").then((r) => r.json()),
+      ]);
+      state.outline = outline; state.manifest = manifest;
+      const counts = outline.exercises || {};
+      for (const c of manifest.chapters) state.available.set(c.chapter, Object.assign({ exercises: counts[String(c.chapter)] || 0 }, c));
+    } catch (e) {
+      $("page").innerHTML = `<p class="status">No se pudo cargar el índice del libro (${esc(e.message)}). Recarga la página.</p>`;
+      return;
+    }
+    route();
+    connectStore().then(() => { syncNote(); refreshChapterMarks(); renderOverall(); });
+  }
+  boot();
+})();
+</script>
