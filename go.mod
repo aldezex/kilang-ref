@@ -1,0 +1,7 @@
+module github.com/aldezex/kilang
+
+go 1.27
+
+toolchain go1.27.3
+
+ignore ./build

@@ -1,0 +1,5 @@
+# Keep every checkout in LF, also on Windows with core.autocrlf=true: the
+# tests read go.mod and ci.yml as text and compare whole lines, and a shell
+# script with CRLF dies with "env: bash\r: No such file or directory".
+* text=auto eol=lf
+*.sh text eol=lf

@@ -1,0 +1,43 @@
+[T01.01] cli.version_prints_version_and_go                 level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con el único argumento `--version`, como `ki --version`
+input:   ["--version"]
+expect:  código de salida 0; stdout exactamente "ki " + Version + " (" + runtime.Version() + ")\n"
+         (hoy, con `Version = "0.0.1"` y go1.27.3, `ki 0.0.1 (go1.27.3)`); stderr vacío
+why:     es lo primero que ejecutas tras compilar `ki` y lo que pegarás en cada informe de fallo;
+         si la línea saliera por stderr, sin su salto final o sin la versión de Go entre paréntesis,
+         un script que la lee fallaría y no sabrías con qué toolchain se construyó el binario
+ref:     TestCLI/version_prints_version_and_go
+
+[T01.02] cli.no_args_is_usage_error                        level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` sin argumentos, como `ki` a secas
+input:   []
+expect:  código de salida 2; stdout vacío; stderr empieza por "usage: ki <command> [args]\ncommands: "
+         y tiene exactamente dos líneas, cada una terminada en salto de línea
+why:     el código 2 distingue una línea de órdenes mal escrita (2) de un programa Ki con errores (1);
+         y la ayuda va a stderr para no mezclarse con la salida que otro programa podría estar leyendo
+ref:     TestCLI/no_args_is_usage_error
+
+[T01.03] cli.unknown_command_is_usage_error                level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con un comando que no existe
+input:   ["frobnicate"]
+expect:  lo mismo que T01.02: código de salida 2; stdout vacío; stderr empieza por
+         "usage: ki <command> [args]\ncommands: " y tiene exactamente dos líneas, cada una terminada
+         en salto de línea
+why:     si un comando desconocido saliera con 0, una errata como `ki chek f.ki` parecería ir bien
+         sin haber comprobado nada; con el código 2 y la lista de comandos ves al momento qué
+         escribiste mal
+ref:     TestCLI/unknown_command_is_usage_error
+
+[T01.04] cli.usage_lists_commands                          level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` sin argumentos
+input:   []
+expect:  código de salida 2; stdout vacío; stderr exactamente
+         "usage: ki <command> [args]\ncommands: --version\n"
+why:     es el único test que fija la lista entera; los demás tests de uso solo miran el prefijo para
+         no cambiar con cada comando nuevo, así que si la lista saliera vacía o con `--version` mal
+         escrito, solo este lo vería
+ref:     TestCLI/usage_lists_commands
