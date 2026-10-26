@@ -128,3 +128,7 @@ New breakage: none | <severity> <file:line>: <one line>
 Fix round: all addressed | findings remain open
 Review: <path of the review file>
 ```
+
+## Cost discipline
+- One focused check per finding: reproduce the claim with the smallest program or command that proves it. Do not run exhaustive sweeps (every code point, millions of fuzz inputs, all 2^32 values) unless a specific finding depends on one, and say which.
+- Do not re-run what the implementer's report already proves with output; read the evidence instead.
