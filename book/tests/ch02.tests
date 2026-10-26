@@ -1,0 +1,75 @@
+[T02.01] base.add_returns_distinct_ids                     level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    dos ficheros añadidos seguidos a un `SourceManager`
+input:   `Add("a.ki", "let a = 1")` y `Add("b.ki", "let b = 2")`
+expect:  los dos `FileID` son distintos, y `DisplayPath` de cada uno devuelve la ruta de su propio
+         fichero ("a.ki" y "b.ki")
+why:     un `FileID` es la única forma de decir de qué fichero habla un `Span`; si dos ficheros
+         compartieran id, un error del segundo se pintaría con el texto del primero, y la línea
+         subrayada no tendría nada que ver con el fallo
+ref:     TestSourceManager/add_returns_distinct_ids
+
+[T02.02] base.contents_round_trip                          level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el contenido de un fichero añadido y su tamaño, en un gestor con dos ficheros
+input:   un fichero de relleno ("0123456789abcdef") y después `Add("main.ki", "fn main() {}")`
+expect:  `Contents(id)` es exactamente "fn main() {}" y `Size(id)` es 12: salen del fichero que nombra
+         el id, no del primero
+why:     todo lo que viene después (el lexer, los diagnósticos) lee los bytes por aquí; si `Contents`
+         devolviera una copia recortada o `Size` contara de más o de menos, cada posición posterior
+         saldría desplazada y el fallo costaría mucho encontrarlo; y si ignoraran el id, solo lo
+         notarías en cuanto el gestor tuviera dos ficheros
+ref:     TestSourceManager/contents_round_trip
+
+[T02.03] base.display_path_round_trip                      level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    la ruta con la que se añade un fichero
+input:   `Add("src/deep/main.ki", "fn main() {}")`
+expect:  `DisplayPath(id)` es exactamente "src/deep/main.ki", sin normalizar ni recortar nada
+why:     la ruta es lo primero que lees en un mensaje de error (`src/deep/main.ki:3:9: ...`); si el
+         gestor la cambiara, tu editor no podría saltar a la línea del fallo
+ref:     TestSourceManager/display_path_round_trip
+
+[T02.04] base.span_slices_contents                         level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el texto de un `Span` en un gestor con dos ficheros
+input:   un fichero de relleno ("0123456789abcdef") y después "fn main() {}"; `Span{id, 3, 7}`
+expect:  `Text` devuelve exactamente "main": el rango es semiabierto, así que incluye el byte 3 y
+         excluye el 7, y sale del fichero que nombra el span, no del primero
+why:     un `Span` es `[Lo, Hi)`; con un `Hi` inclusivo todos los subrayados sobrarían en un carácter,
+         y si `Text` ignorara el campo `File` solo notarías el error cuando hubiera más de un fichero
+ref:     TestSourceManager/span_slices_contents
+
+[T02.05] base.contents_append_does_not_alias               level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    añadir un byte con `append` al resultado de `Contents`, cuando el array del fichero tiene
+         capacidad de sobra
+input:   un slice de 5 bytes ("hello") con capacidad 100, añadido con `Add`; `append(m.Contents(id), 'X')`
+expect:  el byte 5 del array original sigue siendo 0: la `X` no se escribió en él
+why:     si `Add` no cortara la capacidad del slice (`c[:n:n]`), `append` vería capacidad libre y
+         escribiría en el array del fichero sin avisar; un código que solo quería leer el texto lo
+         alteraría para todos los demás pases
+ref:     TestSourceManager/contents_append_does_not_alias
+
+[T02.06] base.text_of_empty_span_is_empty                  level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el texto de un span vacío, en medio del fichero y justo al final
+input:   "fn main() {}" (12 bytes); `Span{id, 3, 3}` y `Span{id, 12, 12}`
+expect:  `Text` devuelve "" en los dos casos y no entra en pánico: el final del fichero (el byte 12)
+         es una posición válida
+why:     el token de fin de fichero y muchos nodos vacíos apuntan justo después del último byte; si
+         `Text` rechazara esa posición, el primer fichero que acabara en un error en su última
+         línea haría caer el compilador
+ref:     TestSourceManager/text_of_empty_span_is_empty
+
+[T02.07] base.text_past_end_panics                         level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el texto de un span que pasa del final de un fichero cuyo slice tiene capacidad de sobra
+input:   un slice de 5 bytes ("hello") con capacidad 100, añadido con `Add`; `Span{id, 0, 5}` y después
+         `Span{id, 0, 6}` y `Span{id, 0, 50}`
+expect:  `Text` del span `[0, 5)` es "hello"; los dos spans que pasan del byte 5 hacen panic
+why:     un span fuera del fichero es un error del compilador y debe fallar a gritos; si `Add` guardara el
+         slice con su capacidad, Go comprobaría el límite contra los 100 bytes del array y `Text` devolvería,
+         sin avisar, bytes que no son del fichero, justo con los buffers que se leen de disco, que casi
+         siempre llevan espacio sobrante
+ref:     TestSourceManager/text_past_end_panics
