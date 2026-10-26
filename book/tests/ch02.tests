@@ -73,3 +73,93 @@ why:     un span fuera del fichero es un error del compilador y debe fallar a gr
          sin avisar, bytes que no son del fichero, justo con los buffers que se leen de disco, que casi
          siempre llevan espacio sobrante
 ref:     TestSourceManager/text_past_end_panics
+
+[T02.08] base.line_col_first_char                          level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    la posición del primer carácter del fichero y la de un byte en medio de la primera línea
+input:   "ab\ncd"; los offsets 0 y 1
+expect:  `LineCol` devuelve `{1, 1}` para el offset 0 y `{1, 2}` para el offset 1: líneas y columnas
+         empiezan en 1, y la columna crece con el offset dentro de una línea
+why:     el primer carácter es la posición que más veces vas a ver en un error; si las columnas
+         empezaran en 0 (como los offsets), todos los mensajes saldrían corridos una columna y tu
+         editor te llevaría al carácter anterior al del fallo
+ref:     TestLineTable/first_char
+
+[T02.09] base.line_col_after_newline                       level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    la posición del primer byte de la segunda línea y la de un byte que no es inicio de línea, y lo
+         mismo en un fichero de tres líneas
+input:   "ab\ncd"; los offsets 3 y 4. Después "ab\ncd\nef"; los offsets 4, 6 y 7
+expect:  `LineCol` devuelve `{2, 1}` para el offset 3 y `{2, 2}` para el offset 4: la columna se mide
+         desde el inicio de la línea, no desde el inicio del fichero. En el fichero de tres líneas
+         devuelve `{2, 2}` para el offset 4, `{3, 1}` para el 6 y `{3, 2}` para el 7
+why:     la búsqueda binaria solo "encuentra" los offsets que son inicio de línea; en los demás
+         devuelve el punto de inserción, y confundir los dos casos desplaza el número de línea en
+         uno justo en los offsets más comunes. Con solo dos líneas, una tabla que no acumula los inicios
+         de línea acierta; hace falta una tercera, con una línea de en medio, para que falle
+ref:     TestLineTable/after_newline
+
+[T02.10] base.line_col_end_of_line                         level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    la posición del propio salto de línea
+input:   "ab\ncd"; el offset 2, que es el `\n`
+expect:  `LineCol` devuelve `{1, 3}`: el `\n` todavía pertenece a la línea 1, una columna después de la `b`
+why:     un error "se esperaba algo al final de la línea" apunta justo a ese `\n`; si la tabla lo
+         contara ya como parte de la línea siguiente, el subrayado saltaría a la línea de abajo
+ref:     TestLineTable/end_of_line
+
+[T02.11] base.line_col_end_of_file                         level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    la posición de fin de fichero cuando el fichero acaba en salto de línea
+input:   "ab\n"; el offset 3, igual al tamaño del fichero
+expect:  `LineCol` devuelve `{2, 1}` y no entra en pánico: el offset igual al tamaño es válido y,
+         tras un `\n` final, es el inicio de una línea 2 vacía
+why:     el token de fin de fichero apunta justo después del último byte; si ese offset se
+         rechazara, un error "se esperaba `}`" en un fichero que acaba en newline haría caer el
+         compilador en lugar de mostrar el mensaje
+ref:     TestLineTable/end_of_file
+
+[T02.12] base.line_count                                   level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    el número de líneas con y sin salto de línea final
+input:   "a\nb" y "a\nb\n"
+expect:  `LineCount` es 2 para el primero y 3 para el segundo: el número de `\n` más uno
+why:     quien dibuja el fragmento de un error necesita saber cuántas líneas hay para no pedir
+         una que no existe; contar las líneas "con texto" en vez de los saltos más uno
+         desincroniza esa cuenta justo en los ficheros que acaban en newline, que son la mayoría
+ref:     TestLineTable/line_count
+
+[T02.13] base.line_start                                   level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    el offset donde empieza cada línea de un fichero de tres líneas
+input:   "ab\ncd\nef"; las líneas 1, 2 y 3
+expect:  `LineStart` devuelve 0 para la línea 1, 3 para la línea 2 y 6 para la línea 3: el byte siguiente
+         al `\n` de la línea anterior, contando desde el inicio del fichero
+why:     el renderizador de errores corta el texto de la línea a partir de este offset; si
+         devolviera la posición del `\n` en vez de la siguiente, cada fragmento mostrado
+         empezaría con un salto de línea, y si la tabla no acumulara los inicios (cada uno medido solo
+         desde el `\n` anterior), los fragmentos de la línea 3 en adelante saldrían de otro sitio
+ref:     TestLineTable/line_start
+
+[T02.14] base.line_table_empty_file                        level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    un fichero vacío
+input:   ""
+expect:  `LineCount` es 1 y `LineCol` del offset 0 es `{1, 1}`
+why:     un fichero vacío es un fichero válido del usuario, y el error "no hay `main`" apunta a su
+         posición 1:1; una tabla sin su entrada inicial para la línea 1 haría que ese primer error
+         rompiera el compilador en lugar de contarte qué falta
+ref:     TestLineTable/empty_file
+
+[T02.15] base.line_table_out_of_range_panics               level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    consultar una línea o un offset fuera de rango, justo después de comprobar los últimos valores válidos
+input:   "ab\ncd" (2 líneas, 5 bytes); `LineStart` con las líneas 3 y 0, y `LineCol` con el offset 6
+expect:  la línea 2 y el offset 5 (el tamaño del fichero) son válidos y dan 3 y `{2, 3}`; las tres
+         consultas fuera de rango hacen panic con exactamente `base: line 3 out of range (file has 2
+         lines)`, `base: line 0 out of range (file has 2 lines)` y `base: offset 6 out of range (file
+         has 5 bytes)`
+why:     un span fuera del fichero es un error del compilador, no del usuario; con un panic claro
+         lo descubres en el acto, y el límite exacto (el tamaño del fichero sí vale, uno más no)
+         evita tanto rechazar la posición de fin de fichero como leer más allá de la tabla
+ref:     TestLineTable/out_of_range_panics
