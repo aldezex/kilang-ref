@@ -269,14 +269,17 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
 
   function splitContainers(md) {
     // Returns a list of {kind, arg, text} blocks; plain text has kind "". A ::: line inside a code fence is text.
+    // A fence closes only with a line of backticks at least as long as the one that opened it, so a
+    // 4-backtick fence can quote a 3-backtick one (the same rule as CommonMark and as `bookx verify`).
     const lines = md.split("\n");
     const blocks = [];
     let current = { kind: "", arg: "", lines: [] };
-    let fence = null;
+    let fence = null; // the backticks that opened the fence we are inside, or null
     for (const line of lines) {
       const f = /^(`{3,})/.exec(line);
       if (f) {
-        if (fence === null) fence = f[1]; else if (line.trim().replace(/`/g, "") === "") fence = null;
+        if (fence === null) fence = f[1];
+        else if (f[1].length >= fence.length && line.trim().replace(/`/g, "") === "") fence = null;
       }
       if (fence === null && !f) {
         const open = /^:::(\w+)(?:\s+(.*))?$/.exec(line);

@@ -65,7 +65,7 @@ func repoFromFixture(t *testing.T, f *fixture) string {
 
 func TestRun(t *testing.T) {
 	t.Run("usage_errors", func(t *testing.T) {
-		const top = "usage: bookx <command> [args]\ncommands: verify, render, regions, testlist\n"
+		const top = "usage: bookx <command> [args]\ncommands: verify, render, regions, testlist, web\n"
 		rows := []struct {
 			name   string
 			args   []string

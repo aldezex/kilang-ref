@@ -7,11 +7,12 @@
 // and return values and errors, and never touch git or the disk. Around them,
 // Git reads the tags of a repository, verify and render check and resolve the
 // book through the small repoReader interface, and run (this file) is the
-// command line: verify, render, regions and testlist.
+// command line: verify, render, web, regions and testlist.
 package main
 
 import (
 	"bytes"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
@@ -19,6 +20,11 @@ import (
 	"slices"
 	"strings"
 )
+
+// indexHTML is the page of the book, which `bookx web` writes as index.html.
+//
+//go:embed web/index.html
+var indexHTML []byte
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -38,6 +44,7 @@ var commandUsage = map[string]string{
 	"render":   "usage: bookx render <out-dir> [--repo DIR]",
 	"regions":  "usage: bookx regions <tag> [--repo DIR]",
 	"testlist": "usage: bookx testlist <go-test-json-file>",
+	"web":      "usage: bookx web <out-dir> [--repo DIR] [--all]",
 }
 
 // run is main without the process around it: it runs the command in args,
@@ -54,11 +61,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cmd = runRegions
 		case "testlist":
 			cmd = runTestlist
+		case "web":
+			cmd = runWeb
 		}
 	}
 	if cmd == nil {
 		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
-		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web")
 		return exitUsage
 	}
 	return cmd(args[1:], stdout, stderr)
@@ -67,14 +76,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 // parseArgs reads the arguments of a command: the flag --repo (when withRepo)
 // and exactly want positional arguments, in any order, so `render out --repo d`
 // works although the flag package stops at the first argument that is not a
-// flag. It prints the problem and the usage line and returns ok false when the
-// arguments are wrong.
-func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Writer) (repo string, pos []string, ok bool) {
+// flag. A command with flags of its own defines them in define. It prints the
+// problem and the usage line and returns ok false when the arguments are wrong.
+func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Writer, define ...func(*flag.FlagSet)) (repo string, pos []string, ok bool) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	repo = "."
 	if withRepo {
 		flags.StringVar(&repo, "repo", ".", "the repository")
+	}
+	for _, d := range define {
+		d(flags)
 	}
 	for {
 		if err := flags.Parse(args); err != nil {

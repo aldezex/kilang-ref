@@ -71,3 +71,11 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Run ci-local
         run: ci/ci-local.sh
+      # The book quotes the code through tags: every {{file}}, {{listing}} and
+      # {{diff}} has to resolve, and every cited tag has to be in
+      # book/verified-tags.txt with the SHA of its commit (spec 11.4,
+      # "verificación de listados"). bookx needs the tags, which the checkout
+      # above fetched with fetch-depth: 0. ci-local.sh does not run this step:
+      # it also runs inside a copy of a tag, where there is no repository.
+      - name: Verify the listings of the book
+        run: go build -o build/bin/bookx ./cmd/bookx && build/bin/bookx verify
