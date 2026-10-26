@@ -263,7 +263,7 @@ input:   ["--version"] y ["version"]
 expect:  en las dos filas, código de salida 1; stderr exactamente
          "ki --version: cannot write to stdout: disk full\n" en la primera y
          "ki version: cannot write to stdout: disk full\n" en la segunda
-why:     si la escritura falla (disco lleno, tubería cerrada) y `ki` lo ignora, `ki --version >
+why:     si la escritura falla (un disco lleno, por ejemplo) y `ki` lo ignora, `ki --version >
          /dev/full` sale con 0 y un script cree que obtuvo la versión; el error de escritura es un
          error como cualquier otro y no se descarta. Lo mismo vale para todos los comandos que añadas
 ref:     TestCLI/version_reports_write_error
