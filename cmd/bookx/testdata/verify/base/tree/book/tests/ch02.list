@@ -1,0 +1,7 @@
+github.com/aldezex/kilang/internal/base ExampleInterner
+github.com/aldezex/kilang/internal/driver TestCLI/usage_error
+github.com/aldezex/kilang/internal/driver TestCLI/version_prints_version
+github.com/aldezex/kilang/internal/driver TestHelperProcess
+github.com/aldezex/kilang/internal/syntax FuzzLex
+github.com/aldezex/kilang/internal/syntax TestLexer/pipe_continues_line
+github.com/aldezex/kilang/tests TestKi/golden/ch01/hello

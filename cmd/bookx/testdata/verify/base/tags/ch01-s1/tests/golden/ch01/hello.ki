@@ -1,0 +1,5 @@
+// test: T01.03
+// run: run
+// expect-stdout: hello
+
+fn main() { print("hello") }

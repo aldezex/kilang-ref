@@ -1,0 +1,21 @@
+[T02.01] lexer.pipe_continues_line                         level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    una línea que empieza por `|>` continúa la anterior
+input:   "let total = xs\n  |> sum\n"
+expect:  ningún Newline entre `xs` y `|>`
+why:     si el lexer insertara un Newline, el error saldría una línea más abajo
+ref:     TestLexer/pipe_continues_line
+
+[T02.02] lexer.fuzz                                        level: core
+kind:    prop                file: internal/syntax/lexer_test.go
+case:    el lexer nunca entra en pánico
+expect:  ninguna entrada hace caer el lexer
+why:     el lexer lee entrada ajena
+ref:     FuzzLex
+
+[T02.03] interner.example                                  level: core
+kind:    example             file: internal/base/interner_test.go
+case:    internar dos veces el mismo texto
+expect:  la misma clave
+why:     el resto del compilador compara números, no textos
+ref:     ExampleInterner

@@ -4,21 +4,194 @@
 // standard library.
 //
 // The parsers in this package are pure functions: they take the text of a file
-// and return values and errors, and never touch git or the disk. The commands
-// that read files and call them are added around them.
+// and return values and errors, and never touch git or the disk. Around them,
+// Git reads the tags of a repository, verify and render check and resolve the
+// book through the small repoReader interface, and run (this file) is the
+// command line: verify, render, regions and testlist.
 package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "usage: bookx <command> [args]")
-	os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// Exit codes of bookx: 0 when all went well, 1 when it found problems in the
+// book or could not do its work, and 2 when it was called wrongly.
+const (
+	exitOK    = 0
+	exitFail  = 1
+	exitUsage = 2
+)
+
+// commandUsage is the `usage:` line of each command.
+var commandUsage = map[string]string{
+	"verify":   "usage: bookx verify [--repo DIR]",
+	"render":   "usage: bookx render <out-dir> [--repo DIR]",
+	"regions":  "usage: bookx regions <tag> [--repo DIR]",
+	"testlist": "usage: bookx testlist <go-test-json-file>",
+}
+
+// run is main without the process around it: it runs the command in args,
+// writes to stdout and stderr and returns the exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	var cmd func(args []string, stdout, stderr io.Writer) int
+	if len(args) > 0 {
+		switch args[0] {
+		case "verify":
+			cmd = runVerify
+		case "render":
+			cmd = runRender
+		case "regions":
+			cmd = runRegions
+		case "testlist":
+			cmd = runTestlist
+		}
+	}
+	if cmd == nil {
+		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist")
+		return exitUsage
+	}
+	return cmd(args[1:], stdout, stderr)
+}
+
+// parseArgs reads the arguments of a command: the flag --repo (when withRepo)
+// and exactly want positional arguments, in any order, so `render out --repo d`
+// works although the flag package stops at the first argument that is not a
+// flag. It prints the problem and the usage line and returns ok false when the
+// arguments are wrong.
+func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Writer) (repo string, pos []string, ok bool) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	repo = "."
+	if withRepo {
+		flags.StringVar(&repo, "repo", ".", "the repository")
+	}
+	for {
+		if err := flags.Parse(args); err != nil {
+			fmt.Fprintf(stderr, "bookx %s: %v\n%s\n", name, err, commandUsage[name])
+			return "", nil, false
+		}
+		args = flags.Args()
+		if len(args) == 0 {
+			break
+		}
+		pos, args = append(pos, args[0]), args[1:]
+	}
+	if len(pos) != want {
+		fmt.Fprintf(stderr, "bookx %s: want %d argument(s), found %d\n%s\n", name, want, len(pos), commandUsage[name])
+		return "", nil, false
+	}
+	return repo, pos, true
+}
+
+// runVerify is `bookx verify [--repo DIR]`.
+func runVerify(args []string, stdout, stderr io.Writer) int {
+	repo, _, ok := parseArgs("verify", args, 0, true, stderr)
+	if !ok {
+		return exitUsage
+	}
+	problems, err := verify(os.DirFS(repo), Git{Repo: repo})
+	if err != nil {
+		fmt.Fprintf(stderr, "bookx verify: %v\n", err)
+		return exitFail
+	}
+	if len(problems) == 0 {
+		fmt.Fprintln(stdout, "bookx verify: OK")
+		return exitOK
+	}
+	for _, p := range problems {
+		fmt.Fprintln(stdout, p)
+	}
+	return exitFail
+}
+
+// runRender is `bookx render <out-dir> [--repo DIR]`.
+func runRender(args []string, stdout, stderr io.Writer) int {
+	repo, pos, ok := parseArgs("render", args, 1, true, stderr)
+	if !ok {
+		return exitUsage
+	}
+	problems, err := renderBook(os.DirFS(repo), Git{Repo: repo}, pos[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "bookx render: %v\n", err)
+		return exitFail
+	}
+	for _, p := range problems {
+		fmt.Fprintln(stdout, p)
+	}
+	if len(problems) > 0 {
+		return exitFail
+	}
+	return exitOK
+}
+
+// runRegions is `bookx regions <tag> [--repo DIR]`: it lists the regions of a
+// tag as `<id> <mode> <path>:<line>`, where the line is the one of the @book
+// marker, sorted by id. The problems with the markers go to stderr.
+func runRegions(args []string, stdout, stderr io.Writer) int {
+	repo, pos, ok := parseArgs("regions", args, 1, true, stderr)
+	if !ok {
+		return exitUsage
+	}
+	b := newBook(nil, Git{Repo: repo})
+	if _, err := b.tagFiles(pos[0]); err != nil {
+		fmt.Fprintf(stderr, "bookx regions: %v\n", err)
+		return exitFail
+	}
+	scan := b.scanTag(pos[0])
+	regions := slices.Clone(scan.regions)
+	slices.SortStableFunc(regions, func(x, y Region) int {
+		if c := strings.Compare(x.ID, y.ID); c != 0 {
+			return c
+		}
+		if c := strings.Compare(x.Path, y.Path); c != 0 {
+			return c
+		}
+		return x.FirstLine - y.FirstLine
+	})
+	for _, r := range regions {
+		fmt.Fprintf(stdout, "%s %s %s:%d\n", r.ID, r.Mode, r.Path, r.FirstLine-1)
+	}
+	for _, e := range scan.errs {
+		fmt.Fprintln(stderr, e)
+	}
+	if len(scan.errs) > 0 {
+		return exitFail
+	}
+	return exitOK
+}
+
+// runTestlist is `bookx testlist <go-test-json-file>`: it prints the list of
+// tests that ci/check-tags.sh keeps in book/tests/chNN.list.
+func runTestlist(args []string, stdout, stderr io.Writer) int {
+	_, pos, ok := parseArgs("testlist", args, 1, false, stderr)
+	if !ok {
+		return exitUsage
+	}
+	data, err := os.ReadFile(pos[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "bookx testlist: %v\n", err)
+		return exitFail
+	}
+	lines, err := parseTestList(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "bookx testlist: %v\n", err)
+		return exitFail
+	}
+	for _, l := range lines {
+		fmt.Fprintln(stdout, l)
+	}
+	return exitOK
 }
 
 // ScanError is a problem found in a file while parsing it. Line is 1-based.

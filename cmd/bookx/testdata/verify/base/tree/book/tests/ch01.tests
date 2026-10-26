@@ -1,0 +1,27 @@
+[T01.01] cli.version_prints_version                       level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con el único argumento `--version`
+expect:  código de salida 0
+why:     es lo primero que ejecutas tras compilar `ki`
+ref:     TestCLI/version_prints_version
+
+[T01.02] cli.usage_error                                   level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` sin argumentos
+expect:  código de salida 2
+why:     el código 2 distingue una línea de órdenes mal escrita
+ref:     TestCLI/usage_error
+
+[T01.03] golden.hello                                      level: core
+kind:    golden              file: tests/golden/ch01/hello.ki
+case:    un programa que imprime `hello`
+expect:  stdout exactamente `hello`
+why:     fija la salida de punta a punta
+ref:     tests/golden/ch01/hello.ki
+
+[T01.04] cli.benchmark                                     level: stretch
+kind:    bench               file: internal/driver/cli_test.go
+case:    el coste de `Main`
+expect:  ninguno: un benchmark no bloquea
+why:     te enseña a medir
+ref:     BenchmarkCLI
