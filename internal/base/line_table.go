@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"unicode/utf8"
 )
 
 // LineCol is a position in a file as a person reads it. Both fields are
@@ -54,10 +55,12 @@ func (m *SourceManager) LineStart(id FileID, line uint32) uint32 {
 	return lines[line-1]
 }
 
-// LineCol converts a byte offset into a line and a column. For now the column
-// counts bytes; a later session makes it count code points. An offset
-// equal to the size of the file is valid (the position just after the last
-// byte); a larger one panics, for the same reason as LineStart.
+// LineCol converts a byte offset into a line and a column. The column counts
+// code points: 1 plus the number of code points between the start of the line
+// and the offset, where each byte of invalid UTF-8 counts as one. A "\r\n" is
+// one line break; a lone '\r' is an ordinary character. An offset equal to the
+// size of the file is valid (the position just after the last byte); a larger
+// one panics, for the same reason as LineStart.
 func (m *SourceManager) LineCol(id FileID, offset uint32) LineCol {
 	f := m.files[id]
 	if int64(offset) > int64(len(f.contents)) {
@@ -73,5 +76,26 @@ func (m *SourceManager) LineCol(id FileID, offset uint32) LineCol {
 	if found {
 		line = i + 1
 	}
-	return LineCol{Line: uint32(line), Col: offset - lines[line-1] + 1}
+	col := 1 + utf8.RuneCount(f.contents[lines[line-1]:offset])
+	return LineCol{Line: uint32(line), Col: uint32(col)}
+}
+
+// LineText returns the text of the given line without its line break: no '\n',
+// and no '\r' right before that '\n'. A '\r' anywhere else stays, and so does
+// one at the very end of a file that has no final '\n', because a lone '\r'
+// does not end a line. It panics for a line that does not exist, like
+// LineStart.
+func (m *SourceManager) LineText(id FileID, line uint32) string {
+	start := m.LineStart(id, line)
+	f := m.files[id]
+	lines := f.lineStarts()
+	end := uint32(len(f.contents))
+	if line < uint32(len(lines)) {
+		// Not the last line: the next line starts right after our '\n'.
+		end = lines[line] - 1
+		if end > start && f.contents[end-1] == '\r' {
+			end--
+		}
+	}
+	return string(f.contents[start:end])
 }

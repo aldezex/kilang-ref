@@ -105,4 +105,85 @@ func TestSourceManager(t *testing.T) {
 			}()
 		}
 	})
+
+	t.Run("crlf_counts_as_one_newline", func(t *testing.T) {
+		m, id := newLineTableManager("a\r\nb")
+		if got, want := m.LineCol(id, 3), (LineCol{2, 1}); got != want {
+			t.Errorf("LineCol(3) = %v, want %v", got, want)
+		}
+		// The line text drops the "\r\n" pair, not just the '\n'.
+		if got := m.LineText(id, 1); got != "a" {
+			t.Errorf("LineText(1) = %q, want %q", got, "a")
+		}
+		// Only the '\r' right before the '\n' goes: an earlier one stays.
+		m, id = newLineTableManager("a\r\r\nb")
+		if got := m.LineText(id, 1); got != "a\r" {
+			t.Errorf("LineText(1) = %q, want %q", got, "a\r")
+		}
+	})
+
+	t.Run("lone_cr_is_not_a_newline", func(t *testing.T) {
+		m, id := newLineTableManager("a\rb")
+		if got := m.LineCount(id); got != 1 {
+			t.Errorf("LineCount = %d, want 1", got)
+		}
+		if got, want := m.LineCol(id, 2), (LineCol{1, 3}); got != want {
+			t.Errorf("LineCol(2) = %v, want %v", got, want)
+		}
+		if got := m.LineText(id, 1); got != "a\rb" {
+			t.Errorf("LineText(1) = %q, want %q", got, "a\rb")
+		}
+	})
+
+	t.Run("column_counts_code_points", func(t *testing.T) {
+		// 'é' takes two bytes, so the '=' at offset 2 is the second character.
+		m, id := newLineTableManager("é=1")
+		if got, want := m.LineCol(id, 2), (LineCol{1, 2}); got != want {
+			t.Errorf("LineCol(2) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("invalid_byte_counts_one_column", func(t *testing.T) {
+		rows := []struct {
+			name   string
+			text   string
+			offset uint32
+			want   LineCol
+		}{
+			{"one_byte", "\xff=1", 1, LineCol{1, 2}},
+			// A run of invalid bytes is one column per byte, not one per run.
+			{"two_bytes", "\xff\xff=1", 2, LineCol{1, 3}},
+			{"cut_sequence", "\xE2\x82=1", 2, LineCol{1, 3}},
+		}
+		for _, row := range rows {
+			m, id := newLineTableManager(row.text)
+			if got := m.LineCol(id, row.offset); got != row.want {
+				t.Errorf("%s: LineCol(%d) = %v, want %v", row.name, row.offset, got, row.want)
+			}
+		}
+	})
+
+	t.Run("last_line_without_newline", func(t *testing.T) {
+		m, id := newLineTableManager("x\ny")
+		if got := m.LineText(id, 2); got != "y" {
+			t.Errorf("LineText(2) = %q, want %q", got, "y")
+		}
+		// A '\r' at the very end is a lone '\r', not a line break: it stays.
+		m, id = newLineTableManager("x\ny\r")
+		if got := m.LineText(id, 2); got != "y\r" {
+			t.Errorf("LineText(2) = %q, want %q", got, "y\r")
+		}
+	})
+
+	t.Run("empty_lines_have_empty_text", func(t *testing.T) {
+		// Line 1 is empty and starts the file; line 3 is empty and ends in "\r\n".
+		m, id := newLineTableManager("\nx\n\r\ny")
+		want := []string{"", "x", "", "y"}
+		for i, w := range want {
+			line := uint32(i + 1)
+			if got := m.LineText(id, line); got != w {
+				t.Errorf("LineText(%d) = %q, want %q", line, got, w)
+			}
+		}
+	})
 }

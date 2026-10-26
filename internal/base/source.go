@@ -19,7 +19,7 @@ type file struct {
 	path     string   // the path shown in diagnostics, as the user wrote it
 	contents []byte   // the bytes of the file, owned by the SourceManager
 	lines    []uint32 // byte offset of the start of each line; built lazily on the first line query
-	hadBOM   bool     // the file started with a UTF-8 byte order mark
+	hadBOM   bool     // the file started with a UTF-8 byte order mark, which Load removed
 }
 
 // SourceManager owns the text of every file the compiler has read.
@@ -36,6 +36,10 @@ type SourceManager struct {
 // with its capacity clipped to its length, so spare capacity at the end of the
 // caller's array (a buffer read from disk usually has some) is never reachable
 // through Contents or Text.
+//
+// len(contents) must not exceed MaxFileSize, the limit Load enforces for files:
+// spans, Size and the line table use uint32 offsets, which silently wrap for a
+// longer slice. Add does not check it.
 func (m *SourceManager) Add(displayPath string, contents []byte) FileID {
 	contents = contents[:len(contents):len(contents)]
 	m.files = append(m.files, &file{path: displayPath, contents: contents})
@@ -68,4 +72,11 @@ func (m *SourceManager) Text(sp Span) string {
 // Size returns the length of the file in bytes.
 func (m *SourceManager) Size(id FileID) uint32 {
 	return uint32(len(m.files[id].contents))
+}
+
+// HadBOM reports whether the file started with a UTF-8 byte order mark that
+// Load stripped. Contents never includes the mark; a tool that rewrites the
+// file (ki test --update) uses this to put it back.
+func (m *SourceManager) HadBOM(id FileID) bool {
+	return m.files[id].hadBOM
 }

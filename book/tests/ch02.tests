@@ -163,3 +163,286 @@ why:     un span fuera del fichero es un error del compilador, no del usuario; c
          lo descubres en el acto, y el límite exacto (el tamaño del fichero sí vale, uno más no)
          evita tanto rechazar la posición de fin de fichero como leer más allá de la tabla
 ref:     TestLineTable/out_of_range_panics
+
+[T02.16] base.crlf_counts_as_one_newline                   level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    una línea que acaba en `\r\n`: la posición del primer byte de la línea siguiente y el texto de la línea; y una que acaba en `\r\r\n`
+input:   "a\r\nb"; el offset 3 y `LineText` de la línea 1. Después "a\r\r\nb"; `LineText` de la línea 1
+expect:  `LineCol(3)` es `{2, 1}` y `LineText(1)` es exactamente "a", sin el `\r` ni el `\n`. En el segundo
+         fichero `LineText(1)` es exactamente "a\r": solo se quita el `\r` pegado al `\n`
+why:     los ficheros que vienen de Windows acaban sus líneas en `\r\n`; si el `\r` se tomara por parte de la
+         línea, el fragmento de un error mostraría un carácter invisible al final de cada línea, y si el
+         `\r\n` contara como dos saltos, todas las líneas siguientes saldrían numeradas de más; y quitar
+         todos los `\r` del final, en vez de uno, cambiaría el texto de una línea que de verdad los tiene
+ref:     TestSourceManager/crlf_counts_as_one_newline
+
+[T02.17] base.lone_cr_is_not_a_newline                     level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    un `\r` suelto, sin `\n` detrás, en medio de una línea
+input:   "a\rb"; el offset 2
+expect:  `LineCount` es 1, `LineCol(2)` es `{1, 3}` y `LineText(1)` es exactamente "a\rb": el `\r` es un carácter más de la línea
+why:     Ki solo termina una línea con `\n` (o `\r\n`); si un `\r` suelto la partiera, el número de línea de
+         un error dependería de un carácter que en el editor ni se ve
+ref:     TestSourceManager/lone_cr_is_not_a_newline
+
+[T02.18] base.column_counts_code_points                    level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    la columna de un carácter que va detrás de otro de dos bytes
+input:   "é=1"; el offset 2, que es el `=`
+expect:  `LineCol(2)` es `{1, 2}`: el `=` es el segundo carácter de la línea, aunque esté en el byte 2
+why:     tu editor cuenta caracteres, no bytes; si la columna contara bytes, cada error detrás de una
+         tilde o de una `ñ` te llevaría una o más columnas a la derecha del fallo real
+ref:     TestSourceManager/column_counts_code_points
+
+[T02.19] base.invalid_byte_counts_one_column               level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    la columna de un carácter que va detrás de uno o varios bytes que no son UTF-8 válido
+input:   "\xff=1" y el offset 1; "\xff\xff=1" y el offset 2; "\xE2\x82=1" (una secuencia cortada) y el offset 2;
+         en los tres, el offset es el del `=`
+expect:  `LineCol` es `{1, 2}` en el primero y `{1, 3}` en los otros dos: cada byte inválido ocupa
+         exactamente una columna, también cuando van seguidos
+why:     un fichero con un byte inválido sigue siendo un fichero que hay que poder señalar; si el byte
+         inválido no contara (o contara de más), el error de la línea siguiente al lexer apuntaría a una
+         columna que no existe, y si una tanda de bytes inválidos contara como una sola columna (lo que
+         hace `bytes.ToValidUTF8` al sustituirla), el error caería más a la izquierda cuanto más larga fuera
+ref:     TestSourceManager/invalid_byte_counts_one_column
+
+[T02.20] base.last_line_without_newline                    level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el texto de la última línea cuando el fichero no acaba en salto de línea, también si acaba en un `\r` suelto
+input:   "x\ny" y "x\ny\r"; `LineText` de la línea 2
+expect:  `LineText(2)` es exactamente "y" en el primero y exactamente "y\r" en el segundo: el `\r` del final no es un salto de línea y se queda
+why:     la última línea no tiene un `\n` que marque su final; si `LineText` lo buscara, perdería el último
+         carácter o entraría en pánico justo en el fichero que se guardó sin newline final; y como un `\r`
+         sin `\n` detrás no termina la línea, quitarlo también aquí haría que el fragmento mostrado no
+         coincidiera con los bytes de la línea
+ref:     TestSourceManager/last_line_without_newline
+
+[T02.21] base.load_reads_file                              level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar un fichero real con una ruta de pantalla distinta de la ruta real
+input:   un fichero con `fn main() {}` en un directorio temporal, cargado con la ruta de pantalla `a.ki`
+expect:  `Contents` es exactamente "fn main() {}", `DisplayPath` es "a.ki" y `HadBOM` es falso
+why:     los mensajes de error deben nombrar el fichero como lo escribió quien lo invocó, no la ruta
+         temporal por la que se leyó; y un fichero sin BOM no debe marcarse como si lo tuviera
+ref:     TestLoad/reads_file
+
+[T02.22] base.load_strips_bom                              level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    un fichero que empieza por la marca de orden de bytes UTF-8, cargado después de otro que no la tiene; y dos variantes
+input:   un fichero "fn" sin marca y después los bytes `EF BB BF` seguidos de "fn". Después, `EF BB BF EF BB BF` seguidos
+         de "x", y `EF BF BD` (U+FFFD) seguido de "x"
+expect:  `Contents` es exactamente "fn" y `HadBOM` es verdadero para el segundo fichero y falso para el primero. Con
+         dos marcas, `Contents` conserva la segunda (`EF BB BF` y "x") y `HadBOM` es verdadero. Con U+FFFD,
+         `Contents` queda intacto y `HadBOM` es falso
+why:     si la marca llegara al lexer, sería un carácter raro al principio de la primera línea y todas las
+         columnas de esa línea saldrían corridas; guardar que existía permite devolverla al reescribir un golden;
+         y como la marca son exactamente tres bytes, quitar más de una, o fiarse solo del primer byte (`EF`, que
+         también empieza a U+FFFD), borraría texto del usuario
+ref:     TestLoad/strips_bom
+
+[T02.23] base.load_missing_file_error                      level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar un fichero que no existe
+input:   una ruta real inexistente, cargada con la ruta de pantalla `nope.ki`
+expect:  el error empieza por ``cannot read file `nope.ki`: ``, `errors.Is(err, fs.ErrNotExist)` es verdadero y
+         el texto no contiene la ruta real
+why:     este es el texto que ve quien se equivoca al escribir el nombre de un fichero; debe nombrar el
+         fichero tal como lo escribió y conservar la causa, para que el código pueda distinguir "no existe"
+         de "sin permiso"
+ref:     TestLoad/missing_file_error
+
+[T02.24] base.load_rejects_4gib_file                       level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar un fichero de 4 GiB (disperso, sin permisos de lectura)
+input:   un fichero creado con `os.Truncate(path, 1<<32)` y después `os.Chmod(path, 0)`; se salta si el test corre como root o en Windows
+expect:  `errors.Is(err, ErrTooLarge)` es verdadero
+why:     los offsets de un `Span` son de 32 bits y un fichero tan grande no se podría direccionar; con el
+         `chmod 0`, una implementación que leyera antes de mirar el tamaño fallaría con un error de permisos y
+         no con `ErrTooLarge`, así que el test demuestra que el rechazo ocurre sin leer el fichero (donde se
+         puede quitar el permiso de lectura; como root, `check_size_boundary` solo prueba el límite de `checkSize`,
+         y que `Load` lo aplica antes de leer lo prueba `load_checks_file_before_reading`, T02.42)
+ref:     TestLoad/rejects_4gib_file
+
+[T02.25] base.utf8_ascii_valid                             level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    un texto solo ASCII
+input:   "fn main() {}"
+expect:  `FirstInvalidUTF8` devuelve `(0, false)`
+why:     es el caso de casi todos los ficheros; si se marcara como inválido, el compilador rechazaría el
+         programa más sencillo
+ref:     TestFirstInvalidUTF8/ascii_valid
+
+[T02.26] base.utf8_multibyte_valid                         level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    texto con caracteres de dos, tres y cuatro bytes
+input:   "é€😀"
+expect:  `FirstInvalidUTF8` devuelve `(0, false)`
+why:     un comprobador que solo conociera el ASCII rechazaría las tildes de un comentario o un emoji en
+         una cadena, que son válidos
+ref:     TestFirstInvalidUTF8/multibyte_valid
+
+[T02.27] base.utf8_replacement_char_is_valid               level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    el carácter de sustitución U+FFFD escrito de verdad en el fichero
+input:   "\xEF\xBF\xBD"
+expect:  `FirstInvalidUTF8` devuelve `(0, false)`
+why:     `utf8.DecodeRune` devuelve U+FFFD también cuando la entrada es inválida; quien solo compare con
+         `utf8.RuneError`, sin mirar cuántos bytes ocupó, rechazaría un U+FFFD legítimo
+ref:     TestFirstInvalidUTF8/replacement_char_is_valid
+
+[T02.28] base.utf8_invalid_ff                              level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    un byte que no puede aparecer nunca en UTF-8, al principio
+input:   "\xff"
+expect:  `FirstInvalidUTF8` devuelve `(0, true)`
+why:     es el error E0101 más típico; el offset 0 comprueba además que el primer byte inválido se encuentra
+         y que el resultado es el offset, no el número de bytes válidos antes de él más uno
+ref:     TestFirstInvalidUTF8/invalid_ff
+
+[T02.29] base.utf8_truncated_sequence                      level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    una secuencia de tres bytes cortada por el final del fichero, tras un byte válido
+input:   "a\xE2\x82"
+expect:  `FirstInvalidUTF8` devuelve `(1, true)`: el offset del inicio de la secuencia cortada, no el de su último byte
+why:     un fichero cortado a medias es un fallo real de copia o de codificación; el error debe señalar dónde
+         empieza la secuencia rota, que es lo que el usuario ve en su editor
+ref:     TestFirstInvalidUTF8/truncated_sequence
+
+[T02.30] base.utf8_overlong_rejected                       level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    una codificación demasiado larga (overlong) de `/`
+input:   "\xC0\xAF"
+expect:  `FirstInvalidUTF8` devuelve `(0, true)`
+why:     UTF-8 exige la forma más corta de cada carácter; aceptar la forma larga de `/` permitiría colar
+         caracteres con una escritura que ningún otro programa reconoce
+ref:     TestFirstInvalidUTF8/overlong_rejected
+
+[T02.31] base.utf8_surrogate_rejected                      level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    la codificación de un sustituto (surrogate) UTF-16, U+D800
+input:   "\xED\xA0\x80"
+expect:  `FirstInvalidUTF8` devuelve `(0, true)`
+why:     los sustitutos no son caracteres y no tienen forma válida en UTF-8; un comprobador que solo mire la
+         estructura de los bytes los dejaría pasar
+ref:     TestFirstInvalidUTF8/surrogate_rejected
+
+[T02.32] base.utf8_above_max_rejected                      level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    una secuencia de cuatro bytes que codifica un valor mayor que U+10FFFF
+input:   "\xF4\x90\x80\x80"
+expect:  `FirstInvalidUTF8` devuelve `(0, true)`
+why:     U+10FFFF es el último carácter de Unicode; un comprobador que aceptara cualquier secuencia de cuatro
+         bytes bien formada dejaría pasar valores que no son caracteres
+ref:     TestFirstInvalidUTF8/above_max_rejected
+
+[T02.33] base.empty_lines_have_empty_text                  level: core
+kind:    unit (go test)      file: internal/base/source_test.go
+case:    el texto de líneas vacías: la primera línea del fichero y una en medio que acaba en `\r\n`
+input:   "\nx\n\r\ny"; `LineText` de las líneas 1, 2, 3 y 4
+expect:  "" para la línea 1, "x" para la 2, "" para la 3 y "y" para la 4, y ninguna consulta entra en pánico
+why:     un fichero que empieza con una línea en blanco es de lo más normal; si `LineText` quitara el `\r`
+         sin comprobar antes que la línea no está vacía, leería el byte anterior al inicio del fichero y
+         haría caer el compilador justo al dibujar el fragmento de un error en esa línea
+ref:     TestSourceManager/empty_lines_have_empty_text
+
+[T02.34] base.utf8_offset_is_in_bytes                      level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    una secuencia inválida detrás de un carácter válido de varios bytes
+input:   "é\xff" (la `é` ocupa dos bytes)
+expect:  `FirstInvalidUTF8` devuelve `(2, true)`: el offset está en bytes, no en caracteres
+why:     el error E0101 señala este offset sobre los bytes del fichero; si se contara en caracteres
+         devolvería 1, y con una tilde delante de un byte inválido el subrayado caería un byte antes del fallo
+ref:     TestFirstInvalidUTF8/offset_is_in_bytes
+
+[T02.35] base.load_read_error_names_display_path           level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar un fichero que existe pero que no se puede leer
+input:   un fichero de dos bytes con `os.Chmod(path, 0)`, cargado con la ruta de pantalla `secret.ki`; se salta si el test corre como root o en Windows
+expect:  el error empieza por ``cannot read file `secret.ki`: ``, `errors.Is(err, fs.ErrPermission)` es verdadero y
+         el texto no contiene la ruta real
+why:     `os.Stat` funciona en un fichero sin permisos y es la lectura la que falla, con un error de `os` que
+         lleva la ruta real dentro; si `Load` lo devolviera tal cual, este caso rompería la promesa de que todo
+         fallo nombra el fichero como lo escribió quien invocó, y el mensaje cambiaría según qué paso fallara
+ref:     TestLoad/read_error_names_display_path
+
+[T02.36] base.load_rejects_non_regular_file                level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar algo que no es un fichero normal
+input:   un directorio, cargado con la ruta de pantalla `dir.ki`
+expect:  el error es exactamente ``cannot read file `dir.ki`: not a regular file``
+why:     `os.Stat` da tamaño 0 para un dispositivo como `/dev/zero`, y `os.ReadFile` lo leería hasta agotar la
+         memoria en vez de devolver el error documentado; mirar el modo del fichero antes de leer lo evita, y
+         un directorio es el único caso de este tipo que un test puede crear con ficheros reales en todos los
+         sistemas: representa a los demás (dispositivo, tubería, socket), que prueban `check_file_rows` y
+         `load_checks_file_before_reading` con un `FileInfo` falso (T02.41 y T02.42)
+ref:     TestLoad/rejects_non_regular_file
+
+[T02.37] base.load_check_size_boundary                     level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    el límite de tamaño de `Load`, probado sin crear ficheros
+input:   `checkSize` con 0, 4 GiB menos 2, 4 GiB menos 1, 4 GiB y 1 TiB
+expect:  `nil` para los tres primeros y `ErrTooLarge` para los dos últimos: `MaxFileSize` (4 GiB menos un byte) se acepta y un byte más se rechaza
+why:     un `>=` donde va un `>` rechazaría el fichero más grande que cabe en un `uint32`, y un límite
+         pasado en uno aceptaría un fichero que ya no cabe; y como no necesita permisos ni ficheros
+         dispersos, este test sí se ejecuta como root (en CI) y en Windows, donde el de 4 GiB se salta
+ref:     TestLoad/check_size_boundary
+
+[T02.38] base.load_max_size_file_is_read                   level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    cargar un fichero de exactamente 4 GiB menos un byte, sin permisos de lectura
+input:   un fichero creado con `os.Truncate(path, 1<<32-1)` y después `os.Chmod(path, 0)`; se salta si el test corre como root o en Windows
+expect:  `errors.Is(err, fs.ErrPermission)` es verdadero y `errors.Is(err, ErrTooLarge)` es falso: el fichero no se rechaza por su tamaño y `Load` llega a leerlo
+why:     es el otro lado del límite que prueba `rejects_4gib_file`; si `Load` rechazara también este tamaño
+         (un `>=` donde va un `>`), el fichero más grande permitido dejaría de poder cargarse
+ref:     TestLoad/max_size_file_is_read
+
+[T02.39] base.line_table_is_built_once                     level: core
+kind:    unit (go test)      file: internal/base/line_table_test.go
+case:    la tabla de líneas se construye en la primera consulta y se reutiliza en las siguientes
+input:   "ab\ncd\nef"; se mira la tabla justo después de `Add`, después de `LineCount` y después de `LineCol`, `LineStart` y `LineText`
+expect:  la tabla no existe tras `Add`, existe tras `LineCount` y las consultas siguientes siguen usando el mismo array, sin construirlo otra vez
+why:     construir la tabla una vez es lo que hace que `LineCol` cueste lo de una búsqueda binaria y no lo de
+         recorrer el fichero entero; si se reconstruyera en cada consulta, todos los resultados serían correctos y
+         ningún otro test lo notaría, pero un fichero grande con muchos errores se volvería cuadrático
+ref:     TestLineTable/table_is_built_once
+
+[T02.40] base.utf8_lone_continuation_byte                  level: core
+kind:    unit (go test)      file: internal/base/utf8_test.go
+case:    un byte de continuación suelto (`80`) detrás de un carácter válido
+input:   "a\x80"
+expect:  `FirstInvalidUTF8` devuelve `(1, true)`
+why:     `80` es el primer valor que ya no es ASCII y un byte de continuación no puede empezar un carácter; un `<=`
+         donde va un `<` lo trataría como ASCII y lo dejaría pasar
+ref:     TestFirstInvalidUTF8/lone_continuation_byte
+
+[T02.41] base.load_check_file_rows                         level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    la comprobación previa a la lectura, `checkFile`, sobre ficheros de cualquier clase y tamaño, sin crear ficheros
+input:   `FileInfo` falsos: un fichero normal vacío, de 4 GiB menos un byte y de 4 GiB; un directorio; un dispositivo de caracteres y uno de bloques; una tubería; un socket; un directorio de 4 GiB
+expect:  `nil` para los dos primeros; `ErrTooLarge` para el de 4 GiB; `errNotRegular` para todo lo que no es un fichero normal, también para el directorio de 4 GiB
+why:     separa lo que `Load` decide de lo que decide el sistema operativo: un `FileInfo` falso no necesita permisos
+         ni ficheros dispersos, así que el test corre como root y en Windows; el directorio de 4 GiB fija el
+         orden (primero el modo, después el tamaño) y las clases de fichero que ningún test puede crear en todos
+         los sistemas se prueban igual que el directorio
+ref:     TestLoad/check_file_rows
+
+[T02.42] base.load_checks_file_before_reading              level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    `Load` rechaza el fichero por su modo o su tamaño sin llegar a leerlo, y lee el de tamaño máximo
+input:   `Load` con `stat` y `readFile` sustituidos: un `FileInfo` de 4 GiB, uno de dispositivo de caracteres, uno de tubería y uno de 4 GiB menos un byte, con una lectura que falla el test si se llama (salvo en el último)
+expect:  los tres primeros dan exactamente ``cannot read file `f.ki`: file too large (limit 4 GiB)`` o ``cannot read file `f.ki`: not a regular file`` y no se lee nada; el último se carga y su contenido es el que devuelve la lectura
+why:     es la prueba, también como root y en Windows, de que `Load` aplica `checkFile` antes de leer: quitar esa
+         comprobación o dejarla solo con el modo haría leer un dispositivo o un fichero de 4 GiB, y los tests con
+         `chmod 0` no lo notarían donde no se pueden ejecutar
+ref:     TestLoad/load_checks_file_before_reading
+
+[T02.43] base.load_read_error_hides_real_path              level: core
+kind:    unit (go test)      file: internal/base/load_test.go
+case:    el error de lectura de `Load`, con la causa y la ruta real dentro, sin necesidad de quitar permisos
+input:   `readFile` sustituida por una que devuelve un `*fs.PathError` con la ruta real y `fs.ErrPermission`; se carga con la ruta de pantalla `secret.ki`
+expect:  el error es exactamente ``cannot read file `secret.ki`: permission denied`` y `errors.Is(err, fs.ErrPermission)` es verdadero
+why:     es la rama del error de lectura que `read_error_names_display_path` prueba con `chmod 0` y que se salta
+         como root; devolver el error de `os.ReadFile` tal cual enseñaría al usuario la ruta real de un fichero
+         que él escribió con otro nombre
+ref:     TestLoad/read_error_hides_real_path

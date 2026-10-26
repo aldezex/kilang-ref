@@ -127,6 +127,28 @@ func TestLineTable(t *testing.T) {
 		}
 	})
 
+	t.Run("table_is_built_once", func(t *testing.T) {
+		m, id := newLineTableManager("ab\ncd\nef")
+		f := m.files[id]
+		if f.lines != nil {
+			t.Fatalf("the table exists after Add, before any line query")
+		}
+		if got := m.LineCount(id); got != 3 {
+			t.Fatalf("LineCount = %d, want 3", got)
+		}
+		if f.lines == nil {
+			t.Fatalf("the table is still nil after LineCount")
+		}
+		// Every later query must reuse the same array, not build a new one.
+		first := &f.lines[0]
+		m.LineCol(id, 4)
+		m.LineStart(id, 2)
+		m.LineText(id, 3)
+		if &f.lines[0] != first {
+			t.Errorf("a later query built the line table again")
+		}
+	})
+
 	t.Run("out_of_range_panics", func(t *testing.T) {
 		m, id := newLineTableManager("ab\ncd")
 		// The last valid values first: one past them is what panics.
