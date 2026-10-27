@@ -1,0 +1,5 @@
+error[E0201]: expected expression, found newline
+ --> test.ki:1:1
+  |
+1 |
+  | ^ expected an expression here

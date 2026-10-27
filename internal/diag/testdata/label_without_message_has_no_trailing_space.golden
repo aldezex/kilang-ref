@@ -1,0 +1,6 @@
+error[E0401]: mismatched types
+ --> test.ki:1:13
+  |
+1 | let y = 1 + true
+  |             ^^^^
+  |           -

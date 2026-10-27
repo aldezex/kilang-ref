@@ -1,0 +1,8 @@
+warning[W0702]: unknown name `fibb`
+  --> test.ki:10:9
+   |
+10 | let y = fibb(3)
+   |         ^^^^ not found in this scope
+   = note: names are case sensitive
+   = note: `fib` is defined in this file
+   = help: did you mean `fib`?

@@ -1,0 +1,5 @@
+error[E0301]: unknown name `zz`
+ --> test.ki:1:10
+  |
+1 | let �� = zz
+  |          ^^ not found in this scope

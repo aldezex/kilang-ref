@@ -1,0 +1,5 @@
+error[E0301]: unknown name `zz`
+ --> test.ki:1:7
+  |
+1 | a␍b = zz
+  |       ^^ not found in this scope

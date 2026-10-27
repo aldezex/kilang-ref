@@ -1,0 +1,7 @@
+error[E0401]: mismatched types
+ --> test.ki:1:13
+  |
+1 | let y = 1 + true
+  |             ^^^^ expected `Int`, found `Bool`
+  |         - this is an `Int`
+  |           - this operator needs `Int`

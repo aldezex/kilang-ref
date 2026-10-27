@@ -100,3 +100,212 @@ why:     tras el error 101 la salida ya es demasiado larga para leerla; si un wa
          después, el último diagnóstico mostrado no sería el error 100 y el recuento no cuadraría
          con el mensaje de truncado
 ref:     TestSink/drops_warnings_after_truncation
+
+[T03.10] diag.render_human_single_label                    level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar con el renderizador humano un error con una sola etiqueta primaria
+input:   el fichero `test.ki` con "let x = 1\nlet y = z\n" y un E0301 "unknown name `z`" con el span [18,19) y la etiqueta "not found in this scope"
+expect:  exactamente cinco líneas: "error[E0301]: unknown name `z`", " --> test.ki:2:9", "  |", "2 | let y = z" y "  |         ^ not found in this scope"
+why:     es la forma que el usuario ve cada vez que se equivoca; si la cabecera, la barra o el
+         margen se desplazaran una columna, todos los diagnósticos de Ki saldrían torcidos y ningún
+         otro test lo notaría hasta que lo leyeras con tus ojos
+ref:     TestRenderHuman/single_label
+
+[T03.11] diag.render_human_tab_and_accents_align_caret     level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error cuya línea empieza con un tabulador y una letra con acento antes del span
+input:   "\té = zz\n" y un E0301 "unknown name `zz`" sobre `zz` (bytes 6 a 8)
+expect:  la posición "test.ki:1:6" (cuenta caracteres, no bytes); la línea "1 |     é = zz" con el
+         tabulador como cuatro espacios; y los dos `^` bajo `zz`, tras ocho espacios
+why:     el caret se alinea en columnas del texto impreso, no en bytes: la `é` ocupa dos bytes pero
+         una columna, y el tabulador ocupa cuatro columnas aunque sea un solo carácter. Se cuenta una
+         columna por punto de código salvo el tabulador y los sustitutos de los caracteres de control;
+         los caracteres de ancho cero o doble (CJK, emoji) no se miden. Si el renderizador contara
+         bytes, la flecha señalaría otra palabra
+ref:     TestRenderHuman/tab_and_accents_align_caret
+
+[T03.12] diag.render_human_secondary_same_line             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error con la etiqueta primaria y dos secundarias en la misma línea, añadidas de derecha a izquierda; con treinta y seis secundarias sobre tres posiciones, añadidas por turnos; y con una secundaria de otro fichero
+input:   "let y = 1 + true\n"; primaria sobre `true`; secundarias sobre `+` y después sobre `1`; compara con `testdata/secondary_same_line.golden`. Después, la primaria y treinta y seis secundarias "added 00" a "added 35" sobre `l`, `1` y `+` por turnos. Por último, una secundaria con `File` distinto del de la primaria
+expect:  la línea de código una sola vez; debajo, primero la marca `^^^^` de la primaria y luego las
+         marcas `-` de las secundarias ordenadas por columna (la de `1` antes que la de `+`), cada una
+         en su línea y con su mensaje; con las treinta y seis, las de cada posición salen en el orden en
+         que se añadieron (las de `l`, luego las de `1`, luego las de `+`); con la de otro fichero,
+         `RenderHuman` hace panic con "diag: secondary label in file 1, primary in file 0"
+why:     la primaria es la que explica el error, así que va siempre primero aunque esté más a la
+         derecha; las secundarias van por columna para que la salida no dependa del orden en que
+         el pase las fue encontrando, y las que empatan conservan el orden de aviso (un orden
+         inestable mezclaría empates en listas largas); y una etiqueta de otro fichero mostraría
+         texto que no es el suyo, así que es un fallo de quien llama y hace ruido
+ref:     TestRenderHuman/secondary_same_line
+
+[T03.13] diag.render_human_two_lines_with_gap              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error con etiquetas en las líneas 2 y 5 de un fichero de seis líneas, y otro con etiquetas en las líneas 9 y 11 de uno de once
+input:   E0302 con la primaria sobre la `a` de la línea 5 y la secundaria sobre la `a` de la línea 2; compara con `testdata/two_lines_with_gap.golden`; y, en el fichero de once líneas, E0302 con la primaria sobre la `a` de la línea 11 y la secundaria sobre la `a` de la línea 9, que se compara con `testdata/gap_of_one_line_with_wider_margin.golden`
+expect:  las líneas en orden creciente (primero la 2, luego la 5), con una línea "  ..." entre ellas y
+         sin mostrar las líneas 3 y 4; en el segundo, el margen es de dos cifras (la línea 9 sale como
+         " 9 |") y entre la 9 y la 11 hay una línea "   ..." aunque solo se salte la 10
+why:     el orden de la salida es el del fichero aunque la primaria esté más abajo, y el `...` avisa
+         de que se han saltado líneas; sin él, parecería que la línea 5 sigue a la 2. Saltarse una
+         sola línea cuenta igual, y el ancho del margen sale del mayor número de línea mostrado, no
+         del menor
+ref:     TestRenderHuman/two_lines_with_gap
+
+[T03.14] diag.render_human_notes_and_help                  level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un warning con dos notas y una ayuda cuya etiqueta está en la línea 10
+input:   W0702 "unknown name `fibb`" sobre `fibb` en la línea 10, notas "names are case sensitive" y "`fib` is defined in this file", ayuda "did you mean `fib`?"; compara con `testdata/notes_and_help.golden`
+expect:  la cabecera "warning[W0702]: …"; los márgenes de dos columnas ("  --> ", "   |", "10 | …"); las
+         dos líneas "   = note: …" en orden y la línea "   = help: …" al final
+why:     el ancho del margen es el del mayor número de línea mostrado, y las notas y la ayuda tienen
+         que seguirlo; con un margen fijo de una columna, a partir de la línea 10 todo quedaría
+         desalineado. También comprueba que el texto de la severidad sale de la severidad
+ref:     TestRenderHuman/notes_and_help
+
+[T03.15] diag.render_human_caret_on_last_line_without_newline level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error sobre la última línea de un fichero que no termina en salto de línea
+input:   "fn main() {\n  zz" y un E0301 sobre `zz`; compara con `testdata/caret_on_last_line_without_newline.golden`
+expect:  la posición "test.ki:2:3", la línea "2 |   zz" y la marca "^^" en la columna 3, sin ninguna línea de más
+why:     el último fichero que escribes a mano a menudo no acaba en salto de línea; el renderizador
+         no debe esperar un `\n` para cerrar la línea ni inventarse una línea vacía después
+ref:     TestRenderHuman/caret_on_last_line_without_newline
+
+[T03.16] diag.render_human_invalid_byte_replacement        level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error cuya línea tiene dos bytes UTF-8 inválidos seguidos antes del span
+input:   "let \xff\xfe = zz\n" y un E0301 sobre `zz`; compara con `testdata/invalid_byte_shown_as_replacement.golden`
+expect:  la posición "test.ki:1:10"; la línea muestra un U+FFFD por cada byte inválido (dos en total); y
+         los `^^` quedan bajo `zz`, alineados con la línea mostrada
+why:     un byte inválido ocupa una columna y se muestra como `U+FFFD`; si el renderizador agrupara la
+         racha en un solo carácter (como hace `strings.ToValidUTF8`), la flecha quedaría una columna
+         a la izquierda
+ref:     TestRenderHuman/invalid_byte_shown_as_replacement
+
+[T03.17] diag.render_human_control_byte_pictures           level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar una línea con un byte 0x01 y un 0x7F antes del span, y los bordes del rango de controles ASCII
+input:   "a\x01b\x7fc = zz\n" con un E0301 sobre `zz` (contra `testdata/control_byte_shown_as_picture.golden`); y una tabla que pinta "a?b = zz" para 0x00, 0x1F, el espacio, `~` y 0x7F
+expect:  la línea "a␁b␡c = zz" y los `^^` alineados bajo `zz`; en la tabla, 0x00 sale como `␀`, 0x1F como `␟`, el
+         espacio y `~` tal cual y 0x7F como `␡`
+why:     un control sin imagen puede esconder o mover texto en la terminal; mostrarlo como su "picture"
+         mantiene la línea legible y de una columna por carácter. Los bordes comprueban que ni el
+         espacio ni `~` se tratan como controles, y que el primero y el último sí
+ref:     TestRenderHuman/control_byte_shown_as_picture
+
+[T03.18] diag.render_human_lone_cr_picture                 level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error en una línea con un `\r` suelto (que no es salto de línea) antes del span, y errores sobre un fichero con finales de línea CRLF
+input:   "a\rb = zz" y un E0301 sobre `zz`; compara con `testdata/lone_cr_shown_as_picture.golden`. Después "ab\r\ncd\r\n" con el span sobre el `\n` (bytes 3 a 4), sobre el salto entero `\r\n` (2 a 4) y sobre `cd` (4 a 6)
+expect:  la línea "a␍b = zz", con el `\r` como una sola columna, y los `^^` alineados bajo `zz`; con CRLF, la línea "1 | ab" sin `␍` y un solo `^` justo después de la `b` para los dos primeros spans, y "2 | cd" con `^^` bajo `cd` para el tercero
+why:     un `\r` suelto, impreso tal cual, devuelve el cursor al principio y la terminal pisaría el
+         principio de la línea con el resto; como imagen ocupa una columna y la flecha cae donde
+         tiene que caer. El `\r` de un CRLF, en cambio, es parte del salto y no se pinta; y un span
+         que cae sobre el salto empieza más allá del texto de la línea, así que hay que recortarlo a
+         su final o el índice se saldría de la tabla de columnas
+ref:     TestRenderHuman/lone_cr_shown_as_picture
+
+[T03.19] diag.render_human_c1_and_bidi_codes               level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar dos líneas que empiezan por un control C1 (U+0085) y por un control bidi (U+202E), y los bordes de cada rango
+input:   "\u0085x = zz\n\u202Ex = zz\n" con la primaria sobre el primer `zz` y una secundaria sobre el segundo (contra `testdata/c1_and_bidi_controls_shown_as_codes.golden`); y una tabla con los extremos de los rangos C1, U+061C, U+200E/F, U+202A–U+202E y U+2066–U+2069 y los caracteres que los rodean
+expect:  las líneas "<U+0085>x = zz" y "<U+202E>x = zz", con las marcas tras ocho columnas más "x = "; en la
+         tabla, cada carácter de un rango sale como `<U+XXXX>` y el que está justo fuera de él, tal cual
+why:     un control bidi reordena el texto que lo rodea (el ataque "Trojan Source") y un C1 no se ve;
+         mostrarlos como su código hace visible lo que hay en el fichero, y sus ocho columnas tienen
+         que contarse para que la flecha no se desplace
+ref:     TestRenderHuman/c1_and_bidi_controls_shown_as_codes
+
+[T03.20] diag.render_human_empty_line_no_trailing_space    level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error con el span [0,0) sobre una línea vacía, otro sobre una línea de solo espacios y un tabulador, y otro con dos etiquetas sin mensaje
+input:   el fichero "\n" y un E0201 con la etiqueta "expected an expression here"; compara con `testdata/empty_source_line_has_no_trailing_space.golden`; el fichero "   \t \n" y un E0201 con el span [5,5) y la misma etiqueta (`testdata/blank_source_line_has_no_trailing_space.golden`); y "let y = 1 + true\n" con un E0401 cuya primaria, sobre `true`, y cuya secundaria, sobre `+`, no tienen mensaje (`testdata/label_without_message_has_no_trailing_space.golden`)
+expect:  en el primero, la línea de código es exactamente "1 |", sin espacio tras la barra, y la de marcas "  | ^ expected an expression here"; en el segundo, la misma línea "1 |" y la marca en la columna 6; en el tercero, las líneas de marcas acaban en la última marca ("  |             ^^^^" y "  |           -"), sin espacio detrás
+why:     un espacio al final de línea ensucia la salida: los editores lo resaltan y un golden con ese
+         espacio no se ve en el diff. Una línea vacía es el caso en que es más fácil dejarlo; una de
+         solo espacios se muestra igual de vacía, y una etiqueta sin mensaje deja sobrando el
+         espacio que iría antes de él
+ref:     TestRenderHuman/empty_source_line_has_no_trailing_space
+
+[T03.21] diag.render_human_span_over_tab_width             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    marcar un span que cubre un tabulador, uno al principio de la línea y otro tras dos letras, y quitar el tabulador final
+input:   "\tx\nab\tc\t\n"; primaria sobre el primer tabulador y secundaria sobre el segundo; compara con `testdata/span_over_tab_marks_visual_width.golden`
+expect:  la primera línea se muestra "    x" con cuatro `^`; la segunda "ab  c", con el tabulador final recortado, y dos `-` bajo el hueco
+why:     el tabulador llega a la siguiente columna múltiplo de 4, así que su ancho depende de dónde
+         esté; y las marcas cubren una columna visual por cada columna del span, no una por byte
+ref:     TestRenderHuman/span_over_tab_marks_visual_width
+
+[T03.22] diag.render_human_multiline_span                  level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar un error cuyo span empieza a mitad de la línea 1 y acaba en la última, dos líneas más abajo
+input:   "fn f() { let a = 1\n  2\n}\n" y un E0202 con el span desde la `{` hasta el final del fichero; compara con `testdata/multiline_span_marks_first_line.golden`. Después, líneas de 100 000 bytes con `zz` en medio, al principio y al final, con un span de toda la línea, con una "é" cada dos bytes y con una segunda etiqueta al final de la línea, lejos de la primera; una línea de "a" y 50 000 "é" con una etiqueta que cubre casi todo; una línea de 1000 "a", `zz` y 30 espacios con la etiqueta en `zz`; líneas de 200 y de 201 bytes; y dos líneas de 1000 bytes sueltos de continuación (`\x80`, sin byte inicial): una "a" seguida de ellos con la etiqueta en la "a", y solo ellos con la etiqueta en medio
+expect:  solo la línea 1, con once marcas `^` desde la `{` hasta el final de la línea ("{ let a = 1") y su mensaje; las líneas 2 y 3 no aparecen.
+         Con líneas largas (hasta 100 000 bytes): una línea de 200 bytes se pinta entera; una de 201 o más, como una
+         ventana de 40 bytes de contexto antes de la primera etiqueta y después de la última (como mucho 200 bytes más
+         lo que falte para acabar el carácter en que cae el corte: con "é", 201), con `...` en el extremo cortado y las
+         marcas bajo los mismos caracteres, sin partir un carácter de dos bytes; los espacios del final de la línea no se
+         pintan, tampoco cuando la ventana está cortada por la izquierda; una etiqueta más ancha que la ventana llega
+         hasta su borde, una etiqueta fuera de ella se marca en el borde y la salida no pasa de 2000 bytes en ningún caso.
+         Los bytes de continuación sueltos no son el resto de un carácter: el extremo de la ventana avanza como mucho tres
+         bytes para llegar a un inicio de carácter y no recorre la tirada entera (ventana de 44 bytes con la etiqueta en la
+         "a"; de 82, con contexto a los dos lados, con la etiqueta en medio)
+why:     un delimitador sin cerrar abarca medio fichero; el renderizador corta el span al final de la
+         línea donde empieza para mostrar una sola línea y no desbordar el margen ni inventar
+         columnas, y marca todo lo que queda de ella, no solo su primera columna. Una línea muy larga
+         se corta igual, en una ventana alrededor de las etiquetas: sin eso, un binario renombrado a
+         `.ki` (una sola línea de megas) daría un diagnóstico de megas y gastaría ocho bytes de
+         memoria por cada byte de la línea
+ref:     TestRenderHuman/multiline_span_marks_first_line
+
+[T03.23] diag.render_human_no_trailing_spaces              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    recorrer los ficheros `testdata/*.golden` del renderizador humano
+input:   los catorce ficheros de `internal/diag/testdata`
+expect:  hay exactamente catorce; cada uno termina en salto de línea y ninguna de sus líneas termina en espacio
+why:     la regla "ninguna línea termina en espacio" vale para toda la salida, no solo para los casos
+         pensados para probarla; al comprobar el número de ficheros, borrar uno no hace que el test
+         compruebe menos sin avisar
+ref:     TestRenderHuman/no_trailing_spaces
+
+[T03.24] diag.render_short_format                          level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar con el renderizador corto un error que tiene además una secundaria, una nota y una ayuda
+input:   el E0301 "unknown name `z`" en 2:9 de `test.ki`, con una etiqueta secundaria, una nota y una ayuda
+expect:  exactamente "test.ki:2:9: error[E0301]: unknown name `z`\n"
+why:     los editores y `grep` leen esta línea: `ruta:línea:columna: mensaje`; si se colaran las notas o
+         las etiquetas, dejaría de ser una línea por diagnóstico
+ref:     TestRenderShort/format
+
+[T03.25] diag.render_json_line                             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar con el renderizador JSON el E0301 de una sola etiqueta
+input:   el mismo E0301 "unknown name `z`" en 2:9 de `test.ki`, sin notas ni ayuda
+expect:  exactamente {"severity":"error","code":"E0301","message":"unknown name `z`","path":"test.ki","line":2,"col":9,"labels":[{"primary":true,"line":2,"col":9,"message":"not found in this scope"}],"notes":[],"help":null} más "\n"
+why:     el runner de tests de Ki lee esta salida para comparar (código, línea, columna); el orden y
+         el nombre de las claves, `"notes":[]` en lugar de `null` y `"help":null` son parte del
+         contrato con quien la consume
+ref:     TestRenderJSON/line
+
+[T03.26] diag.render_json_escapes                          level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar con el renderizador JSON un mensaje con comillas, una barra invertida y un tabulador, y una etiqueta sin mensaje; y un mensaje y una ayuda con `<`, `>` y `&`
+input:   el mensaje `say "hi" \ ` seguido de un tabulador, sobre el span [0,1) de "x\n"; y el E0203 con el mensaje "expected `Vec<Int>` & more" y la ayuda "write `a < b && b > c`"
+expect:  el mensaje sale como `say \"hi\" \\ \t`, la etiqueta con `"message":""` y toda la salida es una sola línea; `<`, `>` y `&` salen tal cual, no como `\u003c`, `\u003e` y `\u0026`
+why:     un mensaje que contiene comillas rompería el JSON y el runner dejaría de entender los
+         diagnósticos de ese caso; los mensajes de Ki llevan comillas invertidas y a veces comillas
+         dobles. Y `Vec<Int>` es un tipo de Ki: la herramienta que lee el JSON debe verlo como lo
+         escribió el compilador, no con `\u003c` por una protección pensada para JSON dentro de HTML
+ref:     TestRenderJSON/escapes
+
+[T03.27] diag.render_json_notes_help_secondary             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    pintar con el renderizador JSON un diagnóstico con dos secundarias, dos notas y una ayuda
+input:   el E0401 "mismatched types" de "let y = 1 + true\n" con la primaria sobre `true`, las secundarias sobre `+` y después sobre `1` (añadidas en ese orden), las notas "first" y "second" y la ayuda "use a number"
+expect:  `labels` con la primaria (`"primary":true`, 1:13) y después las dos secundarias (`"primary":false`) en el orden en que se añadieron, 1:11 y 1:9, `"notes":["first","second"]` y `"help":"use a number"`
+why:     los casos con etiquetas secundarias, notas y ayuda son los de verdad; si la ayuda saliera
+         siempre como `null` o las notas se perdieran, el JSON diría menos que la pantalla. Con dos
+         secundarias se ve que el orden es el de aviso y no el de columna ni el inverso
+ref:     TestRenderJSON/notes_help_and_secondary_labels

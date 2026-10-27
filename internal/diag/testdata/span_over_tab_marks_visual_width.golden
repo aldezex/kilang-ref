@@ -1,0 +1,7 @@
+error[E0104]: unexpected tab
+ --> test.ki:1:1
+  |
+1 |     x
+  | ^^^^ here
+2 | ab  c
+  |   -- and here

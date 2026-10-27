@@ -1,0 +1,8 @@
+error[E0302]: `a` is defined more than once
+  --> test.ki:11:5
+   |
+ 9 | let a = 1
+   |     - first defined here
+   ...
+11 | let a = 2
+   |     ^ redefined here
