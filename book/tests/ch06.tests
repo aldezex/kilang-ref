@@ -214,3 +214,312 @@ why:     el parser deja un nodo de error donde no pudo leer y sigue adelante, y 
          enseñarlo en su sitio y sin tapar a los vecinos: un `(error)` que ocupara el lugar del item
          siguiente, o que se escribiera sin su salto de línea, haría que dos errores distintos parecieran uno
 ref:     TestPrinter/error_nodes
+
+[T06.20] expr.precedence_mul_over_add                      level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    `*` ata más fuerte que `+`: en una suma y un producto, el producto se agrupa primero
+input:   "1 + 2 * 3"
+expect:  el texto `(+ 1 (* 2 3))`, sin diagnósticos y con toda la entrada leída
+why:     es la regla más básica de las potencias de enlace: un parser que leyera de izquierda a derecha sin
+         ellas daría `(* (+ 1 2) 3)`, y todo programa con aritmética calcularía otra cosa
+ref:     TestParseExpr/precedence_mul_over_add
+
+[T06.21] expr.left_assoc_sub                               level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los operadores binarios se asocian por la izquierda: una resta detrás de otra agrupa primero las dos de la izquierda
+input:   "1 - 2 - 3"
+expect:  el texto `(- (- 1 2) 3)`, sin diagnósticos y con toda la entrada leída
+why:     `(1 - 2) - 3` vale -4 y `1 - (2 - 3)` vale 2. Si el operando derecho se leyera con la misma potencia que
+         el operador, en vez de con una más, el árbol saldría asociado por la derecha y cada resta encadenada
+         daría un resultado distinto del que se espera
+ref:     TestParseExpr/left_assoc_sub
+
+[T06.22] expr.unary_binds_tighter                          level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    un prefijo se aplica solo al operando que tiene a su derecha, no a un producto entero
+input:   "-a * b"
+expect:  el texto `(* (neg a) b)`, sin diagnósticos y con toda la entrada leída
+why:     los prefijos tienen potencia 7 y `*` tiene 6. Si el operando de `-` se leyera con potencia 0 se
+         tragaría `a * b` y saldría `(neg (* a b))`, otro árbol que no siempre da el mismo valor, y con `!`
+         ya no sería lo mismo
+ref:     TestParseExpr/unary_binds_tighter
+
+[T06.23] expr.not_and_or                                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    `!` ata más fuerte que `&&`, y `&&` más fuerte que `||`
+input:   "!a && b || c"
+expect:  el texto `(|| (&& (not a) b) c)`, sin diagnósticos y con toda la entrada leída
+why:     los tres niveles lógicos (1, 2 y el prefijo 7) se prueban juntos: si `&&` y `||` tuvieran la misma
+         potencia, o `!` se aplicara a `a && b`, el árbol sería otro y las condiciones compuestas de un `if`
+         cambiarían de sentido
+ref:     TestParseExpr/not_and_or
+
+[T06.24] expr.chained_comparison_E0203                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    dos comparaciones seguidas no se asocian: se informa del segundo operador, con una ayuda que propone `&&`, y el parser sigue después de la cadena
+input:   "a < b < c"
+expect:  exactamente un diagnóstico, el error E0203 `comparison operators cannot be chained`, con el primario en el segundo `<` (bytes 6 a 7), sin texto de etiqueta ni notas, y la ayuda «use `&&`: `a < b && b < c`»; la expresión se imprime `(error)`, su nodo cubre los bytes 0 a 9 y el cursor queda en el `Eof`
+why:     `a < b < c` compararía un `Bool` con un número, que casi nunca es lo que se quiere, y la ayuda dice
+         cómo escribirlo. El error está en el segundo operador, que es donde empieza lo que sobra; el árbol es
+         un nodo de error para que el comprobador de tipos no añada un segundo error sobre lo que el parser
+         ya rechazó, y el parser lee `c` entero, para que lo que venga detrás se lea bien
+ref:     TestParseExpr/chained_comparison_E0203
+
+[T06.25] expr.call_args                                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    una llamada con dos argumentos, el segundo otra llamada
+input:   "f(1, g(2))"
+expect:  el texto `(call f 1 (call g 2))`, sin diagnósticos y con toda la entrada leída
+why:     la lista de argumentos de la llamada exterior y la de la interior son rangos de un mismo pool: el
+         parser tiene que juntar los argumentos de `f` antes de añadirlos, o la lista de `f` quedaría
+         mezclada con la de `g`
+ref:     TestParseExpr/call_args
+
+[T06.26] expr.trailing_comma_in_call                       level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    una llamada admite una coma detrás del último argumento
+input:   "f(1, 2,)"
+expect:  el texto `(call f 1 2)`, sin diagnósticos y con toda la entrada leída
+why:     la coma final deja escribir los argumentos de una llamada larga uno por línea sin cuidar la última.
+         Si el parser leyera otro argumento tras la coma, vería el `)` y lo contaría como un tercer
+         argumento, un nodo de error
+ref:     TestParseExpr/trailing_comma_in_call
+
+[T06.27] expr.parens_group                                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los paréntesis agrupan: lo de dentro se lee primero, y el paréntesis no deja nodo
+input:   "(1 + 2) * 3"
+expect:  el texto `(* (+ 1 2) 3)`, sin diagnósticos y con toda la entrada leída
+why:     es la única forma de cambiar el orden que dan las potencias de enlace. El árbol no tiene un nodo de
+         paréntesis, así que el grupo es la expresión de dentro
+ref:     TestParseExpr/parens_group
+
+[T06.28] expr.unit_literal                                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    `()` es el valor unidad, no un grupo vacío
+input:   "()"
+expect:  el texto `()`, sin diagnósticos y con toda la entrada leída
+why:     `(` abre un grupo y también un `()`: el parser mira el `)` antes de leer una expresión. Si no lo
+         hiciera, `()` se leería como un grupo con una expresión que falta
+ref:     TestParseExpr/unit_literal
+
+[T06.29] expr.upper_name                                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    un identificador en mayúscula es un nombre como uno en minúscula
+input:   "Foo"
+expect:  el texto `Foo`, sin diagnósticos y con toda la entrada leída
+why:     más adelante `Foo` será el nombre de un constructor o de un tipo, pero el parser no lo sabe: lo
+         lee como un nombre y deja que la resolución de nombres decida
+ref:     TestParseExpr/upper_name
+
+[T06.30] expr.chain_at_limit_ok                            level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    una cadena de 1024 operadores se acepta; con el 1025 se informa E0205 y toda la expresión pasa a ser un nodo de error
+input:   "1" seguido de 1024 veces " + 1"; y el mismo con 1025
+expect:  con 1024, el árbol entero (1024 niveles, `(+ (+ … 1 1) … 1)` por la izquierda) y ningún diagnóstico; con 1025, exactamente un diagnóstico, el error E0205 `expression chain is too long`, con el primario en el último `+` (un byte), sin texto de etiqueta, con la única nota «the limit is 1024 operators and calls in one expression»; la expresión se imprime `(error)` y el cursor queda en el `Eof`
+why:     el límite está en `MaxChain = 1024` y la prueba está en los dos lados: con 1024 no se informa nada
+         (un `<` en vez de `<=` falla aquí) y con 1025 sí (un límite más alto falla allí). Y los 1024 niveles
+         llegan al árbol, no se pierde ninguno
+ref:     TestParseExpr/chain_at_limit_ok
+
+[T06.31] expr.chain_counts_inside_args                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el contador es de la expresión de la sentencia, no de cada bucle de Pratt: la llamada y los operadores de dentro de sus argumentos suman
+input:   "f(" + "1" + 1023 × " + 1" + ")"; y el mismo con 1024
+expect:  con 1023 (la llamada y 1023 operadores, 1024 en total), `(call f …)` con 1023 niveles y ningún diagnóstico; con 1024 (1025 en total), exactamente un diagnóstico, el error E0205 con el primario en el último `+`, la expresión `(error)` y el cursor en el `Eof`
+why:     si cada bucle contara por su cuenta, el bucle de fuera vería una llamada y el de dentro 1024
+         operadores, y bastaría envolver una cadena larga en los argumentos de una llamada para saltarse el
+         límite. Contar la llamada en el mismo contador que los operadores de sus argumentos es lo que lo cierra
+ref:     TestParseExpr/chain_counts_inside_args
+
+[T06.32] expr.long_chain_reports_E0205                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    una suma de 100 000 términos da un único E0205 y el parser no revienta
+input:   "1" seguido de 100 000 veces " + 1" (unos 400 KB)
+expect:  exactamente un diagnóstico, el error E0205 en el operador 1025 (el byte 4098); la expresión se imprime `(error)`, su nodo cubre toda la fuente y el cursor queda en el `Eof`. Si el parser hiciera un pánico, el test fallaría
+why:     una suma de 100 000 términos es un árbol de 100 000 niveles que cada pase posterior recorrería
+         con una llamada por nivel. Con el límite, el parser lo corta en el operador 1025, salta el resto
+         y entrega un solo nodo; y lo informa una vez, no 99 000
+ref:     TestParseExpr/long_chain_reports_E0205
+
+[T06.33] expr.binary_operators                             level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    cada uno de los 13 operadores binarios produce su propio nodo
+input:   "a OP b" para `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&` y `||`
+expect:  para cada uno, el texto `(OP a b)` con el mismo símbolo, sin diagnósticos y con toda la entrada leída
+why:     la tabla que pasa de un token a un operador son 13 filas casi iguales; una fila cambiada
+         (`<` por `<=`, `%` por `/`) no la detectaría ninguna prueba de precedencia, que usa pocos operadores
+ref:     TestParseExpr/binary_operators
+
+[T06.34] expr.precedence_levels                            level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los niveles de precedencia y la asociatividad por la izquierda de cada nivel, en todos los órdenes en que se pueden mezclar
+input:   21 filas, como `a || b && c`, `1 + 2 < 3 * 4`, `a - b + c`, `a + b - c`, `8 / 4 / 2`, `a * b / c`, `a / b * c`, `a % b * c`, `a * b % c`, `a / b % c`, `a % b / c`, `(a || b) && c` y `a - (b - c)`
+expect:  el árbol de cada fila: `||` más flojo que `&&`, las comparaciones por encima de ellos y por debajo de `+` y `-`, y `* / %` los más fuertes; los operadores de un mismo nivel se asocian por la izquierda tanto en un orden como en el otro; los paréntesis mandan; sin diagnósticos y con toda la entrada leída en cada fila
+why:     `+` y `-` son un nivel y `* / %` otro: una tabla que diera a `%` o a `-` una potencia propia
+         cambiaría solo `a % b * c` o `a + b - c`. Por eso están todas las parejas
+ref:     TestParseExpr/precedence_levels
+
+[T06.35] expr.unary_operators                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los prefijos `-` y `!`, solos, anidados y mezclados con operadores binarios, con llamadas y con paréntesis
+input:   15 filas, como `-a`, `!a`, `- -a`, `-!a`, `-a + b`, `a - -b`, `!a == b`, `-f(x)`, `!f(x)(y)` y `-(a + b)`
+expect:  el árbol de cada fila: `(neg a)` y `(not a)` con su nombre; un prefijo ata más fuerte que cualquier operador binario y más flojo que una llamada (`-f(x)` es `(neg (call f x))`); sin diagnósticos y con toda la entrada leída en cada fila
+why:     el `-` de `a - -b` es un binario y un prefijo en dos tokens seguidos; y que una llamada ate más fuerte
+         que un prefijo hace que `-f(x)` sea el negativo del resultado de `f`, no una llamada a `-f`
+ref:     TestParseExpr/unary_operators
+
+[T06.36] expr.call_forms                                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    llamadas con cero, uno y varios argumentos, encadenadas, sobre cualquier expresión y mezcladas con operadores; y las listas de argumentos de llamadas anidadas
+input:   17 filas, como `f()`, `f (x)`, `f(1,)`, `f(1)(2)`, `f()()()`, `(f)(1)`, `1(2)`, `a + f(b) * c`, `f(g(1, 2), h(3), 4)`, `f(1, g(2, 3, 4), h())` y `f(g(1))(h(2), 3)`
+expect:  el árbol de cada fila: la llamada se aplica a lo que tiene a su izquierda, sea un nombre, otra llamada, un grupo o un entero; ata más fuerte que cualquier operador binario; y cada lista de argumentos tiene sus elementos y solo esos; sin diagnósticos y con toda la entrada leída en cada fila
+why:     que `1(2)` se lea como llamada es deliberado: decidir que 1 no es una función es del comprobador de
+         tipos (E0403), no del parser. Y las filas con llamadas dentro de argumentos son las que fallarían si
+         las listas del pool se mezclaran
+ref:     TestParseExpr/call_forms
+
+[T06.37] expr.primary_forms                                level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los literales enteros y booleanos, los nombres, `()` y los grupos, con sus valores
+input:   19 filas, como `0`, `9223372036854775807`, `0xFF + 1_000`, `7 + 8 + 9`, `true && false`, `fooBar`, `foo + Bar`, `( )`, `(())`, `f(())`, `((1))` y `( x )`
+expect:  el texto de cada fila: el valor del entero (255 y 1000 para `0xFF` y `1_000`; el máximo de `Int` entero), `true` y `false` cada uno con su valor, los nombres en minúscula y en mayúscula tal cual, `()` también con un espacio dentro, y un grupo que es su expresión; sin diagnósticos y con toda la entrada leída en cada fila
+why:     el token `Int` guarda un índice a la lista de valores del buffer, no el valor: un parser que copiara
+         el índice daría `0`, `1`, `2`… en vez de `42` o `255`. Las filas con `0xFF + 1_000` (el valor, no la
+         grafía) y con el máximo de `Int` fijan que se lee el valor entero; y `true` y `false`, que no se
+         confundan entre sí
+ref:     TestParseExpr/primary_forms
+
+[T06.38] expr.chained_comparison_forms                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    cualquier pareja de comparaciones seguidas es una cadena, tres seguidas son un solo error, y el parser sigue leyendo después de la cadena
+input:   13 filas: `a == b != c`, `a < b == c`, `a <= b > c`, `a >= b <= c`, `a != b < c`, `a < b < c + 1`, `a < b < c && d`, `a < b < c < d`, `a < b < c == d != e`, `x && a < b < c && y`, `a + b < c * d < e`, `f(a < b < c, d)` y `-1 < x < 2`
+expect:  en cada fila exactamente un diagnóstico, el E0203 de siempre, con el primario en el segundo operador (la posición de cada fila, de uno o dos bytes); el texto `(error)` para la cadena, `(&& (error) d)` y `(&& (&& x (error)) y)` cuando detrás de la cadena hay otro operador, `(call f (error) d)` cuando está dentro de una llamada; y el cursor en el `Eof`
+why:     las seis comparaciones son un solo nivel, así que el chequeo no puede mirar solo `<`. Tres seguidas
+         son un solo error, no dos, porque lo que hay que arreglar es una cosa. Los operandos de la cadena
+         se leen enteros (`c + 1`, `c * d`), y el parser sigue con los operadores que vienen detrás (`&& d`),
+         o lo que viene detrás quedaría sin leer
+ref:     TestParseExpr/chained_comparison_forms
+
+[T06.39] expr.comparison_not_chained_ok                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    lo que se parece a una cadena de comparaciones y no lo es no da E0203: paréntesis, otro nivel entre medias, argumentos distintos
+input:   9 filas: `(a < b) < c`, `a < (b < c)`, `(a < b) == (c < d)`, `a < b && b < c`, `a < b || c < d || e < f`, `a + b < c + d`, `a == b || c != d`, `f(a < b, b < c)` y `!a < b`
+expect:  el árbol de cada fila (`(< (< a b) c)`, `(&& (< a b) (< b c))`, `(call f (< a b) (< b c))`…), sin ningún diagnóstico y con toda la entrada leída
+why:     `a < b && b < c` es justo lo que la ayuda de E0203 propone escribir, y no puede dar el mismo error. Y
+         `a + b < c` tiene una suma a la izquierda de `<`: lo que cuenta es que lo último que se construyó
+         fuera una comparación
+ref:     TestParseExpr/comparison_not_chained_ok
+
+[T06.40] expr.spans                                        level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    la posición de cada tipo de nodo: literales, nombres, `()`, binarios con su operador, prefijos, llamadas, grupos y nodos de error
+input:   fuentes cortas como `  7`, ` ( )`, `a + b * c`, `x - y - z`, ` ! f(x)`, `f(1, 2)`, `f(1)(2)`, `(1 + 2) * 3`, `(f)(1)`, `1 +`, `1 + )`, `(1 + 2` y `f(1, 2`
+expect:  los bytes exactos de cada nodo: un literal o un nombre, los de su token, y `()`, los de su `(` y su `)`; un binario va del primer byte de su operando izquierdo al último del derecho, y su `OpSpan` es solo el operador, también en `x - y - z`, donde todos los nodos empiezan en `x`; un prefijo va desde su signo hasta el final del operando; una llamada, del principio del llamado al `)`; un grupo es la expresión de dentro, sin paréntesis, pero el binario que empieza con un paréntesis empieza en él; un operando que falta es un `ExprError` vacío que empieza en el primer byte del token que aparece en su lugar: el final de la fuente en `1 +`, y en `1 + )` el `)`, un byte fuera del binario, que acaba en el `+`; y `(1 + 2` y `f(1, 2` son `ExprError` que cubren lo leído
+why:     el volcado no enseña las posiciones, y los diagnósticos de los pases siguientes (tipos, nombres) se
+         dibujan con ellas: un `OpSpan` que cubriera toda la expresión o un binario que empezara en el segundo
+         operando subrayaría lo que no es. Es la única prueba que las mira
+ref:     TestParseExpr/spans
+
+[T06.41] expr.malformed_input_still_parses                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    expresiones que dejan de tener sentido por dentro: el parser vuelve, imprime lo que entendió con un `(error)` donde no, y deja el cursor en el primer token que no usó
+input:   19 fuentes: la vacía, `)`, `}`, `let`, `1 +`, `1 + )`, `-`, `!`, `1 2`, `(`, `(1`, `(1 + 2`, `(1 2)`, `f(`, `f(1`, `f(1 2)`, `f(1,`, `f(,)` y `f(1,,2)`
+expect:  el texto de cada una (`(error)`, `(+ 1 (error))`, `(neg (error))`, `1`, `(call f (error))`, `(call f 1 (error) 2)`…) y la clase del token donde queda el cursor, que es el primer token que el parser no usó: el `)` de `)` y de `1 + )`, el `}` de `}`, el `let` de `let`, el `2` de `1 2`, `(1 2)` y `f(1 2)`; en las demás, el `Eof`
+why:     el `)` o el `}` que un operando que falta deja sin tocar es el de la llamada o el del bloque que lo
+         contiene: si el parser lo comiera, el error de una sola expresión desordenaría todo lo que hay
+         alrededor. Las demás filas comprueban que cada bucle consume algo o termina, porque un bucle que no
+         lo hiciera colgaría la prueba. El parser aún no informa de estos errores (E0201 llega en la sesión
+         siguiente, y la recuperación puede cambiar lo que se imprime aquí)
+ref:     TestParseExpr/malformed_input_still_parses
+
+[T06.42] expr.chain_counts_calls                           level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    las llamadas cuentan en la cadena igual que los operadores: 1024 seguidas se aceptan y la 1025 da E0205
+input:   "f" seguido de 1024 veces "()"; y el mismo con 1025
+expect:  con 1024, `(call (call … f))` con 1024 niveles y ningún diagnóstico; con 1025, exactamente un diagnóstico, el error E0205 con el primario en el último `(` (un byte), la expresión `(error)` y el cursor en el `Eof`
+why:     `f()()()…` es también un árbol de tantos niveles como llamadas. Si solo contaran los operadores, la
+         llamada sería la forma de saltarse el límite
+ref:     TestParseExpr/chain_counts_calls
+
+[T06.43] expr.chain_counts_inside_parens                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los operadores de dentro de un paréntesis y los de fuera suman en el mismo contador
+input:   "(" + "1" + 1000 × " + 1" + ")" + 24 × " + 1"; y el mismo con 25 detrás
+expect:  con 24 (1024 en total), el árbol entero y ningún diagnóstico; con 25 (1025 en total), exactamente un diagnóstico, el error E0205 con el primario en el último `+`, la expresión `(error)` y el cursor en el `Eof`
+why:     un contador que se pusiera a cero al entrar en un paréntesis dejaría 1000 operadores dentro y 25 fuera,
+         y no vería ninguna cadena larga. Los paréntesis no abren un contador nuevo, solo las sentencias
+ref:     TestParseExpr/chain_counts_inside_parens
+
+[T06.44] expr.chain_ignores_prefix_operators               level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los prefijos no cuentan en la cadena, solo los operadores binarios y las llamadas; pero las llamadas del operando de un prefijo sí
+input:   "1" seguido de 513 veces " - -1": 513 restas, cada una con un prefijo en su operando derecho; y `-f` seguido de 1000 veces `()` y de 24 veces " + 1", y el mismo con 25
+expect:  en la primera, el árbol entero, `(- (- … 1 (neg 1)) … (neg 1))` con 513 niveles, y ningún diagnóstico; en la segunda, con 24 (1000 llamadas y 24 sumas, 1024 en total), el árbol entero y ningún diagnóstico; con 25 (1025 en total), exactamente un diagnóstico, el error E0205 con el primario en el último `+`, la expresión `(error)` y el cursor en el `Eof`
+why:     513 binarios y 513 prefijos son 1026 operadores, pero 513 en la cadena: si los prefijos contaran se
+         informaría de un E0205 que no corresponde. Los prefijos tienen su propio límite, el del
+         anidamiento, en otra sesión. Y el operando de un prefijo no abre una cuenta nueva: si la abriera, una
+         cadena larga escondida detrás de un `-` o de un `!` se saltaría el límite
+ref:     TestParseExpr/chain_ignores_prefix_operators
+
+[T06.45] expr.chain_skips_to_statement_end                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    tras E0205 el parser salta lo que queda de la sentencia y deja el cursor en el token que la termina, sin consumirlo
+input:   11 filas con una cadena de 1025 operadores seguida de `; x`, de un salto de línea, de ` + 1 + 1;`, de ` + 1 }` o del final del fichero; la cadena dentro de una llamada o de unos paréntesis, con el resto de la sentencia detrás del `)`; una llamada sin cerrar; llaves (anidadas, con `;` y saltos de línea dentro) abiertas en el texto que se salta; y una sentencia dentro de un bloque, `{ ` + cadena + `; y }`
+expect:  en cada fila exactamente un diagnóstico, el E0205, la expresión `(error)` y un nodo de error que cubre desde el primer token de la expresión hasta el final del último token saltado; el cursor queda en el `;`, el salto de línea (`Newline`), el `}` o el `Eof` que termina la sentencia: los `;` y los saltos de línea que están dentro de llaves no la terminan, un `}` que no cierra ninguna llave abierta en el texto sí, y el `{` del bloque que contiene la sentencia no cuenta como suyo
+why:     la sentencia siguiente tiene que leerse desde un sitio sensato: si el parser parara antes, el resto de
+         la cadena se leería como otra sentencia y daría errores de más; si consumiera el terminador, se
+         comería el `;` o el `}` que otro necesita. Y si no contara las llaves abiertas en la sentencia, o
+         contara la del bloque, pararía en un `;` de dentro o se saltaría el final de la sentencia
+ref:     TestParseExpr/chain_skips_to_statement_end
+
+[T06.46] expr.chain_overflow_at_a_comparison               level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    cuando el operador que pasa el límite es una comparación, dentro de un paréntesis que es el operando de otra comparación, las comparaciones de fuera no lo toman por una cadena ni lo cuentan otra vez
+input:   "x < (" + "1" + 1023 × " + 1" + " < 1)"; y "a < b < (" + "1" + 1022 × " + 1" + " < 1)"
+expect:  en la primera exactamente un diagnóstico, el E0205 con el primario en el último `<`, la expresión `(error)` y el cursor en el `Eof`; en la segunda exactamente dos, el E0203 en el segundo `<` (bytes 6 a 7) y el E0205 en el último `<`, la expresión `(error)` y el cursor en el `Eof`
+why:     el parser deja sin consumir el operador que pasó el límite, y al deshacerse las llamadas las funciones
+         que lo leían se lo encuentran. Si la comparación de fuera lo tomara por el segundo operador de una
+         cadena se añadiría un E0203 falso, y si el bucle que lee el resto de una cadena lo contara otra vez
+         saldría un segundo E0205, y la cadena debe dar uno solo
+ref:     TestParseExpr/chain_overflow_at_a_comparison
+
+[T06.47] expr.chain_counter_restarts                       level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el contador empieza de cero con cada expresión de sentencia, y una expresión abandonada no deja estado a la siguiente
+input:   "1" + 1024 × " + 1" + "; " + "1" + 1024 × " + 1"; y "1" + 1025 × " + 1" + "; 1 + 2"
+expect:  en la primera, dos árboles iguales de 1024 niveles, el cursor en el `;` tras el primero y en el `Eof` tras el segundo, y ningún diagnóstico; en la segunda, `(error)` y el cursor en el `;`, después `(+ 1 2)` y el cursor en el `Eof`, y un único diagnóstico en total, el E0205 de la primera
+why:     el contador es de cada expresión de sentencia: si no se pusiera a cero, la segunda de dos cadenas
+         legales de 1024 pasaría del límite sumando las dos; y si una expresión abandonada dejara su estado
+         puesto, la siguiente sentencia, perfectamente buena, saldría como error
+ref:     TestParseExpr/chain_counter_restarts
+
+[T06.48] expr.chained_comparison_counts_toward_chain       level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    los operadores que el parser lee para pasar una cadena de comparaciones cuentan en el límite como los demás
+input:   "1" + 1022 × " + 1" + " < 1 < 1 < 1": 1022 sumas y tres comparaciones
+expect:  exactamente dos diagnósticos, por este orden: el E0203 en el segundo `<` y el E0205 en el tercero, que es el operador 1025; la expresión se imprime `(error)` y el cursor queda en el `Eof`
+why:     los operadores que se leen al recuperarse de un E0203 son operadores de la expresión: si no se contaran,
+         una cadena de comparaciones larga escaparía al límite que el árbol necesita
+ref:     TestParseExpr/chained_comparison_counts_toward_chain
+
+[T06.49] expr.nested_expr_keeps_outer_count                level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    una expresión de sentencia que se lee en medio de otra tiene su propia cuenta y deja la de la otra como estaba
+input:   un parser al que la prueba pone a mano el estado de una expresión de fuera, porque la gramática aún no llega a esto: con 1024 operadores ya contados lee `1 + 1`, con la marca de «demasiado larga» ya puesta lee `1 + 1`, y con 5 contados lee una cadena de 1025
+expect:  las dos primeras dan `(+ 1 1)` sin diagnósticos; la tercera da `(error)` con exactamente un E0205; y en las tres el estado de la expresión de fuera, su principio, su cuenta y su marca de «demasiado larga», es el que era
+why:     un bloque dentro de una expresión (`1 + if c { … }`) tiene sentencias, y cada una es una expresión de
+         sentencia: si su cuenta se sumara a la de fuera, un programa largo y legal daría E0205; si heredara la
+         marca de «demasiado larga» de la de fuera, se abandonaría sin decir nada; y si una sentencia demasiado
+         larga dejara la marca puesta, la expresión que la rodea se abandonaría con ella
+ref:     TestParseExpr/nested_expr_keeps_outer_count
+
+[T06.50] expr.skip_statement_counts_consumed_braces        level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el salto cuenta las llaves que la sentencia ya había abierto antes de empezar a saltar, y no las del bloque que la contiene
+input:   tres fuentes con el cursor movido a mano, porque el parser aún no consume llaves en una expresión: `{ x ; y } ; z` con `{ x` ya leído y el principio de la sentencia en el primer token; `{ x ; y }` con `{ x` leído y el principio de la sentencia en `x`; y `{ x } ; y` con `{ x }` ya leído y el principio de la sentencia en el primer token
+expect:  el cursor para en el segundo `;` de la primera (el de dentro de las llaves no termina la sentencia), en el `;` de la segunda (la llave abierta antes de la sentencia no es de ella) y en el `;` de la tercera (una llave abierta y cerrada ya no cuenta)
+why:     sin esta cuenta, una sentencia que estuviera a medias dentro de un bloque no sabría que sigue dentro
+         de él y se saltaría el final de la sentencia; y contar de más, desde el `{` del bloque, haría lo mismo
+         por el otro lado. Hoy no se puede alcanzar por la gramática; la sesión de los bloques sí
+ref:     TestParseExpr/skip_statement_counts_consumed_braces

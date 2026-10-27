@@ -8,10 +8,11 @@ import (
 // Parse turns the tokens of a file into its syntax tree. tb must be the result
 // of Lex: a buffer whose last token is the only Eof.
 //
-// The parser is recursive descent. This session reads the top-level functions:
+// The parser is recursive descent. Parse reads the top-level functions:
 // attributes, `pub`, the name, the parameters, the return type and a body that
-// is either absent or `{}`. Expressions and statements arrive in the next
-// sessions, and so do the parser's diagnostics: until then Parse reports
+// is either absent or `{}`. The expressions are read by parser_expr.go, which
+// Parse does not call yet: blocks with statements in them arrive in the next
+// session, and with them the diagnostics of Parse, so until then it reports
 // nothing to sink. It does not stop at tokens it cannot read, though: the
 // place where the text stops making sense becomes an error node (ItemError,
 // TypeError or ExprError), and the parser goes on with the tokens after it.
@@ -32,9 +33,12 @@ type parser struct {
 	end uint32
 	m   *Module
 
-	// in and sink are not used yet: the parser reads the Symbols the lexer
-	// interned and reports nothing, for now. They are here so that the parser
-	// has the shape it keeps in the next sessions.
+	// chain is the state of the statement-level expression that is being read;
+	// see expr in parser_expr.go.
+	chain chainState
+
+	// in is not used yet: the parser reads the Symbols the lexer interned. sink
+	// receives the diagnostics of the expressions (E0203, E0205).
 	in   *base.Interner
 	sink *diag.Sink
 }
