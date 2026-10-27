@@ -63,7 +63,7 @@ func (m *SourceManager) Load(realPath, displayPath string) (FileID, error) {
 		data = data[len(utf8BOM):]
 	}
 	id := m.Add(displayPath, data)
-	m.files[id].hadBOM = hadBOM
+	m.files.Ptr(id).hadBOM = hadBOM
 	return id, nil
 }
 

@@ -1,0 +1,140 @@
+[T04.01] base.idvec_push_returns_sequential_ids            level: core
+kind:    unit (go test)      file: internal/base/idvec_test.go
+case:    `Push` devuelve el id de cada elemento nuevo, empezando en 0, y `Get` devuelve lo guardado con ese id
+input:   un `IdVec[FileID, string]` vacío y tres `Push` seguidos: "a", "b" y "c"
+expect:  los `Push` devuelven 0, 1 y 2, y `Get(0)`, `Get(1)` y `Get(2)` devuelven "a", "b" y "c"
+why:     todo el compilador se refiere a sus nodos por el id que devolvió `Push`; si el primer id
+         fuera 1, o se repitiera, dos expresiones distintas compartirían una entrada de la tabla y
+         el error aparecería lejos de su causa
+ref:     TestIdVec/push_returns_sequential_ids
+
+[T04.02] base.idvec_get_and_ptr                            level: core
+kind:    unit (go test)      file: internal/base/idvec_test.go
+case:    escribir a través de `Ptr` modifica el elemento guardado y solo ese, y un id que no existe hace panic en `Get` y en `Ptr`
+input:   un `IdVec[FileID, cell]` con dos elementos, `cell{1}` y `cell{2}`, y `Ptr(1).x = 7`; después `Get` y
+         `Ptr` con el primer id que no existe (2) y con el 5
+expect:  `Get(1).x` vale 7 y `Get(0).x` sigue valiendo 1; `Get` y `Ptr` hacen panic con exactamente
+         `runtime error: index out of range [2] with length 2` para el id 2 y `… [5] with length 2` para el 5
+why:     `SourceManager` rellena la tabla de líneas de un fichero ya guardado a través de `Ptr`; si
+         `Ptr` apuntara a una copia, la escritura se perdería sin avisar, y si apuntara a otro
+         elemento, estropearía el de otro fichero; y si un id que no existe devolviera un elemento
+         vacío en vez de hacer panic, un `FileID` equivocado se convertiría en un fichero vacío sin avisar
+ref:     TestIdVec/get_and_ptr
+
+[T04.03] base.idvec_next_is_len                            level: core
+kind:    unit (go test)      file: internal/base/idvec_test.go
+case:    `Len` cuenta los elementos y `Next` anuncia el id que devolverá el siguiente `Push`
+input:   un `IdVec[FileID, string]` vacío y tres `Push`
+expect:  antes de cada `Push` número n, `Len()` vale n y `Next()` vale n; el `Push` devuelve ese mismo n;
+         tras los tres, `Len()` y `Next()` valen 3
+why:     un nodo puede necesitar su propio id antes de insertarse (para dárselo a sus hijos); si `Next`
+         no coincidiera con lo que luego devuelve `Push`, el nodo se referiría a otro
+ref:     TestIdVec/next_is_len
+
+[T04.04] base.idvec_all_iterates_in_order                  level: core
+kind:    unit (go test)      file: internal/base/idvec_test.go
+case:    `All` recorre los ids y los elementos en orden, y se detiene si el cuerpo del bucle sale
+input:   un `IdVec[FileID, string]` con "a", "b" y "c"; uno vacío; y un bucle con `break` en la primera vuelta
+expect:  `for i, x := range v.All()` produce los ids 0, 1, 2 con los valores "a", "b", "c" ("abc" en orden);
+         el vacío no produce nada; el bucle con `break` termina sin ningún panic
+why:     los pases recorren las tablas con este iterador y sus mensajes salen en el orden de los ids;
+         un iterador que ignorara el `break` y llamara otra vez al cuerpo lo paga con un panic del propio
+         runtime de Go («range function continued iteration after function for loop body returned
+         false»): el cuerpo nunca llega a correr dos veces, y el test recoge ese panic para que el fallo
+         salga con mensaje en vez de abortar el binario de test; uno que cambiara el orden haría que
+         la salida dependiera de la implementación
+ref:     TestIdVec/all_iterates_in_order
+
+[T04.05] base.idvec_distinct_id_types_do_not_mix           level: core
+kind:    unit (go test)      file: internal/base/idvec_test.go
+case:    el compilador de Go rechaza indexar un `IdVec[FileID, string]` con un id de otro tipo
+input:   `go build -buildvcs=false -o /dev/null ./testdata/badids`, un programa que declara `type otherID uint32` y llama a
+         `Get` de un `IdVec[FileID, string]` con un `otherID`
+expect:  la compilación falla y stderr contiene `cannot use` y `otherID`
+why:     el punto de los ids tipados es que mezclar un `ExprID` con un `TypeID` no compile; el test solo
+         prueba que un id de otro tipo no entra, y no distingue `Get(i I)` de un `Get(i uint32)`, que
+         también lo rechazaría: lo que impide aceptar cualquier `uint32` es el tipo del parámetro
+ref:     TestIdVec/distinct_id_types_do_not_mix
+
+[T04.06] base.arena_alloc_len_equals_cap                   level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    `Alloc` devuelve un slice cuya capacidad es exactamente su longitud, también cuando hay más peticiones en el mismo slab; y una petición vacía devuelve `nil` y no abre ningún slab
+input:   `a.Alloc(5)` y después `a.Alloc(3)` en una arena de tamaño por defecto; en otra arena nueva,
+         `Alloc(0)` y `Copy(nil)`
+expect:  el primer slice tiene `len` 5 y `cap` 5, y el segundo `len` 3 y `cap` 3; `Alloc(0)` y `Copy(nil)`
+         devuelven `nil` (no un `[]byte{}`) y `Slabs()` sigue valiendo 0
+why:     si la capacidad llegara hasta el final del slab, un `append` del que recibió la memoria
+         escribiría encima de los bytes de la petición siguiente, y dos cadenas se corromperían entre sí;
+         pedir cero bytes no puede costar un slab de 64 KiB al primero que lo haga; y los comentarios de
+         `Alloc` y `Copy` prometen `nil` para lo vacío: un `[]byte{}` también tiene `len` 0 y `cap` 0, así
+         que solo comparar con `nil` los distingue
+ref:     TestArena/alloc_len_equals_cap
+
+[T04.07] base.arena_many_small_share_slabs                 level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    muchas peticiones pequeñas caben en un solo slab, y tres peticiones seguidas no se pisan
+input:   1000 llamadas a `Alloc(16)` en una arena de tamaño por defecto (64 KiB); después tres `Alloc(4)`
+         seguidos, que se rellenan con 1, 2 y 3
+expect:  `Slabs()` vale 1 tras las 1000 llamadas; una vez rellenados, el primer slice de 4 bytes vale
+         `[1 1 1 1]`, el segundo `[2 2 2 2]` y el tercero `[3 3 3 3]`
+why:     la arena existe para pagar una reserva por slab y no una por petición; si cada `Alloc`
+         abriera un slab, no habría localidad ni ahorro y la arena sería un `make` con más pasos; y
+         compartir slab solo vale si las peticiones no se pisan, algo que el contador de slabs no ve:
+         un cursor que olvidara lo ya entregado (`used = n` en vez de `used += n`) serviría las
+         peticiones seguidas desde los mismos bytes con un solo slab, y lo que guardara una lo borraría la otra
+ref:     TestArena/many_small_share_slabs
+
+[T04.08] base.arena_large_gets_own_slab                    level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    una petición mayor que el slab recibe uno propio, que no pasa a ser el actual
+input:   una arena de tamaño por defecto; `Alloc(16)` escrito entero con `0x11`, `Alloc(100 << 10)` escrito
+         entero con `0xAB`, y otro `Alloc(16)` que se escribe con `0xCD`; antes de la primera llamada se
+         consulta `Slabs()`
+expect:  `Slabs()` vale 0 antes del primer `Alloc`; el slice grande tiene longitud 100 KiB y se puede
+         escribir entero; `Slabs()` vale 2 tras él y sigue valiendo 2 tras el último `Alloc(16)`; los
+         100 KiB del slice grande siguen valiendo `0xAB` después de escribir el último slice pequeño, y
+         los 16 bytes del primer `Alloc(16)` siguen valiendo `0x11`
+why:     si el slab grande pasara a ser el actual, la siguiente petición pequeña abriría un tercer slab
+         y se perdería el espacio libre del primero; si pasara a serlo sin avanzar el cursor, la petición
+         pequeña se tallaría desde el principio del slab grande y pisaría sus bytes sin que el contador
+         de slabs lo notara; si una petición grande reiniciara el cursor del slab actual, la pequeña
+         siguiente se tallaría encima de la primera y pisaría sus bytes, también sin que el contador
+         lo notara; y si la arena creara un slab al construirse, un compilador que no usa la arena
+         pagaría 64 KiB
+ref:     TestArena/large_gets_own_slab
+
+[T04.09] base.arena_copy_is_independent                    level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    `Copy` devuelve una copia que no comparte memoria con su entrada y que sale de la arena
+input:   en una arena nueva (`NewArena(0)`), `b := []byte("abc")`, `c := a.Copy(b)` y `b[0] = 'X'`
+expect:  `string(c)` sigue siendo "abc", `used` vale 3 y `Slabs()` vale 1
+why:     se copia a la arena para que lo guardado sea de la arena y de nadie más; un `Copy` que devolviera
+         su entrada dejaría que quien llamó siguiera cambiando el texto guardado sin enterarse; y uno que
+         copiara con un `make` aparte también quedaría independiente de su entrada, pero fuera de la
+         arena: `used` y `Slabs()` valdrían 0
+ref:     TestArena/copy_is_independent
+
+[T04.10] base.arena_zero_slab_size_means_64k               level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    el tamaño de slab 0, y también uno negativo, significan 64 KiB
+input:   `NewArena(0)` y `NewArena(-1)`
+expect:  en los dos, `slabSize` vale `64 << 10`
+why:     quien no quiere elegir tamaño pasa 0 y espera el de por defecto; con un tamaño 0 o negativo de
+         verdad cada petición no vacía sería "grande" y tendría su propio slab
+ref:     TestArena/zero_slab_size_means_64k
+
+[T04.11] base.arena_small_that_does_not_fit_opens_new_slab  level: core
+kind:    unit (go test)      file: internal/base/arena_test.go
+case:    una petición pequeña que no cabe en lo que queda del slab actual abre un slab nuevo, y una que cabe justa no lo abre
+input:   `NewArena(32)`: `Alloc(20)` escrito con `0x11`, `Alloc(20)` escrito con `0x22` y `Alloc(12)`; en otra arena
+         de 32 bytes, `Alloc(16)`, `Alloc(32)` y `Alloc(1)`; en una tercera, `Alloc(33)`
+expect:  `Slabs()` vale 2 tras los dos `Alloc(20)`, el primer slice sigue valiendo `0x11`, y `Slabs()` sigue
+         valiendo 2 tras `Alloc(12)`; en la segunda arena vale 2 tras `Alloc(32)` y 3 tras `Alloc(1)`; en
+         la tercera `Alloc(33)` devuelve `len` 33 y `cap` 33 con un solo slab
+why:     es la rama de la arena con más casos límite. Sin el cambio de slab la segunda petición se saldría del
+         primero, y sin reiniciar el cursor se saldría del nuevo: en los dos casos el test muere con un
+         `panic: runtime error: slice bounds out of range`. Si el slab nuevo no pasa a ser el actual, la
+         segunda petición escribe encima de los bytes de la primera, y el test lo ve en `first`. Si una
+         petición que cabe justa abriera slab, se perdería espacio. Y una petición exactamente del tamaño
+         del slab es pequeña, así que debe llenar un slab que pasa a ser el actual en vez de quedar aparte
+ref:     TestArena/small_that_does_not_fit_opens_new_slab

@@ -40,7 +40,7 @@ func (f *file) lineStarts() []uint32 {
 // one. An empty file has one line, and so does a file that ends in a newline
 // (its last line is empty).
 func (m *SourceManager) LineCount(id FileID) uint32 {
-	return uint32(len(m.files[id].lineStarts()))
+	return uint32(len(m.files.Ptr(id).lineStarts()))
 }
 
 // LineStart returns the byte offset where the given line begins. Lines count
@@ -48,7 +48,7 @@ func (m *SourceManager) LineCount(id FileID) uint32 {
 // compiler never builds such a line: that is a bug in the compiler, not an
 // error in the user's program.
 func (m *SourceManager) LineStart(id FileID, line uint32) uint32 {
-	lines := m.files[id].lineStarts()
+	lines := m.files.Ptr(id).lineStarts()
 	if line == 0 || int64(line) > int64(len(lines)) {
 		panic(fmt.Sprintf("base: line %d out of range (file has %d lines)", line, len(lines)))
 	}
@@ -62,7 +62,7 @@ func (m *SourceManager) LineStart(id FileID, line uint32) uint32 {
 // size of the file is valid (the position just after the last byte); a larger
 // one panics, for the same reason as LineStart.
 func (m *SourceManager) LineCol(id FileID, offset uint32) LineCol {
-	f := m.files[id]
+	f := m.files.Ptr(id)
 	if int64(offset) > int64(len(f.contents)) {
 		panic(fmt.Sprintf("base: offset %d out of range (file has %d bytes)", offset, len(f.contents)))
 	}
@@ -87,7 +87,7 @@ func (m *SourceManager) LineCol(id FileID, offset uint32) LineCol {
 // LineStart.
 func (m *SourceManager) LineText(id FileID, line uint32) string {
 	start := m.LineStart(id, line)
-	f := m.files[id]
+	f := m.files.Ptr(id)
 	lines := f.lineStarts()
 	end := uint32(len(f.contents))
 	if line < uint32(len(lines)) {

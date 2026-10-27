@@ -3,7 +3,7 @@
 package base
 
 // FileID names a file inside a SourceManager. It is the index of the file in
-// the manager, and later it will index an IdVec.
+// the manager's IdVec, which accepts no other kind of id.
 type FileID uint32
 
 // Span is a half-open byte range [Lo, Hi) inside one file. Lo == Hi is an empty
@@ -24,11 +24,11 @@ type file struct {
 
 // SourceManager owns the text of every file the compiler has read.
 //
-// It keeps pointers for now, so a *file never moves when files grows. A later
-// session replaces the slice with an IdVec[FileID, file] once typed ids make
-// pointer stability unnecessary.
+// The files live in an IdVec indexed by FileID. Adding a file may move the
+// others in memory, so no code keeps a *file across a call to Add: each method
+// takes the pointer from files.Ptr, uses it and drops it.
 type SourceManager struct {
-	files []*file
+	files IdVec[FileID, file]
 }
 
 // Add registers a file and returns its id. The manager takes ownership of
@@ -42,20 +42,19 @@ type SourceManager struct {
 // longer slice. Add does not check it.
 func (m *SourceManager) Add(displayPath string, contents []byte) FileID {
 	contents = contents[:len(contents):len(contents)]
-	m.files = append(m.files, &file{path: displayPath, contents: contents})
-	return FileID(len(m.files) - 1)
+	return m.files.Push(file{path: displayPath, contents: contents})
 }
 
 // DisplayPath returns the path given to Add, which is what diagnostics show.
 func (m *SourceManager) DisplayPath(id FileID) string {
-	return m.files[id].path
+	return m.files.Ptr(id).path
 }
 
 // Contents returns the bytes of the file. The slice has cap == len (Add clipped
 // it), so an append by the caller reallocates and can never write into the
 // file's array. Elements are not copied, so the caller must not assign to them.
 func (m *SourceManager) Contents(id FileID) []byte {
-	return m.files[id].contents
+	return m.files.Ptr(id).contents
 }
 
 // Text returns the bytes of the span as a string. It panics if the span does
@@ -66,17 +65,17 @@ func (m *SourceManager) Contents(id FileID) []byte {
 // because Add clipped the capacity of the stored slice to its length, so the
 // spare room of the array behind it is out of reach.
 func (m *SourceManager) Text(sp Span) string {
-	return string(m.files[sp.File].contents[sp.Lo:sp.Hi])
+	return string(m.files.Ptr(sp.File).contents[sp.Lo:sp.Hi])
 }
 
 // Size returns the length of the file in bytes.
 func (m *SourceManager) Size(id FileID) uint32 {
-	return uint32(len(m.files[id].contents))
+	return uint32(len(m.files.Ptr(id).contents))
 }
 
 // HadBOM reports whether the file started with a UTF-8 byte order mark that
 // Load stripped. Contents never includes the mark; a tool that rewrites the
 // file (ki test --update) uses this to put it back.
 func (m *SourceManager) HadBOM(id FileID) bool {
-	return m.files[id].hadBOM
+	return m.files.Ptr(id).hadBOM
 }

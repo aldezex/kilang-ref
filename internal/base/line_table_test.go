@@ -129,7 +129,7 @@ func TestLineTable(t *testing.T) {
 
 	t.Run("table_is_built_once", func(t *testing.T) {
 		m, id := newLineTableManager("ab\ncd\nef")
-		f := m.files[id]
+		f := m.files.Ptr(id)
 		if f.lines != nil {
 			t.Fatalf("the table exists after Add, before any line query")
 		}
