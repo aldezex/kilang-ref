@@ -19,11 +19,20 @@ func lexAll(t *testing.T, src string) (syntax.TokenBuffer, *diag.Sink) {
 }
 
 // lexFile is lexAll that also returns the id of the file and the interner that
-// holds the symbols of the identifiers.
+// holds the symbols of the identifiers. The file is the second one of its
+// SourceManager, after an empty one, so its id is 1 and not 0: a pass that
+// builds a span and forgets the file leaves the zero value, which would be the
+// right id if the file were the first. The id is checked, so that deleting the
+// padding fails every test that goes through lexFile instead of letting those
+// that compare a File with id pass for the wrong reason.
 func lexFile(t *testing.T, src string) (syntax.TokenBuffer, *diag.Sink, base.FileID, *base.Interner) {
 	t.Helper()
 	var sm base.SourceManager
+	sm.Add("pad.ki", nil)
 	id := sm.Add("test.ki", []byte(src))
+	if id != 1 {
+		t.Fatalf("test.ki is file %d, want 1: pad.ki must come first, or a span that lost its File would pass for the right one", id)
+	}
 	in := base.NewInterner()
 	sink := &diag.Sink{}
 	return syntax.Lex(&sm, id, in, sink), sink, id, in

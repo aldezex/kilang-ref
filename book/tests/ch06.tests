@@ -1,0 +1,216 @@
+[T06.01] parser.fn_signature                               level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    una función con un parámetro con tipo y un tipo de retorno se imprime como una S-expresión, con el cuerpo vacío como `(block)`
+input:   "fn fib(n: Int) -> Int {}"
+expect:  el texto `(fn fib (params (n Int)) (ret Int) (block))` y un salto de línea, sin diagnósticos
+why:     este texto es lo que imprime `ki emit ast` y lo que comparan casi todos los tests del parser; si el
+         parser perdiera el tipo de retorno, el tipo del parámetro o el cuerpo, este es el primer test que
+         lo diría. Y cada item acaba en un salto de línea, también el último
+ref:     TestParser/fn_signature
+
+[T06.02] parser.pub_and_attrs                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un atributo con un argumento de texto, `pub` y una función sin cuerpo: el atributo y `pub` se leen, y la ausencia de cuerpo se imprime como `none`
+input:   `#[extern("ki_print_int")] pub fn print(x: Int)` (la fuente tal como se escribe, sin salto de línea al final)
+expect:  el texto `(pub fn print (attrs (extern "ki_print_int")) (params (x Int)) (ret _) none)` y un salto de línea, sin diagnósticos
+why:     es la forma de las funciones del preludio: una función cuyo código no está escrito en Ki. Si el parser
+         exigiera un cuerpo, o tirara el atributo o el `pub`, el preludio del capítulo 7 no se podría leer.
+         Y el lexer entrega `#[` como dos tokens, `#` y `[`, que el parser lee uno detrás de otro
+ref:     TestParser/pub_and_attrs
+
+[T06.03] parser.unit_type                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    el tipo `()` se lee como un tipo, y un tipo de retorno escrito se imprime en `(ret …)`
+input:   "fn f() -> () {}"
+expect:  el texto `(fn f (params) (ret ()) (block))` y un salto de línea, sin diagnósticos
+why:     `()` son dos tokens; si el parser leyera solo el `(`, el `)` se quedaría sin leer y el cuerpo `{}` ya
+         no se reconocería como el cuerpo de la función. Y una lista de parámetros vacía se imprime
+         `(params)`, sin nada dentro
+ref:     TestParser/unit_type
+
+[T06.04] parser.bool_type                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    `Bool` se lee como un nombre de tipo igual que `Int`, y sin `->` el tipo de retorno no está escrito y se imprime `_`
+input:   "fn f(b: Bool) {}"
+expect:  el texto `(fn f (params (b Bool)) (ret _) (block))` y un salto de línea, sin diagnósticos
+why:     el parser no lleva una lista de tipos: cualquier nombre en mayúscula es un tipo, y decidir cuáles
+         existen es cosa de la resolución de nombres. Y `_` en `(ret _)` quiere decir que el programa no
+         escribió nada, que no es lo mismo que escribir `()`
+ref:     TestParser/bool_type
+
+[T06.05] parser.untyped_param                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un parámetro puede no llevar tipo, y entonces se imprime `_` en su lugar
+input:   "fn f(x) {}"
+expect:  el texto `(fn f (params (x _)) (ret _) (block))` y un salto de línea, sin diagnósticos
+why:     la anotación del parámetro es opcional en la gramática y el parser no debe inventarse un tipo: sin
+         `:`, `HasType` es falso y lo que haya en `Type` no cuenta. Si el parser exigiera el `:`,
+         `fn f(x) {}` sería ya un error
+ref:     TestParser/untyped_param
+
+[T06.06] parser.two_items                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    dos funciones en líneas distintas dan dos items, en orden, y cada uno acaba en su propia línea
+input:   "fn a() {}\nfn b() {}" (con un salto de línea real)
+expect:  exactamente `(fn a (params) (ret _) (block))`, un salto de línea, `(fn b (params) (ret _) (block))` y otro salto de línea
+why:     entre dos items la regla de línea pone un `Newline`; si el parser lo tomara por el final del fichero,
+         o leyera un solo item, la segunda función se perdería sin ningún error. Con una cadena exacta se
+         ve también que no sobra ni falta ningún salto de línea
+ref:     TestParser/two_items
+
+[T06.07] parser.many_params                                level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    una lista de parámetros con varios, con tipo y sin él, los lee todos y en orden; y la lista de la segunda función no es la de la primera
+input:   "fn f(a: Int, b, c: Bool) {}" y "fn f(x: Int, y) {}\nfn g(z: Bool) -> Int {}" (con un salto de línea real)
+expect:  `(fn f (params (a Int) (b _) (c Bool)) (ret _) (block))` para la primera; para la segunda, `(fn f (params (x Int) (y _)) (ret _) (block))` y `(fn g (params (z Bool)) (ret Int) (block))`, cada una en su línea
+why:     las listas de hijos son rangos `{First, Count}` sobre un pool compartido: un rango que empezara siempre
+         en 0 haría que `g` viera los parámetros de `f`, un `Count` desplazado una posición le daría uno de
+         más o de menos, y un bucle que parara en la primera coma perdería el resto. Con un solo parámetro,
+         como en los demás tests, nada de esto se nota
+ref:     TestParser/many_params
+
+[T06.08] parser.attr_forms                                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    los atributos con o sin argumentos, uno o varios, con escapes en el texto del argumento, y los atributos del segundo item no son los del primero
+input:   cinco fuentes tal como se escriben: `#[test] fn f() {}`; `#[a("x", "y")] fn f() {}`; `#[a] #[b("1")] fn f() {}`; `#[a("q\"\n\\é")] fn f() {}` (con los escapes de Ki `\"`, `\n` y `\\` dentro del argumento); y dos items en dos líneas, `#[a("1")] fn f() {}` y `#[b] #[c("2", "3")] pub fn g() {}`
+expect:  `(attrs (test))` sin argumentos; `(attrs (a "x" "y"))` con dos; `(attrs (a) (b "1"))` con dos atributos en la misma línea; para el argumento cuyo texto es q, una comilla, un salto de línea, una barra invertida y é, `(attrs (a "q\"\n\\é"))`, es decir, escrito con los escapes de Go (`\"`, `\n` y `\\`) y la `é` tal cual; y, para los dos items, `(attrs (a "1"))` en el primero y `(attrs (b) (c "2" "3"))` en el segundo (que además es `pub`)
+why:     `Attr.Args` es un slice de textos ya sin escapes (los resolvió el lexer), y `emit ast` los vuelve a
+         escribir con `strconv.Quote`: un argumento impreso sin comillas ni escapes sería ambiguo en cuanto
+         llevara una comilla o un salto de línea. Un atributo sin paréntesis es válido, y el pool de
+         atributos se parte por items igual que el de parámetros
+ref:     TestParser/attr_forms
+
+[T06.09] parser.attrs_on_their_own_lines                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un atributo puede ocupar su propia línea: el salto de línea tras el `]` no separa el atributo de la función de debajo, y esto vale para uno y para dos atributos
+input:   "#[extern(\"ki_print_int\")]\npub fn print(x: Int)\n" y "#[a]\n#[b(\"1\")]\nfn f() {}\n" (con saltos de línea reales)
+expect:  `(pub fn print (attrs (extern "ki_print_int")) (params (x Int)) (ret _) none)` para el primero, y `(fn f (attrs (a) (b "1")) (params) (ret _) (block))` para el segundo, cada uno con su salto de línea, sin diagnósticos
+why:     así está escrito el preludio. Un `]` puede terminar una expresión, así que la regla de línea pone un
+         `Newline` detrás; si el parser no lo saltara, `#[extern(…)]` quedaría suelto y `pub fn print` sería
+         un item aparte, sin su atributo y sin ningún error que lo dijera
+ref:     TestParser/attrs_on_their_own_lines
+
+[T06.10] parser.extern_then_item                           level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    una función sin cuerpo acaba al final de su línea, con o sin tipo de retorno y también al final del fichero, y lo que viene después es otro item
+input:   "pub fn a(x: Int)\nfn b() {}"; "fn a() -> Int\nfn b() {}"; y "fn a() {}\nfn b() -> ()" (sin salto de línea al final; con saltos de línea reales)
+expect:  `(pub fn a (params (x Int)) (ret _) none)` y `(fn b (params) (ret _) (block))`; `(fn a (params) (ret Int) none)` y `(fn b (params) (ret _) (block))`; y `(fn a (params) (ret _) (block))` y `(fn b (params) (ret ()) none)`, cada una en su línea
+why:     una función sin cuerpo (como las del preludio) acaba donde acaba su firma, y lo que viene en la línea
+         siguiente es otro item. Si el parser exigiera siempre un `{`, o siguiera leyendo tokens de la
+         firma, el `fn b() {}` de abajo se perdería dentro del error de `a`; y la última, sin cuerpo y sin
+         salto de línea al final, no debe quedarse esperándolo
+ref:     TestParser/extern_then_item
+
+[T06.11] parser.empty_module                               level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un fichero vacío, o con solo saltos de línea y comentarios, es un módulo sin items
+input:   "", "\n\n", "// only a comment\n" y "/* a */ // b\n" (con saltos de línea reales)
+expect:  ningún item, ni en `Items` ni en `ItemNodes`, y `PrintModule` da la cadena vacía
+why:     un fichero sin items no es un error, y el volcado de un módulo vacío no inventa una línea; si el parser
+         esperara siempre un primer item, o `PrintModule` escribiera un salto de línea de más, `ki emit ast`
+         de un fichero vacío daría una línea en blanco
+ref:     TestParser/empty_module
+
+[T06.12] parser.spans                                      level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    los spans de cada nodo: el item, su nombre, el atributo, los parámetros, los tipos y el cuerpo; y los de los nodos de error
+input:   "\n  #[ext(\"sym\")] pub fn fib(n: Int, zed) -> Bool {}\n" (con saltos de línea reales); "fn g() -> () {}"; "fn h(x: Int)\n"; "fn f(x: ) {}"; "fn f() -> (Int) {}"; "fn f(x"; "  1 fn g() {}"; "#[a]\n1"; y "#[a fn f() {}", "fn 1" y "fn f x) {}"
+expect:  para la primera, `Module.File` es el fichero, que no es el primero de su `SourceManager` (su id es 1, no 0); el item cubre desde el `#` hasta la `}`; el nombre es `fib`; el atributo es `#[ext("sym")]` con `Args` igual a ["sym"]; los parámetros son `n: Int` y `zed`; el tipo del primero es `Int`, el de retorno `Bool` y el cuerpo `{}`, un bloque sin sentencias ni cola; y `Pub`, `HasRet` y `HasBody` son verdaderos. En `fn g() -> () {}` el tipo de retorno cubre los dos caracteres de su `()`, no los de `g()`; en `fn h(x: Int)` más un salto de línea, el item acaba en el `)`. En `fn f(x: ) {}` el tipo que falta tiene un span vacío justo en el `)`; en `fn f() -> (Int) {}`, el tipo de error cubre solo el `(`; `fn f(x` es un `ItemError` (y nada más: sin nombre ni listas) que cubre sus seis bytes; en `  1 fn g() {}` el primer item es un `ItemError` que cubre solo el `1`; en `#[a]` seguido de un salto de línea y un `1`, el primer item es un `ItemError` que cubre `#[a]`, sin el salto de línea; y en `#[a fn f() {}`, `fn 1` y `fn f x) {}`, donde falta el `]` del atributo, el nombre y el `(`, el primer item es un `ItemError` (y nada más) que cubre lo leído hasta entonces, `#[a`, `fn` y `fn f` respectivamente, y no el token que aparece en su lugar
+why:     los volcados no muestran los spans, así que ningún otro test los vigila, y de ellos dependen los
+         diagnósticos: la resolución de nombres señalará el nombre (`NameSpan`) y el atributo, no la
+         función entera. Un span que acabara un byte antes, que empezara en el nombre en vez de en el
+         atributo, que incluyera el salto de línea de detrás o que se quedara en la primera palabra de un
+         item roto marcaría el sitio equivocado en cada error. Las tres últimas fuentes fijan que un item
+         roto cubre lo leído hasta que dejó de tener sentido, también cuando lo que falta es el `]` de un
+         atributo, el nombre o el `(`: un parser que midiera el span desde el token que encontró en su
+         lugar daría un span vacío donde debería subrayar `#[a`, `fn` o `fn f`. Y el fichero no es el primero del
+         `SourceManager` a propósito: un parser que olvidara copiar el fichero a un span o a `Module` dejaría el
+         valor cero, que con el id 0 sería justo el esperado y ningún test lo notaría
+ref:     TestParser/spans
+
+[T06.13] parser.malformed_input_still_parses               level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    46 fuentes mal formadas: cortadas en varios puntos de una firma o de un atributo, con un solo token que falta en un item que de otro modo sería correcto, con tokens que no pueden empezar un item, con una coma de más en los parámetros, con un tipo escrito en minúscula y con un cuerpo sin cerrar; que el parser sigue leyendo items después de un error; y que una lista que falla no deja nada en su pool
+input:   `fn`, `fn f(x:`, `#[a("x",`, `# a] fn f() {}`, `#[a fn f() {}`, `fn f x) {}`, `pub f() {}`, `1`, `)`, `fn f(x,) {}`, `fn f(x: int) {}`, `fn f() {`… (46 fuentes en total, todas en el test); además `1 fn g() {}` y `fn f( fn g() {}`; y, para los pools, `#[a] # a`, `#[a] #[`, `#[a] #[b(1)]`, `#[a] #[b("x"` y `#[a] #[b` (atributos) y `fn f(x,) {}` (parámetros)
+expect:  para cada una de las 46 fuentes, `Parse` vuelve; el texto de `PrintModule` contiene `(error)`; y los items, de uno en uno, tienen un span del fichero, que no acaba antes de empezar, que empieza donde acabó el item anterior o más tarde y que no pasa del final del fichero. No se comprueba ningún diagnóstico. `1 fn g() {}` y `fn f( fn g() {}` dan exactamente `(error)`, un salto de línea, `(fn g (params) (ret _) (block))` y otro salto de línea: el item que viene detrás del error se lee entero. Y tras cada una de las cinco fuentes de atributos el pool de atributos está vacío, y tras `fn f(x,) {}` el de parámetros también
+why:     el parser todavía no informa de nada (los diagnósticos llegan en la sesión 3), pero un fichero roto no
+         debe colgarlo, ni hacerlo leer más allá del último token, ni darle un árbol que parezca un programa
+         correcto: un `(error)` en el volcado es lo que se ve en lugar de un hueco. Las filas a las que les
+         falta un solo token en medio de un item que sería correcto (`#[a fn f() {}`, `fn f x) {}`,
+         `pub f() {}`) existen porque un parser que ignorara ese token daría por bueno el item y dejaría un
+         árbol sin ningún `(error)`; las cortadas al final fallan de todos modos y solo prueban que el
+         parser acaba. `fn f(x: int) {}` es el descuido más probable de quien viene de TypeScript o de
+         Python: los tipos van con mayúscula, y un parser que aceptara también un nombre en minúscula
+         daría por bueno el item. Las dos fuentes con un item detrás existen porque «el parser sigue
+         después de un error» es lo que permite informar de varios errores de una pasada, y ninguna de
+         las demás filas notaría que el parser se rindiera en el primer nodo de error, porque ninguna
+         mira lo que hay detrás de él. Y las listas porque `attrs` y `params` prometen no añadir nada al
+         pool si fallan y el volcado no lo enseña: cada una falla después de leer algo bien, para que un
+         parser que añadiera cada atributo o parámetro al pool según lo lee dejara uno huérfano. Un
+         atributo puede fallar en cinco sitios (el `[`, el nombre, el primer argumento, el `)` y el `]`) y
+         hay una fuente para cada uno, porque un parser que diera por bueno un atributo a medias en uno
+         solo de ellos lo dejaría en el pool
+ref:     TestParser/malformed_input_still_parses
+
+[T06.14] parser.advance_stops_at_eof                       level: core
+kind:    unit (go test)      file: internal/syntax/parser_internal_test.go
+case:    el cursor del parser no pasa del `Eof`: `advance` sigue devolviendo `Eof` sin moverse, `eat` de otra clase no consume nada y el final del último token consumido no cambia
+input:   un buffer escrito a mano, sin pasar por el lexer, con un `LowerIdent` en [0,1) y un `Eof` en [1,1)
+expect:  el primer `advance` devuelve el `LowerIdent` y deja la posición en 1 y el final en 1; tres `advance` más devuelven `Eof` con la posición en 1 y el final en 1; y `eat(LowerIdent)` devuelve falso y deja la posición en 1
+why:     el cursor no debe salir del buffer pase lo que pase: con esta guarda, un `advance` de más vuelve a
+         leer el `Eof` y no un índice fuera de rango, que sería un pánico del compilador provocado por el
+         fichero de entrada. La prueba lo comprueba directamente porque el parser actual no llega a
+         pedir ese `advance`
+ref:     TestParserCursor/advance_stops_at_eof
+
+[T06.15] ast.operator_strings                              level: core
+kind:    unit (go test)      file: internal/syntax/ast_test.go
+case:    `String` de los 13 operadores binarios y de los 2 unarios, y de un valor que no es ninguno; y el número de cada operador binario
+input:   los 13 `BinOp`, los 2 `UnOp`, `BinOp(13)`, `BinOp(255)`, `UnOp(2)` y `UnOp(255)`
+expect:  "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&" y "||" para los binarios, en ese orden; "neg" y "not" para los unarios; "BinOp(13)", "BinOp(255)", "UnOp(2)" y "UnOp(255)" para los valores fuera de la tabla; y los binarios valen de 0 a 12 en el mismo orden
+why:     `ki emit ast` imprime cada operador con su `String`, y la tabla se indexa por el número del operador:
+         una tabla desplazada una posición, o dos entradas cambiadas, imprimiría `(!= a b)` para una
+         igualdad. Y un valor fuera de la tabla no debe hacer un pánico al imprimirlo
+ref:     TestAST/operator_strings
+
+[T06.16] ast.list_accessors                                level: core
+kind:    unit (go test)      file: internal/syntax/ast_test.go
+case:    `ExprList`, `StmtList`, `Params` y `Attrs` devuelven los elementos que marca el rango, en cualquier posición del pool; y `ExprList` no deja que quien recibe la lista escriba en la que viene detrás ni lea más allá del final del pool
+input:   pools escritos a mano de cinco expresiones, tres sentencias, tres parámetros y dos atributos; rangos vacíos al principio y al final, de un elemento al principio, en el medio y al final, y de dos elementos; y un pool de tres expresiones con capacidad ocho
+expect:  los elementos del pool que marca cada rango (`Attrs`, solo con los rangos que caben en sus dos elementos); la capacidad de la lista de `ExprList` es su longitud y un `append` a ella no cambia el pool; un rango que pasa del final del pool hace un pánico, también cuando el pool tiene capacidad de sobra más allá de su longitud; y los dos últimos elementos de ese pool se devuelven bien
+why:     las listas de hijos son rangos sobre un pool compartido: una lista cuya capacidad llegara hasta el
+         final del pool dejaría que un `append` pisara la lista siguiente, y un pool que ha crecido con
+         `append` tiene espacio de sobra tras su último elemento, donde Go no avisa de un rango que se pasa
+         si no se recorta antes la capacidad
+ref:     TestAST/list_accessors
+
+[T06.17] printer.expressions                               level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_test.go
+case:    cada forma de expresión del volcado, construida a mano porque el parser aún no las lee: enteros (incluidos los extremos), booleanos, `()`, nombres, llamadas, los 13 operadores binarios, los unarios y el `if` con y sin `else`
+input:   módulos escritos a mano con un solo item `fn f()` cuyo cuerpo es cada expresión
+expect:  `42`, `0`, `-7`, `9223372036854775807`, `-9223372036854775808`, `true`, `false`, `()`, `fib`, `Foo`, `(call f)`, `(call f 1 (call g 2) x)`, `(call (call f 1) 2)`, `(- a (* b c))`, `(neg 1)`, `(not a)`, `(if a 1 2)`, `(if a 1)` (aunque `Else` apunte a una expresión real, porque `HasElse` es falso), `(if a 1 (if b 2 3))`, y `(OP a b)` con el símbolo de cada operador, escrito en el test
+why:     la salida de `emit ast` es un contrato que el formato fija nodo a nodo, y el parser aún no produce estas
+         formas: sin estas pruebas se estrenarían sin que nadie las hubiera comprobado, y un operando
+         cambiado de sitio, un entero sin signo en el mínimo, un `else` que se imprimiera siempre o un
+         símbolo equivocado saldrían en el volcado de un programa entero, lejos de la causa
+ref:     TestPrinter/expressions
+
+[T06.18] printer.statements_and_blocks                     level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_test.go
+case:    bloques y sentencias del volcado, construidos a mano: vacío, solo con cola, solo con sentencias, con sentencias y cola, `let` con y sin tipo, `let` con `()` y bloques anidados
+input:   módulos escritos a mano con un solo item `fn f()` cuyo cuerpo es cada bloque
+expect:  `(block)`; `(block x)`; `(block (expr (call f)))` (aunque `Tail` apunte a una expresión real, porque `HasTail` es falso); `(block (let x _ 1) (let y Int 2) (expr (call f)) x)`; `(block (let x _ 1))`, con un tipo en el módulo que el `Type` 0 de la sentencia señalaría; `(block (let u () ()))`; y `(if true (block (expr (block (expr 1) 2))))`
+why:     un `let` sin tipo tiene `Type` 0, que es el id de un tipo de verdad si el módulo tiene alguno: lo que
+         decide es `HasType`, y un printer que mirara solo el id escribiría un tipo que nadie escribió. Lo
+         mismo vale para la cola (`HasTail`). Las sentencias van por orden y la cola, al final
+ref:     TestPrinter/statements_and_blocks
+
+[T06.19] printer.error_nodes                               level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_test.go
+case:    los nodos de error se imprimen como `(error)` en el sitio donde estarían: expresión, operando, sentencia, tipo de un `let`, tipo de un parámetro, tipo de retorno y un item entero
+input:   módulos escritos a mano: un cuerpo que es un error, una suma con un operando que lo es, un bloque con una sentencia de error, un `let` con un tipo de error, y tres items (una función con un parámetro y un tipo de retorno de error, un item de error y una función sin cuerpo)
+expect:  `(error)`; `(+ 1 (error))`; `(block (error) (expr 1))`; `(block (let x (error) 1))`; y, para los tres items, `(fn a (params (x (error))) (ret (error)) none)`, `(error)` y `(fn b (params) (ret _) none)`, cada uno en su línea
+why:     el parser deja un nodo de error donde no pudo leer y sigue adelante, y el volcado tiene que
+         enseñarlo en su sitio y sin tapar a los vecinos: un `(error)` que ocupara el lugar del item
+         siguiente, o que se escribiera sin su salto de línea, haría que dos errores distintos parecieran uno
+ref:     TestPrinter/error_nodes
