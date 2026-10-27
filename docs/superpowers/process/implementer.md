@@ -104,7 +104,7 @@ These come from the spec (§7) and from the lessons of the C++ edition. The brie
 - **Sealed interfaces:** every type switch over one ends in `default: panic("unreachable")`. Every "unreachable" or "cannot happen" claim (a panic text, an exit code, a fatal error) that the brief asks you to verify gets a test that verifies it.
 - **Errors:** a diagnostic is a value that goes to a `DiagSink`; `error` is for I/O and tools; `panic` only for internal compiler errors, which the `recover` at each pass boundary turns into an ICE report (exit 70). A Ki panic is never a Go panic: in the oracle it is the machine state `Halt{code: 101}`.
 - **Passes never mutate their input.** Goroutines only in `kirt`, in the test runner and in tests; the compiler is sequential. `unsafe` only in `kirt/heap` and its tests.
-- **Exit codes of `ki`:** 0; 1 compile errors or an unreadable file; 2 CLI misuse; 70 ICE; 101 Ki panic; 103 interpreter stack overflow.
+- **Exit codes of `ki`:** 0; 1 compile errors, an unreadable file or an answer ki cannot write; 2 CLI misuse; 70 ICE; 101 Ki panic; 103 interpreter stack overflow.
 - **Never `go run` to test `ki`:** it masks exit codes. Tests build the binary or call `driver.Main` in-process, as the brief says.
 
 ## 9. Closing steps of a code task
