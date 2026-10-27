@@ -80,6 +80,7 @@ The sessions already wrote `book/tests/chNN.tests`, and `{{cards}}` renders it a
 - **Never create, move or delete tags.** The prose task has no session tag of its own: `chNN` is the controller's (step e).
 - **Never use `git stash`,** never `git clean -x`, and never rewrite commits other than your own prose commit (which you amend in step d).
 - **Never read or modify `~/ki`,** and never modify `~/kilang`.
+- **Cap the memory of every mutant, fuzz or stress run** you do to check a claim: `systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 go test …`, one at a time. An unbounded-allocation mutant otherwise fills the 30 GB WSL VM in seconds and kills the machine (it happened three times on 2026-10-27).
 - **Leave nothing outside `build/`:** scratch modules and outputs go under `build/` in your worktree, never in `/tmp`, `$TMPDIR` or your home directory, and `build/` is removed before you report (step c.6). Create no other worktree and no clone.
 - **Use `command ls`, never plain `ls`:** `ls` is aliased to `eza`, which hangs in background shells.
 - **Do not dispatch subagents,** neither writers nor reviewers.

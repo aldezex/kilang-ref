@@ -105,6 +105,7 @@ Fix round: All findings addressed, no new Critical/Important breakage | Findings
 - **Never read or modify `~/ki`,** and never modify `~/kilang`.
 - **Leave nothing outside `build/`,** and leave `build/` as you found it.
 - **Use `command ls`, never plain `ls`:** `ls` is aliased to `eza`, which hangs in background shells.
+- **Cap the memory of every mutant, fuzz or stress run** with `systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 go test …`, one `go test` at a time: an unbounded-allocation mutant otherwise fills the 30 GB WSL VM in seconds and kills the machine (it happened three times on 2026-10-27). An exit 137 with "oom-kill" counts as the mutant killed.
 - **Do not dispatch subagents,** and never ask another reviewer for a second opinion. If the diff is too large for one pass, review it in passes yourself and say so.
 
 ## 8. Final answer
