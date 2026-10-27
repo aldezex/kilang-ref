@@ -10,13 +10,16 @@ import (
 //
 // The parser is recursive descent. Parse reads the top-level functions:
 // attributes, `pub`, the name, the parameters, the return type and a body that
-// is either absent or `{}`. The expressions are read by parser_expr.go, which
-// Parse does not call yet: blocks with statements in them arrive in the next
-// session, and with them the diagnostics of Parse, so until then it reports
-// nothing to sink. It does not stop at tokens it cannot read, though: the
-// place where the text stops making sense becomes an error node (ItemError,
-// TypeError or ExprError), and the parser goes on with the tokens after it.
-// Each pass of its loops consumes at least one token, which is what makes it end.
+// is either absent or a block. The expressions are read by parser_expr.go, and
+// the blocks, `let` and `if` by parser_stmt.go.
+//
+// Where the tokens stop making sense Parse reports E0201 to sink, at the token
+// it found instead of the one it needed (see expected). It does not stop
+// there: the place becomes an error node (ItemError, StmtError, TypeError or
+// ExprError), and the parser goes on with the tokens after it. That recovery is
+// the simplest there is, and it can report one mistake several times over; a
+// later session recovers to the end of the statement. Each pass of its loops
+// consumes at least one token, which is what makes it end.
 func Parse(tb *TokenBuffer, file base.FileID, in *base.Interner, sink *diag.Sink) *Module {
 	p := newParser(tb, file, in, sink)
 	p.module()
@@ -37,8 +40,8 @@ type parser struct {
 	// see expr in parser_expr.go.
 	chain chainState
 
-	// in is not used yet: the parser reads the Symbols the lexer interned. sink
-	// receives the diagnostics of the expressions (E0203, E0205).
+	// in is not used: the parser reads the Symbols the lexer interned and never
+	// the text of a name. sink receives the diagnostics: E0201, E0203, E0205.
 	in   *base.Interner
 	sink *diag.Sink
 }
@@ -75,6 +78,56 @@ func (p *parser) eat(k TokenKind) (Token, bool) {
 		return Token{}, false
 	}
 	return p.advance(), true
+}
+
+// found describes the token at the cursor for the second half of an E0201
+// message: `newline` for a Newline, `end of file` for the Eof, and for any other
+// token its text in the file between backquotes: `}`, `x`, `let`, `0xFF`. A
+// literal is written as the file has it, not as its value.
+//
+// The text is not shortened: a string literal of fifty megabytes where an
+// identifier was expected gives a message of fifty megabytes. That is deliberate.
+// The message quotes the token as the file spells it, and a cut would need a
+// rule that the reader of the message would have to know. If a renderer ever
+// has to show such a message, it is the renderer that should cut it.
+func (p *parser) found() string {
+	switch t := p.tok(); t.Kind {
+	case Newline:
+		return "newline"
+	case Eof:
+		return "end of file"
+	default:
+		return "`" + p.tb.text(t) + "`"
+	}
+}
+
+// expected reports E0201, "expected <what>, found <token>", with its primary
+// label on the token at the cursor, and consumes nothing. what is one of the
+// words that the message uses: `expression`, `identifier`, `type`, `item`,
+// `newline` and `string`, or a piece of punctuation between backquotes, such as
+// the `(` after the name of a function or the `[` of an attribute.
+// TestParseStmt/e0201_sites has a row for each word.
+//
+// It reports nothing while the statement-level expression being read is being
+// abandoned after E0205 (see chainState.tooLong): what the parser meets on its
+// way out of it is not a mistake of the program.
+func (p *parser) expected(what string) {
+	if p.chain.tooLong {
+		return
+	}
+	t := p.tok()
+	p.sink.Report(diag.NewError(diag.E(201), "expected "+what+", found "+p.found(), diag.Label{Span: t.Span}))
+}
+
+// expect consumes the token at the cursor and returns it with true if it is of
+// kind k. Otherwise it reports E0201 for what (see expected), consumes nothing
+// and returns false.
+func (p *parser) expect(k TokenKind, what string) (Token, bool) {
+	if t, ok := p.eat(k); ok {
+		return t, true
+	}
+	p.expected(what)
+	return Token{}, false
 }
 
 // skipNewlines consumes the Newline tokens at the cursor.
@@ -118,11 +171,12 @@ func (p *parser) errorItem(start base.Span) ItemID {
 // A function has a body exactly when a `{` follows its signature on the same
 // line; the line rule puts a Newline in front of a `{` on the next one. A
 // token that cannot start an item, or a signature that stops making sense, is
-// an ItemError: the tokens read so far are consumed, and the item that follows
-// starts at the first one that is not.
+// an ItemError and E0201: the tokens read so far are consumed, and the item that
+// follows starts at the first one that is not.
 func (p *parser) item() ItemID {
 	start := p.tok().Span
 	if !p.at(Hash) && !p.at(KwPub) && !p.at(KwFn) {
+		p.expected("item")
 		p.advance()
 		return p.errorItem(start)
 	}
@@ -133,15 +187,17 @@ func (p *parser) item() ItemID {
 		return p.errorItem(start)
 	}
 	_, it.Pub = p.eat(KwPub)
-	if _, ok = p.eat(KwFn); !ok {
+	// After attributes or `pub` an item is what is needed, and `fn` is the only
+	// kind there is so far.
+	if _, ok = p.expect(KwFn, "item"); !ok {
 		return p.errorItem(start)
 	}
-	name, ok := p.eat(LowerIdent)
+	name, ok := p.expect(LowerIdent, "identifier")
 	if !ok {
 		return p.errorItem(start)
 	}
 	it.Name, it.NameSpan = base.Symbol(name.Payload), name.Span
-	if _, ok = p.eat(LParen); !ok {
+	if _, ok = p.expect(LParen, "`(`"); !ok {
 		return p.errorItem(start)
 	}
 	if it.Params, ok = p.params(); !ok {
@@ -181,20 +237,22 @@ func (p *parser) attrs() (base.ListRange, bool) {
 //
 // The lexer has no token for `#[`, so it is a Hash and an LBracket, and the
 // parser does not check that nothing separates them. The arguments are string
-// literals without interpolation.
+// literals without interpolation. A malformed attribute is E0201 at the token
+// that is not what the grammar needs: the `[`, the name, a string, a `)` or the
+// `]`.
 func (p *parser) attr() (Attr, bool) {
 	hash := p.advance()
-	if _, ok := p.eat(LBracket); !ok {
+	if _, ok := p.expect(LBracket, "`[`"); !ok {
 		return Attr{}, false
 	}
-	name, ok := p.eat(LowerIdent)
+	name, ok := p.expect(LowerIdent, "identifier")
 	if !ok {
 		return Attr{}, false
 	}
 	a := Attr{Name: base.Symbol(name.Payload)}
 	if _, ok := p.eat(LParen); ok {
 		for {
-			arg, ok := p.eat(String)
+			arg, ok := p.expect(String, "string")
 			if !ok {
 				return Attr{}, false
 			}
@@ -203,11 +261,11 @@ func (p *parser) attr() (Attr, bool) {
 				break
 			}
 		}
-		if _, ok := p.eat(RParen); !ok {
+		if _, ok := p.expect(RParen, "`)`"); !ok {
 			return Attr{}, false
 		}
 	}
-	if _, ok := p.eat(RBracket); !ok {
+	if _, ok := p.expect(RBracket, "`]`"); !ok {
 		return Attr{}, false
 	}
 	a.Span = p.spanFrom(hash.Span)
@@ -235,7 +293,7 @@ func (p *parser) params() (base.ListRange, bool) {
 			}
 		}
 	}
-	if _, ok := p.eat(RParen); !ok {
+	if _, ok := p.expect(RParen, "`)`"); !ok {
 		return base.ListRange{}, false
 	}
 	return appendRange(&p.m.ParamPool, list), true
@@ -243,7 +301,7 @@ func (p *parser) params() (base.ListRange, bool) {
 
 // param reads one parameter: param = lower [ ':' type ].
 func (p *parser) param() (Param, bool) {
-	name, ok := p.eat(LowerIdent)
+	name, ok := p.expect(LowerIdent, "identifier")
 	if !ok {
 		return Param{}, false
 	}
@@ -257,30 +315,21 @@ func (p *parser) param() (Param, bool) {
 
 // typeExpr reads a type: an UpperIdent (`Int`, `Bool`; whether the name exists
 // is for name resolution to say) or `()`. If the tokens at the cursor are
-// neither, it returns a TypeError, which covers whatever it consumed: nothing
-// at all for a token that is not a `(`, so that the `)` that ends a parameter
-// list is still there for the caller.
+// neither, it reports E0201 (`type` for a token that is not a `(`, `)` for a
+// `(` that is not closed) and returns a TypeError, which covers whatever it
+// consumed: nothing at all for a token that is not a `(`, so that the `)` that
+// ends a parameter list is still there for the caller.
 func (p *parser) typeExpr() TypeExprID {
 	start := p.tok().Span
 	if t, ok := p.eat(UpperIdent); ok {
 		return p.m.Types.Push(TypeExpr{Kind: TypeNamed, Span: t.Span, Name: base.Symbol(t.Payload)})
 	}
 	if _, ok := p.eat(LParen); ok {
-		if _, ok := p.eat(RParen); ok {
+		if _, ok := p.expect(RParen, "`)`"); ok {
 			return p.m.Types.Push(TypeExpr{Kind: TypeUnit, Span: p.spanFrom(start)})
 		}
+	} else {
+		p.expected("type")
 	}
 	return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(start)})
-}
-
-// block reads a block, which the cursor is at the `{` of, and returns it as an
-// ExprBlock. This session reads only `{}`: anything between the braces makes
-// an ExprError that covers the `{`, and the parser goes on with the first
-// token after it.
-func (p *parser) block() ExprID {
-	open := p.advance()
-	if _, ok := p.eat(RBrace); !ok {
-		return p.m.Exprs.Push(Expr{Kind: ExprError, Span: p.spanFrom(open.Span)})
-	}
-	return p.m.Exprs.Push(Expr{Kind: ExprBlock, Span: p.spanFrom(open.Span)})
 }

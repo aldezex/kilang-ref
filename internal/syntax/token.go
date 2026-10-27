@@ -41,4 +41,15 @@ type TokenBuffer struct {
 	Ints    []int64
 	Floats  []float64
 	Strings []string
+
+	// src is the text of the file that Lex read, which is where the text of a
+	// token is: src[Span.Lo:Span.Hi]. Only Lex sets it. The parser reads it to
+	// quote the token in front of it when it reports an error (see text).
+	src []byte
+}
+
+// text returns the text of t as the file has it. t must be a token of tb, and
+// tb a buffer that Lex returned: any other has no src.
+func (tb *TokenBuffer) text(t Token) string {
+	return string(tb.src[t.Span.Lo:t.Span.Hi])
 }

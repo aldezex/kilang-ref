@@ -20,13 +20,13 @@ import (
 // program did not write. The arguments of an attribute are quoted as
 // strconv.Quote does. An attribute list that is empty is left out.
 //
-// So far Parse produces only the forms of items, types and the empty block,
-// and the error forms; the printer's tests build the others by hand.
+// Parse produces every one of these forms; the printer's own tests build their
+// trees by hand, so that they do not depend on the parser.
 //
 // PrintModule does not change m. Printing recurses once per level of the tree
 // (a loop walks each list of children), so the depth of Go's call stack follows
-// the depth of the tree. Parse builds only shallow trees so far; the limits
-// that will keep expressions shallow are for the sessions that parse them.
+// the depth of the tree. Nothing bounds the depth of the trees that Parse builds
+// yet: the limit on the nesting of expressions comes in a later session.
 func PrintModule(m *Module, in *base.Interner) string {
 	pr := printer{m: m, in: in}
 	for _, id := range m.Items {

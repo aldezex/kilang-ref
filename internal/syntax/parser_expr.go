@@ -113,20 +113,31 @@ type chainState struct {
 // expression it returns is then one error node that covers all of it, so no
 // pass after the parser gets a tree as deep as the chain.
 //
-// What expr does not limit yet is nesting: parentheses, arguments and prefix
-// operators each take a level of Go's call stack, and the limit that bounds
-// them (E0204) comes in a later session.
+// What expr does not limit yet is nesting: parentheses, arguments, prefix
+// operators, blocks and the branches of an if each take a level of Go's call
+// stack, and the limit that bounds them (E0204) comes in a later session.
 func (p *parser) expr(minBP int) ExprID {
+	e, _ := p.exprOrSkip(minBP)
+	return e
+}
+
+// exprOrSkip is expr, and it also says whether the expression was abandoned
+// because it was too long, in which case the cursor is at the end of the
+// statement and the expression is an error node. A caller that needs more
+// tokens after the expression (the `{` after the condition of an if) must not
+// ask for them then: they were skipped with the rest of the statement.
+func (p *parser) exprOrSkip(minBP int) (e ExprID, abandoned bool) {
 	outer := p.chain
 	p.chain = chainState{from: p.pos}
 	start := p.tok().Span
-	e := p.pratt(minBP)
-	if p.chain.tooLong {
+	e = p.pratt(minBP)
+	abandoned = p.chain.tooLong
+	if abandoned {
 		p.skipStatement()
 		e = p.errorExpr(start)
 	}
 	p.chain = outer
-	return e
+	return e, abandoned
 }
 
 // pratt reads an operand followed by the operators that belong to it, with the
@@ -290,13 +301,13 @@ func (p *parser) prefix() ExprID {
 }
 
 // primary reads an expression that has no operator at its top: an integer or
-// boolean literal, a name, `()` or a parenthesized expression. The other
-// literals (strings, characters and floats) come in later chapters, so for now
-// their tokens are ones that cannot start an expression. A token that cannot
-// start an expression gives an ExprError with an empty span at that token, which
-// consumes nothing, so that a `)` or a `}` that ends the expression is still
-// there for the caller. Whoever calls it must therefore consume a token before
-// calling it again.
+// boolean literal, a name, `()`, a parenthesized expression, a block or an if.
+// The other literals (strings, characters and floats) come in later chapters,
+// so for now their tokens are ones that cannot start an expression. A token
+// that cannot start an expression is E0201, and gives an ExprError with an
+// empty span at that token, which consumes nothing, so that a `)` or a `}` that
+// ends the expression is still there for the caller. Whoever calls it must
+// therefore consume a token before calling it again.
 func (p *parser) primary() ExprID {
 	t := p.tok()
 	switch t.Kind {
@@ -311,22 +322,27 @@ func (p *parser) primary() ExprID {
 		return p.m.Exprs.Push(Expr{Kind: ExprName, Span: t.Span, Name: base.Symbol(t.Payload)})
 	case LParen:
 		return p.group()
+	case LBrace:
+		return p.block()
+	case KwIf:
+		return p.ifExpr()
 	}
+	p.expected("expression")
 	return p.errorExpr(t.Span)
 }
 
 // group reads what starts with a `(`: `()`, or an expression between
 // parentheses. A parenthesis is not a node, so the group is its inner
 // expression, with the span of that expression, which leaves the parentheses
-// out. If the `)` is missing the group is an error node that covers what was
-// read.
+// out. If the `)` is missing, that is E0201 and the group is an error node that
+// covers what was read.
 func (p *parser) group() ExprID {
 	open := p.advance()
 	if _, ok := p.eat(RParen); ok {
 		return p.m.Exprs.Push(Expr{Kind: ExprUnit, Span: p.spanFrom(open.Span)})
 	}
 	inner := p.pratt(0)
-	if _, ok := p.eat(RParen); !ok {
+	if _, ok := p.expect(RParen, "`)`"); !ok {
 		return p.errorExpr(open.Span)
 	}
 	return inner
@@ -335,8 +351,8 @@ func (p *parser) group() ExprID {
 // callArgs reads the arguments of a call, the cursor being just after its `(`,
 // and the `)` that ends them. A comma after the last argument is allowed. It
 // returns false, and adds nothing to ExprPool, if the arguments are cut short
-// or do not end with a `)`. Every pass of the loop either consumes a comma or
-// ends the loop, so it ends.
+// or do not end with a `)`, which is E0201. Every pass of the loop either
+// consumes a comma or ends the loop, so it ends.
 //
 // The arguments are collected in a slice of their own and added to the pool
 // when the list is complete: the arguments that are calls add theirs first, and
@@ -349,7 +365,7 @@ func (p *parser) callArgs() (base.ListRange, bool) {
 			break
 		}
 	}
-	if _, ok := p.eat(RParen); !ok {
+	if _, ok := p.expect(RParen, "`)`"); !ok {
 		return base.ListRange{}, false
 	}
 	return appendRange(&p.m.ExprPool, args), true

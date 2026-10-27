@@ -8,9 +8,8 @@ import (
 	"github.com/aldezex/kilang/internal/syntax"
 )
 
-// tree builds a Module by hand. The parser reads only function signatures so
-// far, so the printer's forms for expressions and statements cannot be reached
-// through Parse yet; these tests reach them through the builder instead.
+// tree builds a Module by hand, so that the printer's tests do not depend on
+// the parser.
 type tree struct {
 	m  syntax.Module
 	in *base.Interner

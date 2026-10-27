@@ -130,26 +130,26 @@ ref:     TestParser/spans
 
 [T06.13] parser.malformed_input_still_parses               level: core
 kind:    unit (go test)      file: internal/syntax/parser_test.go
-case:    46 fuentes mal formadas: cortadas en varios puntos de una firma o de un atributo, con un solo token que falta en un item que de otro modo sería correcto, con tokens que no pueden empezar un item, con una coma de más en los parámetros, con un tipo escrito en minúscula y con un cuerpo sin cerrar; que el parser sigue leyendo items después de un error; y que una lista que falla no deja nada en su pool
-input:   `fn`, `fn f(x:`, `#[a("x",`, `# a] fn f() {}`, `#[a fn f() {}`, `fn f x) {}`, `pub f() {}`, `1`, `)`, `fn f(x,) {}`, `fn f(x: int) {}`, `fn f() {`… (46 fuentes en total, todas en el test); además `1 fn g() {}` y `fn f( fn g() {}`; y, para los pools, `#[a] # a`, `#[a] #[`, `#[a] #[b(1)]`, `#[a] #[b("x"` y `#[a] #[b` (atributos) y `fn f(x,) {}` (parámetros)
-expect:  para cada una de las 46 fuentes, `Parse` vuelve; el texto de `PrintModule` contiene `(error)`; y los items, de uno en uno, tienen un span del fichero, que no acaba antes de empezar, que empieza donde acabó el item anterior o más tarde y que no pasa del final del fichero. No se comprueba ningún diagnóstico. `1 fn g() {}` y `fn f( fn g() {}` dan exactamente `(error)`, un salto de línea, `(fn g (params) (ret _) (block))` y otro salto de línea: el item que viene detrás del error se lee entero. Y tras cada una de las cinco fuentes de atributos el pool de atributos está vacío, y tras `fn f(x,) {}` el de parámetros también
-why:     el parser todavía no informa de nada (los diagnósticos llegan en la sesión 3), pero un fichero roto no
-         debe colgarlo, ni hacerlo leer más allá del último token, ni darle un árbol que parezca un programa
-         correcto: un `(error)` en el volcado es lo que se ve en lugar de un hueco. Las filas a las que les
-         falta un solo token en medio de un item que sería correcto (`#[a fn f() {}`, `fn f x) {}`,
-         `pub f() {}`) existen porque un parser que ignorara ese token daría por bueno el item y dejaría un
-         árbol sin ningún `(error)`; las cortadas al final fallan de todos modos y solo prueban que el
-         parser acaba. `fn f(x: int) {}` es el descuido más probable de quien viene de TypeScript o de
-         Python: los tipos van con mayúscula, y un parser que aceptara también un nombre en minúscula
-         daría por bueno el item. Las dos fuentes con un item detrás existen porque «el parser sigue
-         después de un error» es lo que permite informar de varios errores de una pasada, y ninguna de
-         las demás filas notaría que el parser se rindiera en el primer nodo de error, porque ninguna
-         mira lo que hay detrás de él. Y las listas porque `attrs` y `params` prometen no añadir nada al
-         pool si fallan y el volcado no lo enseña: cada una falla después de leer algo bien, para que un
-         parser que añadiera cada atributo o parámetro al pool según lo lee dejara uno huérfano. Un
-         atributo puede fallar en cinco sitios (el `[`, el nombre, el primer argumento, el `)` y el `]`) y
-         hay una fuente para cada uno, porque un parser que diera por bueno un atributo a medias en uno
-         solo de ellos lo dejaría en el pool
+case:    45 fuentes mal formadas: cortadas en varios puntos de una firma o de un atributo, con un solo token que falta en un item que de otro modo sería correcto, con tokens que no pueden empezar un item, con una coma de más en los parámetros y con un tipo escrito en minúscula; que el parser sigue leyendo items después de un error; y que una lista que falla no deja nada en su pool
+input:   `fn`, `fn f(x:`, `#[a("x",`, `# a] fn f() {}`, `#[a fn f() {}`, `fn f x) {}`, `pub f() {}`, `1`, `)`, `fn f(x,) {}`, `fn f(x: int) {}`, `fn f() {}}`… (45 fuentes en total, todas en el test); además `1 fn g() {}` y `fn f( fn g() {}`; y, para los pools, `#[a] # a`, `#[a] #[`, `#[a] #[b(1)]`, `#[a] #[b("x"` y `#[a] #[b` (atributos) y `fn f(x,) {}` (parámetros)
+expect:  para cada una de las 45 fuentes, `Parse` vuelve; el texto de `PrintModule` contiene `(error)`; se informa de al menos un E0201; y los items, de uno en uno, tienen un span del fichero, que no acaba antes de empezar, que empieza donde acabó el item anterior o más tarde y que no pasa del final del fichero. No se comprueba ningún otro diagnóstico ni cuántas veces se informa. `1 fn g() {}` y `fn f( fn g() {}` dan exactamente `(error)`, un salto de línea, `(fn g (params) (ret _) (block))` y otro salto de línea: el item que viene detrás del error se lee entero. Y tras cada una de las cinco fuentes de atributos el pool de atributos está vacío, y tras `fn f(x,) {}` el de parámetros también
+why:     un fichero roto no debe colgar el parser, ni hacerlo leer más allá del último token, ni darle un árbol
+         que parezca un programa correcto: un `(error)` en el volcado es lo que se ve en lugar de un hueco, y
+         el E0201 es lo que ve el usuario (un nodo de error sin diagnóstico sería un programa roto que
+         `ki check` daría por bueno). Las filas a las que les falta un solo token en medio de un item que
+         sería correcto (`#[a fn f() {}`, `fn f x) {}`, `pub f() {}`) existen porque un parser que ignorara
+         ese token daría por bueno el item y dejaría un árbol sin ningún `(error)`; las cortadas al final
+         fallan de todos modos y solo prueban que el parser acaba. `fn f(x: int) {}` es el descuido más
+         probable de quien viene de TypeScript o de Python: los tipos van con mayúscula, y un parser que
+         aceptara también un nombre en minúscula daría por bueno el item. Las dos fuentes con un item
+         detrás existen porque «el parser sigue después de un error» es lo que permite informar de varios
+         errores de una pasada, y ninguna de las demás filas notaría que el parser se rindiera en el primer
+         nodo de error, porque ninguna mira lo que hay detrás de él. Y las listas porque `attrs` y
+         `params` prometen no añadir nada al pool si fallan y el volcado no lo enseña: cada una falla
+         después de leer algo bien, para que un parser que añadiera cada atributo o parámetro al pool según
+         lo lee dejara uno huérfano. Un atributo puede fallar en cinco sitios (el `[`, el nombre, el primer
+         argumento, el `)` y el `]`) y hay una fuente para cada uno, porque un parser que diera por bueno
+         un atributo a medias en uno solo de ellos lo dejaría en el pool
 ref:     TestParser/malformed_input_still_parses
 
 [T06.14] parser.advance_stops_at_eof                       level: core
@@ -186,13 +186,13 @@ ref:     TestAST/list_accessors
 
 [T06.17] printer.expressions                               level: core
 kind:    unit (go test)      file: internal/syntax/ast_printer_test.go
-case:    cada forma de expresión del volcado, construida a mano porque el parser aún no las lee: enteros (incluidos los extremos), booleanos, `()`, nombres, llamadas, los 13 operadores binarios, los unarios y el `if` con y sin `else`
+case:    cada forma de expresión del volcado, construida a mano, sin pasar por el parser: enteros (incluidos los extremos), booleanos, `()`, nombres, llamadas, los 13 operadores binarios, los unarios y el `if` con y sin `else`
 input:   módulos escritos a mano con un solo item `fn f()` cuyo cuerpo es cada expresión
 expect:  `42`, `0`, `-7`, `9223372036854775807`, `-9223372036854775808`, `true`, `false`, `()`, `fib`, `Foo`, `(call f)`, `(call f 1 (call g 2) x)`, `(call (call f 1) 2)`, `(- a (* b c))`, `(neg 1)`, `(not a)`, `(if a 1 2)`, `(if a 1)` (aunque `Else` apunte a una expresión real, porque `HasElse` es falso), `(if a 1 (if b 2 3))`, y `(OP a b)` con el símbolo de cada operador, escrito en el test
-why:     la salida de `emit ast` es un contrato que el formato fija nodo a nodo, y el parser aún no produce estas
-         formas: sin estas pruebas se estrenarían sin que nadie las hubiera comprobado, y un operando
-         cambiado de sitio, un entero sin signo en el mínimo, un `else` que se imprimiera siempre o un
-         símbolo equivocado saldrían en el volcado de un programa entero, lejos de la causa
+why:     la salida de `emit ast` es un contrato que el formato fija nodo a nodo, y esta prueba lo comprueba sin
+         depender del parser: un operando cambiado de sitio, un entero sin signo en el mínimo, un `else` que
+         se imprimiera siempre o un símbolo equivocado saldrían en el volcado de un programa entero, lejos
+         de la causa
 ref:     TestPrinter/expressions
 
 [T06.18] printer.statements_and_blocks                     level: core
@@ -429,8 +429,9 @@ expect:  el texto de cada una (`(error)`, `(+ 1 (error))`, `(neg (error))`, `1`,
 why:     el `)` o el `}` que un operando que falta deja sin tocar es el de la llamada o el del bloque que lo
          contiene: si el parser lo comiera, el error de una sola expresión desordenaría todo lo que hay
          alrededor. Las demás filas comprueban que cada bucle consume algo o termina, porque un bucle que no
-         lo hiciera colgaría la prueba. El parser aún no informa de estos errores (E0201 llega en la sesión
-         siguiente, y la recuperación puede cambiar lo que se imprime aquí)
+         lo hiciera colgaría la prueba. Los E0201 de estas fuentes los mira `TestParseStmt/e0201_sites`;
+         aquí solo cuentan el árbol y el cursor, y la recuperación de la sesión siguiente puede cambiar lo
+         que se imprime
 ref:     TestParseExpr/malformed_input_still_parses
 
 [T06.42] expr.chain_counts_calls                           level: core
@@ -506,7 +507,7 @@ ref:     TestParseExpr/chained_comparison_counts_toward_chain
 [T06.49] expr.nested_expr_keeps_outer_count                level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    una expresión de sentencia que se lee en medio de otra tiene su propia cuenta y deja la de la otra como estaba
-input:   un parser al que la prueba pone a mano el estado de una expresión de fuera, porque la gramática aún no llega a esto: con 1024 operadores ya contados lee `1 + 1`, con la marca de «demasiado larga» ya puesta lee `1 + 1`, y con 5 contados lee una cadena de 1025
+input:   un parser al que la prueba pone a mano el estado de una expresión de fuera: con 1024 operadores ya contados lee `1 + 1`, con la marca de «demasiado larga» ya puesta lee `1 + 1`, y con 5 contados lee una cadena de 1025
 expect:  las dos primeras dan `(+ 1 1)` sin diagnósticos; la tercera da `(error)` con exactamente un E0205; y en las tres el estado de la expresión de fuera, su principio, su cuenta y su marca de «demasiado larga», es el que era
 why:     un bloque dentro de una expresión (`1 + if c { … }`) tiene sentencias, y cada una es una expresión de
          sentencia: si su cuenta se sumara a la de fuera, un programa largo y legal daría E0205; si heredara la
@@ -517,9 +518,234 @@ ref:     TestParseExpr/nested_expr_keeps_outer_count
 [T06.50] expr.skip_statement_counts_consumed_braces        level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    el salto cuenta las llaves que la sentencia ya había abierto antes de empezar a saltar, y no las del bloque que la contiene
-input:   tres fuentes con el cursor movido a mano, porque el parser aún no consume llaves en una expresión: `{ x ; y } ; z` con `{ x` ya leído y el principio de la sentencia en el primer token; `{ x ; y }` con `{ x` leído y el principio de la sentencia en `x`; y `{ x } ; y` con `{ x }` ya leído y el principio de la sentencia en el primer token
+input:   tres fuentes con el cursor movido a mano a mitad de una sentencia: `{ x ; y } ; z` con `{ x` ya leído y el principio de la sentencia en el primer token; `{ x ; y }` con `{ x` leído y el principio de la sentencia en `x`; y `{ x } ; y` con `{ x }` ya leído y el principio de la sentencia en el primer token
 expect:  el cursor para en el segundo `;` de la primera (el de dentro de las llaves no termina la sentencia), en el `;` de la segunda (la llave abierta antes de la sentencia no es de ella) y en el `;` de la tercera (una llave abierta y cerrada ya no cuenta)
 why:     sin esta cuenta, una sentencia que estuviera a medias dentro de un bloque no sabría que sigue dentro
          de él y se saltaría el final de la sentencia; y contar de más, desde el `{` del bloque, haría lo mismo
-         por el otro lado. Hoy no se puede alcanzar por la gramática; la sesión de los bloques sí
+         por el otro lado. La prueba mueve el cursor a mano a ese punto
 ref:     TestParseExpr/skip_statement_counts_consumed_braces
+
+[T06.51] stmt.block_tail_expression                        level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    la última expresión de un bloque, sin `;` detrás, es su cola, y un `let` anterior es una sentencia
+input:   "{ let x = 1\n x }"
+expect:  el texto `(block (let x _ 1) x)`, sin diagnósticos y con toda la fuente leída
+why:     la cola es el valor del bloque: si el parser la tomara por una sentencia más, todo bloque valdría `()`
+         y una función como `fib` no devolvería nada. Y el salto de línea tras el `1` separa las dos
+         sentencias sin necesitar un `;`
+ref:     TestParseStmt/block_tail_expression
+
+[T06.52] stmt.semicolon_makes_statement                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    una expresión seguida de `;` es una sentencia de expresión, y como tras ella solo queda el `}` el bloque no tiene cola
+input:   "{ f(); }"
+expect:  el texto `(block (expr (call f)))`, sin diagnósticos y con toda la fuente leída
+why:     el `;` es lo que descarta un valor: sin él, `f()` sería la cola y el bloque valdría lo que devuelve
+         `f`. Si el parser ignorara el `;` antes del `}`, la llamada se imprimiría sin su `(expr …)`
+ref:     TestParseStmt/semicolon_makes_statement
+
+[T06.53] stmt.empty_block                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un bloque sin nada dentro es un bloque, sin sentencias y sin cola
+input:   "{}"
+expect:  el texto `(block)`, sin diagnósticos y con toda la fuente leída
+why:     el cuerpo de una función vacía es `{}`: si el bucle de sentencias exigiera leer una antes de cerrar,
+         ese cuerpo, que ya se leía en la sesión anterior, daría un error
+ref:     TestParseStmt/empty_block
+
+[T06.54] stmt.let_with_type                                level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `let` con tipo escrito guarda el nombre, el tipo y el inicializador
+input:   "let x: Int = 1"
+expect:  el texto `(let x Int 1)`, sin diagnósticos y con toda la fuente leída
+why:     el tipo es opcional y va entre el nombre y el `=`; si el parser no mirara los dos puntos, leería el
+         `:` como el final de la sentencia, y si los leyera siempre, un `let x = 1` sin tipo fallaría
+ref:     TestParseStmt/let_with_type
+
+[T06.55] stmt.let_without_init_E0201                       level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `let` al que le falta el `=` da un E0201 sobre el token que ocupa su lugar
+input:   "fn f() { let x }"
+expect:  exactamente un diagnóstico, el E0201 «expected `=`, found `}`», con la etiqueta primaria sobre el `}` (bytes 15 a 16) y sin nada más en el diagnóstico
+why:     el `}` no se consume: es el que cierra el bloque. Si el parser lo tragara, o intentara leer un
+         inicializador donde no hay ninguno, saldría un segundo error («expected expression») por el mismo
+         fallo, y el fallo debe salir una sola vez
+ref:     TestParseStmt/let_without_init_E0201
+
+[T06.56] stmt.if_else_chain                                level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `if` con `else if` y `else` anida cada `else if` como la rama `else` del anterior
+input:   "if a { 1 } else if b { 2 } else { 3 }"
+expect:  el texto `(if a (block 1) (if b (block 2) (block 3)))`, sin diagnósticos y con toda la fuente leída
+why:     `else if` no es una forma aparte: es un `else` cuya rama es otro `if`. Si el parser exigiera un
+         bloque tras el `else`, la cadena que usa `fib` y todo programa con varios casos no se podría leer
+ref:     TestParseStmt/if_else_chain
+
+[T06.57] stmt.if_without_else                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `if` sin `else` tiene condición y rama, y su bloque guarda la llamada como cola
+input:   "if a { f() }"
+expect:  el texto `(if a (block (call f)))`, sin diagnósticos y con toda la fuente leída
+why:     el `else` es opcional: si el parser lo exigiera daría un error en cada `if` que se usa por sus
+         efectos, y el volcado no distingue «sin else» de «else vacío» más que por esta forma corta
+ref:     TestParseStmt/if_without_else
+
+[T06.58] stmt.newline_before_closing_brace                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    una expresión seguida de un salto de línea y del `}` es la cola del bloque, no una sentencia
+input:   "{\n f()\n}"
+expect:  el texto `(block (call f))`, sin diagnósticos y con toda la fuente leída
+why:     así se escribe casi todo bloque de varias líneas: el salto de línea es el separador, y si bastara
+         para hacer de la expresión una sentencia, el cuerpo de toda función escrita en varias líneas
+         devolvería `()`
+ref:     TestParseStmt/newline_before_closing_brace
+
+[T06.59] stmt.found_token_descriptions                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el token que se encontró se describe como su texto entre comillas invertidas, como `newline` o como `end of file`
+input:   cinco fuentes: `fn f() { let x }`, `fn f() { let x` seguido de un salto de línea y un `}`, `fn f() { let x`, `fn f() { let 1 }` y `let x = 1`
+expect:  el primer diagnóstico de cada una es un E0201 con exactamente este mensaje: «expected `=`, found `}`», «expected `=`, found newline», «expected `=`, found end of file», «expected identifier, found `1`» y «expected item, found `let`». Lo que se informa después del primero no se comprueba
+why:     el mensaje es lo único que el usuario lee de un error de sintaxis, y el token hallado tiene tres
+         formas distintas según sea un token, el salto de línea que inserta la regla de línea o el final del
+         fichero. Tras el primer error el parser sigue en el token siguiente (la recuperación llega en otra
+         sesión), así que `let x = 1` arriba del todo da varios errores, uno por token, y solo el primero se fija
+ref:     TestParseStmt/found_token_descriptions
+
+[T06.60] stmt.block_statement_forms                        level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    qué termina una sentencia y qué hace cola a una expresión: `;`, salto de línea y `}`, con expresiones y con `let`
+input:   20 bloques, como `{ x; }`, `{ f(); g() }`, `{ f()\n g() }`, `{ f();\n g() }`, `{ f()\n g()\n }`, `{ let x = 1 }`, `{ let x = 1\n }`, `{ 1 + 2\n -3 }`, `{ { 1 }\n 2 }`, `{ if a { 1 }\n 2 }` y `{ if a { 1 };\n }`
+expect:  el texto de cada uno, sin diagnósticos y con toda la fuente leída: una expresión es la cola solo si lo que sigue es el `}` (con o sin un salto de línea en medio); con un `;` detrás es una sentencia, también ante el `}`; un `let` es siempre una sentencia y no necesita separador ante el `}`; y una línea que empieza por `-` es una sentencia nueva y no una resta
+why:     son las decisiones que el bucle de un bloque toma tras cada sentencia, y cada una tiene su error
+         característico: la cola que no lo es, la sentencia que se queda sin `;` y devuelve un valor que
+         nadie pidió, el `let` ante el `}` tomado por una cola sin expresión, o un `;` que no se consume y
+         cuelga el bucle
+ref:     TestParseStmt/block_statement_forms
+
+[T06.61] stmt.nested_blocks_keep_their_lists               level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    las sentencias de un bloque son una lista del almacén y las de los bloques que lleva dentro son otras
+input:   4 bloques con otros bloques dentro, como `{ let a = { let b = 1; b }; { c; d }; e }` y `{ f({ a; b }, { c }); g }`, con los interiores como inicializador, como sentencia y como argumento de una llamada
+expect:  el texto de cada uno, que reparte cada sentencia y cada cola en su bloque
+why:     un bloque interior añade sus sentencias al almacén antes de que el exterior acabe la suya: si el
+         exterior las fuera añadiendo una a una, su lista saldría entremezclada con la del interior y un
+         bloque imprimiría las sentencias de otro. Por eso el parser reúne cada lista en un slice y la añade
+         entera al terminar
+ref:     TestParseStmt/nested_blocks_keep_their_lists
+
+[T06.62] stmt.let_forms                                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el `let` con distintos tipos e inicializadores: sin tipo, con `Bool` y con `()`, con un prefijo, una llamada con una suma y un producto, un bloque y un `if`
+input:   8 fuentes, como `let x = 1`, `let x: Bool = true`, `let x: () = ()`, `let x: Int = -1`, `let x = f(1) + 2 * 3`, `let x = { 1 }` y `let x = if a { 1 } else { 2 }`
+expect:  el texto de cada una, sin diagnósticos y con toda la fuente leída
+why:     el inicializador es una expresión completa, no un primario: si el `let` leyera solo el primer
+         operando, `let x = f(1) + 2 * 3` se quedaría en `f(1)` y el resto saldría como una sentencia rota
+ref:     TestParseStmt/let_forms
+
+[T06.63] stmt.let_missing_equals_keeps_the_name            level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `let` sin `=` sigue siendo un `let` que liga su nombre, con un nodo de error vacío como inicializador
+input:   `fn f() { let x }` y `fn f() { let x: Int }`
+expect:  los textos `(fn f (params) (ret _) (block (let x _ (error))))` y `(fn f (params) (ret _) (block (let x Int (error))))`, y para la primera el span del `let` (de `let` a `x`) y el del inicializador, vacío, sobre el `}`
+why:     si el `let` roto se convirtiera en un nodo de error, `x` no estaría ligado y cada uso posterior daría
+         un «unknown name `x`» por un fallo que ya se informó. Así el error sale una vez, donde está
+ref:     TestParseStmt/let_missing_equals_keeps_the_name
+
+[T06.64] stmt.if_forms                                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el `if` con condiciones y ramas de todo tipo: ramas vacías, condiciones con operadores y llamadas, `else if` sin `else` final, `if` anidados, un `if` como operando y un `else` en la línea siguiente
+input:   12 fuentes, como `if a {}`, `if a < b { 1 }`, `if f(x) && !y { 1 }`, `if a { 1 } else if b { 2 }`, dos `else if` seguidos de un `else`, `1 + if a { 2 } else { 3 }` y `if a { 1 }\nelse { 2 }`
+expect:  el texto de cada una, sin diagnósticos y con toda la fuente leída
+why:     la condición acaba en el `{` y no antes ni después; el `else if` sin `else` final no es un error; y
+         un `else` en la línea de abajo es de este `if` porque la regla de línea no corta ante él. Un `if`
+         es una expresión, y como tal puede ser el operando de una suma
+ref:     TestParseStmt/if_forms
+
+[T06.65] stmt.if_condition_chain_limit                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    la condición de un `if` es una expresión con su propia cuenta de operadores, y si pasa del límite se abandona toda la sentencia sin un segundo error; y la cuenta de la condición, o la de las sentencias de un bloque que es un operando, ni se suma a la de la expresión que las rodea ni la altera
+input:   `fn f() { if ` + 1024 o 1025 sumas + ` { x } else { y } }`; el mismo `if` como `else if` de otro; y `1 + if ` + 1025 sumas + ` { x }` como cola; y, como cola, 600 sumas + ` + if ` + 600 sumas + ` { x } else { y } + 1` y 600 sumas + ` + { ` + 600 sumas + ` } + 1`
+expect:  con 1024, el árbol entero y ningún diagnóstico; con 1025, exactamente un diagnóstico, el E0205 en el operador 1025, el `if` convertido en un solo nodo de error que va desde el `if` hasta el `}` de la rama `else` (la cola del bloque), y ningún E0201; en los otros dos casos también un solo E0205 y el nodo de error en su sitio (`(if a (block 1) (error))` y `(+ 1 (error))`); y en las dos últimas, el árbol entero y ningún diagnóstico
+why:     tras el E0205 el parser salta lo que queda de la sentencia, y eso incluye las ramas del `if`: si
+         después buscara el `{` que falta, saldría un E0201 que es mentira. Y la condición lleva un contador
+         propio, como cada expresión de sentencia. Las dos últimas fuentes fijan que esa cuenta propia lo es en los dos
+         sentidos: con 601 operadores delante, 600 dentro y uno detrás (1202 en total) no hay error, así
+         que ni la cuenta de fuera entra en la de dentro, ni la de dentro se queda en la de fuera al salir
+ref:     TestParseStmt/if_condition_chain_limit
+
+[T06.66] stmt.chain_limit_per_statement                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    cada sentencia de un bloque tiene su propia cuenta de operadores y llamadas, también el inicializador de un `let`
+input:   dos sentencias de 1024 sumas en un bloque; `x; ` + 1025 sumas + `; y`; dos `let` de 1024 sumas seguidos de `a`; y un `let` de 1025 sumas seguido de `a`
+expect:  los dos primeros bloques sin diagnósticos (el primero con una sentencia y una cola); en `x; …; y` un solo E0205, en el operador 1025, y el texto `(block (expr x) (expr (error)) y)`; en los `let`, ningún diagnóstico con 1024 y un solo E0205 con 1025, con el texto `(block (let a _ (error)) a)`
+why:     un programa largo y legal tiene muchas sentencias, y sumar sus operadores daría un E0205 falso en
+         cuanto pasaran de 1024 entre todas. Y el salto de una sentencia abandonada tiene que parar en el
+         `;` o en el salto de línea que la acaba, para que las de después se lean como siempre
+ref:     TestParseStmt/chain_limit_per_statement
+
+[T06.67] stmt.item_bodies                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    `Parse` lee el cuerpo de una función como un bloque, con sentencias, cola e `if`, también en varias líneas y seguido de otro item
+input:   7 ficheros, como `fn f() { 1 }`, `fn f(n: Int) -> Int { let m = n + 1\n m * 2 }`, `fn f(a: Bool) -> Bool { let b: Int = 1\n a }`, dos funciones con cuerpo, una con el cuerpo en varias líneas, una sin cuerpo seguida de una con cuerpo y un `if`/`else` indentado
+expect:  el texto de `PrintModule` de cada uno, sin diagnósticos
+why:     hasta esta sesión un cuerpo solo podía ser `{}`; esta es la prueba de que `item` llama al bloque de
+         verdad y de que, tras el `}` del cuerpo, el item siguiente empieza donde debe. En el tercero el tipo
+         del `let` no es el primero que el módulo lee (antes están los del parámetro y el retorno), y por eso
+         no puede ser el tipo número 0 por casualidad
+ref:     TestParseStmt/item_bodies
+
+[T06.68] stmt.spans                                        level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    la posición de bloques, sentencias e `if`: el `let` sin su `;`, el nombre, el tipo y el inicializador; la sentencia de expresión sin su `;`; el `if` hasta el final de su última rama; un bloque sin cerrar; un `let` sin nombre; y el bloque que le falta a un `if` o a un `else`
+input:   un fichero de una función con un `let x: Int = 1 + 2;`, una llamada `g();` y un `if c { 3 } else if d { 4 }` como cola, en varias líneas; `fn f() { 1`; `fn f() { let 1 }`; `"fn f() { if x   \n{ 1 } }"` (con tres espacios antes del salto de línea, que es real); y `fn f() { if x { 1 } else   }` (con tres espacios antes de la `}`)
+expect:  los bytes exactos de cada nodo: el bloque va del `{` al `}`; el `let`, de `let` al final de su inicializador, y su `NameSpan` es solo el nombre; la sentencia de expresión, solo la expresión; el `if`, de `if` al `}` de su última rama, y el `else if` es otro `if` que empieza en su propio `if`; el bloque sin cerrar acaba en el último token leído; el `let` sin nombre es un `StmtError` que cubre solo el `let`; y el bloque que falta es un `ExprError` vacío, justo donde empieza el token que aparece en su lugar (el salto de línea, la `}`), que queda detrás del final del `if`: este acaba en el `x` del primero y en el `else` del segundo, antes de los espacios
+why:     el volcado no enseña las posiciones, y los pases siguientes dibujan sus errores con ellas: un `let`
+         que incluyera el `;` subrayaría de más, un `if` que acabara en su primera rama no cubriría el
+         `else`, y un nodo de error que cubriera el token siguiente subrayaría lo que no tiene la culpa. El
+         nodo del bloque que falta está vacío y empieza en el token que el parser encuentra, como el E0201
+         que lo acompaña, y no donde acabó el `if`: es una posición que ningún otro test mira y que el
+         comentario de `Expr` promete, porque un nodo que cayera fuera de su padre sorprende a quien
+         recorra el árbol
+ref:     TestParseStmt/spans
+
+[T06.69] stmt.e0201_sites                                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    cada sitio donde el parser necesita un token y no lo encuentra da un E0201 con su mensaje y su posición
+input:   44 fuentes, una o más por cada palabra del mensaje: `expression` (`fn f() { 1 + }`, `fn f() { ; }`, `fn f() { g(,) }`…), `identifier` (`fn 1`, `fn f(1) {}`, `#[1] fn f() {}`…), `type` (`fn f(x: ) {}`, `fn f() -> {}`…), `=`, `)` (parámetros, grupos, llamadas, el tipo `()` y los atributos), `{` (un `if` sin bloque, también ante un salto de línea, y un `else` sin bloque), `}` (el fichero acaba dentro de un bloque), `newline`, `item` (tokens sueltos arriba del todo y tras atributos o `pub`) y los sitios de la firma y de los atributos que piden `[`, `]`, `(` o `string`
+expect:  el primer diagnóstico de cada fuente es exactamente el E0201 con ese mensaje y la etiqueta primaria sobre el token hallado: sus bytes, los del salto de línea (`\n`) o el punto vacío al final del fichero; nada más en el diagnóstico (ni etiqueta secundaria, ni nota, ni ayuda)
+why:     un error de sintaxis tiene que decir qué se esperaba y qué se encontró, y señalar el sitio exacto:
+         si dijera `item` donde esperaba un `type`, o subrayara el token anterior al que falla, el usuario
+         buscaría el fallo donde no está. Cada fila mata a un parser que se calla en ese sitio, que usa otra
+         palabra o que señala otro token
+ref:     TestParseStmt/e0201_sites
+
+[T06.70] stmt.found_text_is_the_source_text                level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el token hallado se cita como lo escribió el fichero, no por su valor ni por su clase
+input:   `fn f() { let ` seguido de `0xFF`, `1_000`, `1.5`, `'a'`, `"a\n"` (con la barra tal como se escribe), `"a${x}b"`, `true`, `X`, `_`, `==`, `->`, `|>` y `..`, y ` }`; y `fn f() { $ }`
+expect:  en cada una de las trece, el primer diagnóstico dice «expected identifier, found » y el texto escrito entre comillas invertidas (para la cadena con interpolación, solo `"a${`, su primer token); en `fn f() { $ }`, el E0104 del lexer primero y después el E0201 «expected expression, found `$`» sobre el `$`
+why:     un `0xFF` citado como `255` no se reconoce en el fichero, y una clase como `Int` no dice nada al
+         usuario. El texto sale de los bytes del fichero que guarda el `TokenBuffer`, sea cual sea el token,
+         también el que el lexer rechazó. (El `$` da dos errores, el del lexer y el del parser: quien decida
+         que el parser calle ante un `Error` lo cambia aquí)
+ref:     TestParseStmt/found_text_is_the_source_text
+
+[T06.71] stmt.recovery_in_blocks                           level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    qué hace el parser con un bloque que sale mal: el árbol que deja y todos los diagnósticos que informa
+input:   10 fuentes, como `fn f() { f() x }`, `fn f() { ) }`, `fn f() { ; }`, `fn f() { 1 + }`, `fn f() { (1 }`, `fn f() {`, `fn f() { 1`, `fn f() { let x = 1`, `fn f() { if a { 1 } else }` y `fn f() { 1 }}`
+expect:  el texto de `PrintModule` y la lista de mensajes de cada una, exactos: un token que sigue a una sentencia sin separador da «expected newline» y se queda para la sentencia siguiente; uno que no puede empezar una sentencia da «expected expression» y se descarta, sin un «expected newline» más; un `(` sin cerrar da «expected `)`, found `}`» y el `}` sigue cerrando el bloque; un bloque sin cerrar acaba en el final del fichero con «expected `}`, found end of file», y su última expresión es la cola pero un `let` no; y un `}` de más arriba del todo es un item de error
+why:     con la recuperación más simple (el error es un nodo y se sigue por el token siguiente) lo importante
+         es que cada fallo diga una vez lo que le pasa y que el bucle avance siempre. Cuando otra sesión
+         salte al final de la sentencia y suprima los errores cercanos, estas filas son las que cambian
+ref:     TestParseStmt/recovery_in_blocks
+
+[T06.72] stmt.malformed_blocks_terminate                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    fuentes que fallan dentro de un bloque: cortadas en cada punto de un `if` y de un `let`, o con un token donde no toca
+input:   48 fuentes, como `fn f() { if a { 1 } else`, `fn f() { let x: Int =`, `fn f() { ) ) ) }`, `fn f() { ; ; }`, `fn f() { { { }`, `fn f() { let x = { }`, `fn f() { 1 = 2 }`, `fn f() { f(1 2) }` y `fn f() { 1 +\n}`
+expect:  para cada fuente, `module` vuelve con el cursor en el `Eof`, hay al menos un E0201 y los items, de uno en uno, tienen un span del fichero que no acaba antes de empezar, que empieza donde acabó el anterior o más tarde y que no pasa del final
+why:     el bucle de un bloque tiene que consumir un token en cada vuelta o terminar, y una fuente rota que
+         se tragara en silencio sería un programa que `ki check` da por bueno. Esta prueba no acota el
+         tiempo con un reloj: si algún bucle no consumiera, la prueba no acabaría, y eso es lo que se ve
+ref:     TestParseStmt/malformed_blocks_terminate

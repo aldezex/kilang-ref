@@ -253,10 +253,12 @@ func TestParser(t *testing.T) {
 	})
 	t.Run("malformed_input_still_parses", func(t *testing.T) {
 		// Each of these stops making sense somewhere inside an item, or does
-		// not start with one. The parser reports nothing yet (the next
-		// sessions add the diagnostics), but it must come back, never read
-		// past the end of the tokens, never print the text as if it were a
-		// correct program, and leave the items in order and inside the file.
+		// not start with one. The parser must come back, never read past the
+		// end of the tokens, never print the text as if it were a correct
+		// program, report it as an E0201 (a file that is not a program must
+		// not parse in silence), and leave the items in order and inside the
+		// file. What it reports besides the E0201, and how many times, is not
+		// checked: the recovery of a later session changes that.
 		srcs := []string{
 			"fn", "fn f", "fn f(", "fn f(x", "fn f(x:", "fn f(x: )", "fn f(x,", "fn f(x,) {}", "fn f() ->",
 			"fn (x) {}", "fn F() {}", "fn f(X) {}", "fn f(1) {}", "fn 1", "fn f() $",
@@ -271,15 +273,14 @@ func TestParser(t *testing.T) {
 			// A type is written with a capital letter, so a name in lower case is
 			// not one: the likeliest slip of someone who writes `int`.
 			"fn f(x: int) {}",
-			// A block that is never closed. This session reads only `{}`, so
-			// it is malformed here; the sessions that read blocks and recover
-			// from errors may change what it prints, and revisit this row.
-			"fn f() {",
 		}
 		for _, src := range srcs {
-			m, id, in, _ := parseFile(t, src)
+			m, id, in, sink := parseFile(t, src)
 			if !strings.Contains(syntax.PrintModule(m, in), "(error)") {
 				t.Errorf("%q printed %q, want it to show an (error)", src, syntax.PrintModule(m, in))
+			}
+			if sink.Count(diag.E(201)) == 0 {
+				t.Errorf("%q: no E0201 reported, want at least one; diagnostics %v", src, sink.All())
 			}
 			prevHi := uint32(0)
 			for _, itemID := range m.Items {

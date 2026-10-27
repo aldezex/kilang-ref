@@ -559,11 +559,12 @@ func TestParseExpr(t *testing.T) {
 
 	t.Run("malformed_input_still_parses", func(t *testing.T) {
 		// Each of these stops making sense inside an expression. The parser
-		// reports nothing about it yet (the next session adds E0201), but it
 		// must come back, print what it understood with an (error) where it
 		// did not, and leave the cursor at the first token it did not use:
 		// a `)` or a `}` that it has no use for must stay for the caller. The
-		// sessions that recover from errors may change what is printed here.
+		// diagnostics it reports for them are not looked at here (see
+		// TestParseStmt/e0201_sites), and the sessions that recover from
+		// errors may change what is printed.
 		rows := []struct {
 			src  string
 			want string
@@ -781,9 +782,9 @@ func TestParseExpr(t *testing.T) {
 	})
 	t.Run("nested_expr_keeps_outer_count", func(t *testing.T) {
 		// A statement inside a block inside an expression has its own count,
-		// and the expression around it goes on with the count it had. The
-		// parser cannot reach this through the grammar yet, so the test starts
-		// from a parser that is in the middle of an expression.
+		// and the expression around it goes on with the count it had. The test
+		// starts from a parser that is in the middle of an expression, with the
+		// state of that expression set by hand.
 		//
 		// An outer expression at the limit does not make the inner one report...
 		r := newExprRun(t, "1 + 1")
@@ -825,9 +826,8 @@ func TestParseExpr(t *testing.T) {
 	t.Run("skip_statement_counts_consumed_braces", func(t *testing.T) {
 		// skipStatement starts in the middle of a statement. The braces that the
 		// statement opened before that point count: the `;` inside them does
-		// not end it, the `;` after the `}` that closes them does. The parser
-		// cannot consume a brace in an expression yet, so the test moves the
-		// cursor by hand.
+		// not end it, the `;` after the `}` that closes them does. The test
+		// moves the cursor by hand to the middle of a statement.
 		const src = "{ x ; y } ; z"
 		r := newExprRun(t, src)
 		r.p.advance() // {

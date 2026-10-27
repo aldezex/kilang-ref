@@ -28,6 +28,7 @@ import (
 // and lexing goes on at the line break; see unterminated in strings.go.
 func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.Sink) TokenBuffer {
 	lx := &lexer{src: sm.Contents(id), id: id, in: in, sink: sink}
+	lx.tb.src = lx.src
 	if !CheckSource(sm, id, sink) {
 		lx.pos = len(lx.src)
 		lx.emit(Eof, len(lx.src), 0)
