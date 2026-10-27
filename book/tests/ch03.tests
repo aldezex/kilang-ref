@@ -3,7 +3,7 @@ kind:    unit (go test)      file: internal/diag/diagnostic_test.go
 case:    el texto de un código de error y de uno de warning, también al imprimirlo con `%v`
 input:   `E(101)` y `W(702)`
 expect:  `String` devuelve "E0101" y "W0702"; `fmt.Sprintf("%v", E(101))` devuelve "E0101"
-why:     el código es lo que el usuario busca en la documentación y lo que comparan los golden; si
+why:     el código es lo que busca en la documentación quien usa ki y lo que comparan los golden; si
          saliera "E101" o "E 101", los renderizadores escribirían un código que nadie reconoce, y
          si `%v` imprimiera la estructura (`{69 101}`) los mensajes que usan `%v` serían ilegibles
 ref:     TestCode/formats_four_digits
@@ -32,7 +32,7 @@ expect:  `NewError` crea un `Error` con el código, el mensaje y la etiqueta dad
          propia etiqueta
 why:     un diagnóstico se construye en un sitio y otro pase le añade una nota; si `WithNote` escribiera
          en el array del original, dos pases que añadieran notas al mismo diagnóstico se pisarían
-         entre sí y el usuario vería la nota equivocada, un fallo que solo aparece con listas con
+         entre sí y quien usa ki vería la nota equivocada, un fallo que solo aparece con listas con
          capacidad de sobra
 ref:     TestDiagnostic/with_methods_return_copies
 
@@ -106,7 +106,7 @@ kind:    unit (go test)      file: internal/diag/render_test.go
 case:    pintar con el renderizador humano un error con una sola etiqueta primaria
 input:   el fichero `test.ki` con "let x = 1\nlet y = z\n" y un E0301 "unknown name `z`" con el span [18,19) y la etiqueta "not found in this scope"
 expect:  exactamente cinco líneas: "error[E0301]: unknown name `z`", " --> test.ki:2:9", "  |", "2 | let y = z" y "  |         ^ not found in this scope"
-why:     es la forma que el usuario ve cada vez que se equivoca; si la cabecera, la barra o el
+why:     es la forma que ve quien usa ki cada vez que se equivoca; si la cabecera, la barra o el
          margen se desplazaran una columna, todos los diagnósticos de Ki saldrían torcidos y ningún
          otro test lo notaría hasta que lo leyeras con tus ojos
 ref:     TestRenderHuman/single_label
@@ -190,7 +190,7 @@ case:    pintar una línea con un byte 0x01 y un 0x7F antes del span, y los bord
 input:   "a\x01b\x7fc = zz\n" con un E0301 sobre `zz` (contra `testdata/control_byte_shown_as_picture.golden`); y una tabla que pinta "a?b = zz" para 0x00, 0x1F, el espacio, `~` y 0x7F
 expect:  la línea "a␁b␡c = zz" y los `^^` alineados bajo `zz`; en la tabla, 0x00 sale como `␀`, 0x1F como `␟`, el
          espacio y `~` tal cual y 0x7F como `␡`
-why:     un control sin imagen puede esconder o mover texto en la terminal; mostrarlo como su "picture"
+why:     un control sin imagen puede esconder o mover texto en la terminal; mostrarlo como su imagen de control
          mantiene la línea legible y de una columna por carácter. Los bordes comprueban que ni el
          espacio ni `~` se tratan como controles, y que el primero y el último sí
 ref:     TestRenderHuman/control_byte_shown_as_picture
@@ -684,7 +684,7 @@ case:    pedir a `ReportAll` que escriba con un formato que no existe
 input:   una `Session` con `Format = DiagFormat(9)` y un error en el `Sink`
 expect:  `ReportAll` hace panic con "driver: unknown diagnostic format 9"
 why:     los tres formatos son los únicos; un valor fuera de ellos es un fallo de quien llama, y tiene que
-         hacer ruido en vez de escribir nada o caer en un formato por omisión que el usuario tomaría
+         hacer ruido en vez de escribir nada o caer en un formato por omisión que quien usa ki tomaría
          por la salida buena
 ref:     TestReportAll/unknown_format_panics
 
