@@ -10,16 +10,36 @@ import (
 //
 // The parser is recursive descent. Parse reads the top-level functions:
 // attributes, `pub`, the name, the parameters, the return type and a body that
-// is either absent or a block. The expressions are read by parser_expr.go, and
-// the blocks, `let` and `if` by parser_stmt.go.
+// is either absent or a block. The expressions are read by parser_expr.go, the
+// blocks, `let` and `if` by parser_stmt.go, and recover.go says what the parser
+// does when the tokens stop making sense.
 //
-// Where the tokens stop making sense Parse reports E0201 to sink, at the token
-// it found instead of the one it needed (see expected). It does not stop
-// there: the place becomes an error node (ItemError, StmtError, TypeError or
-// ExprError), and the parser goes on with the tokens after it. That recovery is
-// the simplest there is, and it can report one mistake several times over; a
-// later session recovers to the end of the statement. Each pass of its loops
-// consumes at least one token, which is what makes it end.
+// Where they do, Parse reports E0201 to sink, at the token it found instead of
+// the one it needed (see expected), and goes on: the place becomes an error node
+// (ItemError, StmtError, TypeError or ExprError) and the parser skips the rest
+// of the statement or of the item, so a mistake in a statement or in an item is
+// one diagnostic. That includes a `(` that is never closed before the `}` of
+// its block: the statements after it are told apart by their line breaks,
+// although the line rule put no Newline between them (see block). That is what
+// it promises, and it has exceptions. One input costs more the more follows it:
+// a `{` that is never closed leaves everything after it inside its block, where
+// each line that begins an item (with `#`, `pub` or `fn`, so an attribute on a
+// line of its own costs one more than the item it belongs to) is a statement
+// that cannot be read and so a diagnostic of its own, and the E0202 that names
+// the cause is reported last, at the end of the file, so the sink, which keeps
+// the first diag.MaxErrors errors, has dropped it once the errors reported
+// before it reach that number: one E0201 for each such line after the brace, so
+// diag.MaxErrors of them are enough in a file with no other mistake (see
+// block). A few others cost one or two diagnostics more, and none besides the
+// unclosed `{` is known to grow with what follows the mistake. For example, a
+// block that is not the branch of an `if` is a statement of its own, so the
+// `else` after it is a mistake of its own: a `{` on the line after the
+// condition of an `if` is such a block, because the line rule has ended the
+// `if` there, and the missing branch costs a diagnostic besides (see branch,
+// TestRecover/if_brace_on_the_next_line). A mistake fewer than three tokens
+// after the last one reported is not reported (recover.go). Each pass of its
+// loops consumes at least one token or ends the loop, which is what makes them
+// end.
 func Parse(tb *TokenBuffer, file base.FileID, in *base.Interner, sink *diag.Sink) *Module {
 	p := newParser(tb, file, in, sink)
 	p.module()
@@ -30,6 +50,9 @@ func Parse(tb *TokenBuffer, file base.FileID, in *base.Interner, sink *diag.Sink
 type parser struct {
 	tb  *TokenBuffer
 	pos int // index in tb.Tokens of the current token
+	// index is how many of the tokens before the current one are not Newlines.
+	// Mistakes are measured in these (see tokIndex).
+	index int
 	// end is where the last token that the parser consumed ends, not counting
 	// Newlines, so that the span of a node stops at the node's last token and
 	// not at the line break after it. It is 0 before the first token.
@@ -39,9 +62,20 @@ type parser struct {
 	// chain is the state of the statement-level expression that is being read;
 	// see expr in parser_expr.go.
 	chain chainState
+	// depth is how many levels of nesting enclose the place that is being read:
+	// see MaxNesting. Unlike chain it belongs to no expression, because the
+	// statements of a nested block are inside the levels around the block.
+	depth int
+
+	// errs counts the mistakes found so far, those that were reported and those
+	// that were not (see detect). reported says that a mistake has been reported,
+	// and lastReported is the tokIndex it was at; see admit.
+	errs         int
+	reported     bool
+	lastReported int
 
 	// in is not used: the parser reads the Symbols the lexer interned and never
-	// the text of a name. sink receives the diagnostics: E0201, E0203, E0205.
+	// the text of a name. sink receives the diagnostics: E0201 to E0205.
 	in   *base.Interner
 	sink *diag.Sink
 }
@@ -66,6 +100,7 @@ func (p *parser) advance() Token {
 		p.pos++
 		if t.Kind != Newline {
 			p.end = t.Span.Hi
+			p.index++
 		}
 	}
 	return t
@@ -108,15 +143,28 @@ func (p *parser) found() string {
 // the `(` after the name of a function or the `[` of an attribute.
 // TestParseStmt/e0201_sites has a row for each word.
 //
-// It reports nothing while the statement-level expression being read is being
-// abandoned after E0205 (see chainState.tooLong): what the parser meets on its
-// way out of it is not a mistake of the program.
+// It reports nothing in three cases. The token found may be an Error token: the
+// lexer has reported that character or string already, and a second diagnostic
+// on the same bytes would say the same mistake twice. The mistake is still
+// counted (see detect), because the statement did go wrong. While the
+// statement-level expression being read is being abandoned (see
+// chainState.abandoned) what the parser meets on its way out of it is not a
+// mistake of the program, so it is not counted either. And admit (recover.go)
+// may suppress it: a mistake fewer than suppressDistance tokens after the last
+// one reported is counted, and the sink hears nothing of it. The E0202 of an
+// unclosed delimiter goes through the same rule (see report).
 func (p *parser) expected(what string) {
-	if p.chain.tooLong {
+	if p.chain.abandoned {
 		return
 	}
-	t := p.tok()
-	p.sink.Report(diag.NewError(diag.E(201), "expected "+what+", found "+p.found(), diag.Label{Span: t.Span}))
+	if p.at(Error) {
+		p.detect()
+		return
+	}
+	if p.admit() {
+		t := p.tok()
+		p.sink.Report(diag.NewError(diag.E(201), "expected "+what+", found "+p.found(), diag.Label{Span: t.Span}))
+	}
 }
 
 // expect consumes the token at the cursor and returns it with true if it is of
@@ -144,8 +192,9 @@ func (p *parser) spanFrom(start base.Span) base.Span {
 	return base.Span{File: start.File, Lo: start.Lo, Hi: max(p.end, start.Lo)}
 }
 
-// module reads items until the end of the file. Every pass of the loop
-// consumes at least one token (see item), so the loop ends.
+// module reads items until the end of the file. Every pass of the loop consumes
+// at least one token (see item), so the loop ends. After an item that went
+// wrong it skips to the next one (see syncItem).
 func (p *parser) module() {
 	for {
 		// Items on different lines have a Newline between them (line rule).
@@ -153,7 +202,11 @@ func (p *parser) module() {
 		if p.at(Eof) {
 			return
 		}
-		p.m.Items = append(p.m.Items, p.item())
+		id := p.item()
+		p.m.Items = append(p.m.Items, id)
+		if p.m.ItemNodes.Get(id).Kind == ItemError {
+			p.syncItem()
+		}
 	}
 }
 
@@ -171,8 +224,8 @@ func (p *parser) errorItem(start base.Span) ItemID {
 // A function has a body exactly when a `{` follows its signature on the same
 // line; the line rule puts a Newline in front of a `{` on the next one. A
 // token that cannot start an item, or a signature that stops making sense, is
-// an ItemError and E0201: the tokens read so far are consumed, and the item that
-// follows starts at the first one that is not.
+// an ItemError and E0201: the tokens read so far are consumed, and module skips
+// the rest of the item.
 func (p *parser) item() ItemID {
 	start := p.tok().Span
 	if !p.at(Hash) && !p.at(KwPub) && !p.at(KwFn) {
@@ -197,10 +250,11 @@ func (p *parser) item() ItemID {
 		return p.errorItem(start)
 	}
 	it.Name, it.NameSpan = base.Symbol(name.Payload), name.Span
-	if _, ok = p.expect(LParen, "`(`"); !ok {
+	open, ok := p.expect(LParen, "`(`")
+	if !ok {
 		return p.errorItem(start)
 	}
-	if it.Params, ok = p.params(); !ok {
+	if it.Params, ok = p.params(open); !ok {
 		return p.errorItem(start)
 	}
 	if _, ok = p.eat(Arrow); ok {
@@ -239,10 +293,11 @@ func (p *parser) attrs() (base.ListRange, bool) {
 // parser does not check that nothing separates them. The arguments are string
 // literals without interpolation. A malformed attribute is E0201 at the token
 // that is not what the grammar needs: the `[`, the name, a string, a `)` or the
-// `]`.
+// `]`; or E0202, if the file ends where a `)` or a `]` was needed.
 func (p *parser) attr() (Attr, bool) {
 	hash := p.advance()
-	if _, ok := p.expect(LBracket, "`[`"); !ok {
+	bracket, ok := p.expect(LBracket, "`[`")
+	if !ok {
 		return Attr{}, false
 	}
 	name, ok := p.expect(LowerIdent, "identifier")
@@ -250,7 +305,7 @@ func (p *parser) attr() (Attr, bool) {
 		return Attr{}, false
 	}
 	a := Attr{Name: base.Symbol(name.Payload)}
-	if _, ok := p.eat(LParen); ok {
+	if paren, ok := p.eat(LParen); ok {
 		for {
 			arg, ok := p.expect(String, "string")
 			if !ok {
@@ -261,25 +316,25 @@ func (p *parser) attr() (Attr, bool) {
 				break
 			}
 		}
-		if _, ok := p.expect(RParen, "`)`"); !ok {
+		if !p.expectClose(RParen, "`)`", paren) {
 			return Attr{}, false
 		}
 	}
-	if _, ok := p.expect(RBracket, "`]`"); !ok {
+	if !p.expectClose(RBracket, "`]`", bracket) {
 		return Attr{}, false
 	}
 	a.Span = p.spanFrom(hash.Span)
 	return a, true
 }
 
-// params reads the parameters after the `(` of a function, and the `)`, and
-// adds the parameters to ParamPool. It returns false, and adds nothing to the
-// pool, if the list is malformed.
+// params reads the parameters after the `(` of a function, which is open, and
+// the `)`, and adds the parameters to ParamPool. It returns false, and adds
+// nothing to the pool, if the list is malformed.
 //
 //	params = [ param { ',' param } ] ')'
 //
 // A comma after the last parameter is not allowed.
-func (p *parser) params() (base.ListRange, bool) {
+func (p *parser) params(open Token) (base.ListRange, bool) {
 	var list []Param
 	if !p.at(RParen) {
 		for {
@@ -293,7 +348,7 @@ func (p *parser) params() (base.ListRange, bool) {
 			}
 		}
 	}
-	if _, ok := p.expect(RParen, "`)`"); !ok {
+	if !p.expectClose(RParen, "`)`", open) {
 		return base.ListRange{}, false
 	}
 	return appendRange(&p.m.ParamPool, list), true
@@ -324,8 +379,8 @@ func (p *parser) typeExpr() TypeExprID {
 	if t, ok := p.eat(UpperIdent); ok {
 		return p.m.Types.Push(TypeExpr{Kind: TypeNamed, Span: t.Span, Name: base.Symbol(t.Payload)})
 	}
-	if _, ok := p.eat(LParen); ok {
-		if _, ok := p.expect(RParen, "`)`"); ok {
+	if open, ok := p.eat(LParen); ok {
+		if p.expectClose(RParen, "`)`", open) {
 			return p.m.Types.Push(TypeExpr{Kind: TypeUnit, Span: p.spanFrom(start)})
 		}
 	} else {

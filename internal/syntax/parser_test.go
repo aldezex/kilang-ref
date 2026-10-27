@@ -255,10 +255,12 @@ func TestParser(t *testing.T) {
 		// Each of these stops making sense somewhere inside an item, or does
 		// not start with one. The parser must come back, never read past the
 		// end of the tokens, never print the text as if it were a correct
-		// program, report it as an E0201 (a file that is not a program must
-		// not parse in silence), and leave the items in order and inside the
-		// file. What it reports besides the E0201, and how many times, is not
-		// checked: the recovery of a later session changes that.
+		// program, report it (a file that is not a program must not parse in
+		// silence: an E0201, an E0202 for a delimiter that the file ends
+		// without closing, or the lexer's E0104 for the one source whose
+		// mistake is a character that is not Ki), and leave the items in order
+		// and inside the file. What else it reports, and how many times, is not
+		// checked here.
 		srcs := []string{
 			"fn", "fn f", "fn f(", "fn f(x", "fn f(x:", "fn f(x: )", "fn f(x,", "fn f(x,) {}", "fn f() ->",
 			"fn (x) {}", "fn F() {}", "fn f(X) {}", "fn f(1) {}", "fn 1", "fn f() $",
@@ -279,8 +281,8 @@ func TestParser(t *testing.T) {
 			if !strings.Contains(syntax.PrintModule(m, in), "(error)") {
 				t.Errorf("%q printed %q, want it to show an (error)", src, syntax.PrintModule(m, in))
 			}
-			if sink.Count(diag.E(201)) == 0 {
-				t.Errorf("%q: no E0201 reported, want at least one; diagnostics %v", src, sink.All())
+			if sink.Count(diag.E(201))+sink.Count(diag.E(202))+sink.Count(diag.E(104)) == 0 {
+				t.Errorf("%q: no E0201, E0202 or E0104 reported, want at least one; diagnostics %v", src, sink.All())
 			}
 			prevHi := uint32(0)
 			for _, itemID := range m.Items {

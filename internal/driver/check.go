@@ -9,8 +9,14 @@ import (
 // nothing is. A clean file prints nothing.
 //
 // It lexes the file, and Lex starts by checking the bytes of the source (invalid
-// UTF-8, control characters), so those errors come out once. The tokens
-// themselves are of no use to check yet.
+// UTF-8, control characters), so those errors come out once. Then it parses the
+// tokens, whatever the lexer reported: the parser recovers from a syntax error
+// and goes on, so one run reports one error for each broken statement or item
+// and not only the first. A few inputs cost more, as the doc comment of
+// syntax.Parse says: a `{` that is never closed (each line after it that begins
+// an item is one more error) and others by one or two errors, such as a block
+// that is not the branch of an `if` (the `else` after it is an error of its
+// own). The tree itself is of no use to check yet.
 //
 // With --diagnostics=json each diagnostic is one line of JSON on stderr, but
 // two things are still written there as plain text: the "error: cannot read
@@ -22,7 +28,8 @@ func runCheck(s *Session, c *command, args []string) int {
 	if done {
 		return code
 	}
-	syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
+	tb := syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
+	syntax.Parse(&tb, id, s.Interner, &s.Sink)
 	s.ReportAll()
 	if s.Sink.HasErrors() {
 		return 1

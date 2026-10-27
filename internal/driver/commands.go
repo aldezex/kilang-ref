@@ -25,7 +25,7 @@ var commands = []command{
 	versionCommand("version", "ki version"),
 	newCommand("check", "ki check [--diagnostics=human|short|json] FILE", runCheck),
 	newCommand("test", "ki test [--root DIR] [--update] PATH...", runTest),
-	newCommand("emit", "ki emit tokens [--diagnostics=human|short|json] FILE", runEmit),
+	newCommand("emit", "ki emit tokens|ast [--diagnostics=human|short|json] FILE", runEmit),
 }
 
 // newCommand returns a command, called name, whose Run calls run with the

@@ -1,0 +1,6 @@
+// test: T06.98
+// run: check
+fn a() { let = 1 }  // ERROR(E0201) @14
+fn b() -> Int { 1 + }  // ERROR(E0201) @21
+fn c() -> Int { (1 }  // ERROR(E0201) @20
+fn main() {}

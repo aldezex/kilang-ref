@@ -1,0 +1,4 @@
+// test: T06.105
+// run: check
+fn a() { let x = $ }  // ERROR(E0104) @18
+fn b() -> Int { 1 + }  // ERROR(E0201) @21

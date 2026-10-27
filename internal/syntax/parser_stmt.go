@@ -10,9 +10,8 @@ import "github.com/aldezex/kilang/internal/base"
 //
 // Blocks and ifs are expressions (primary in parser_expr.go calls block and
 // ifExpr), so they can be operands, arguments and initializers, and a block
-// can hold another one. Nothing bounds that nesting yet: each level takes a
-// level of Go's call stack, and the limit that bounds them (E0204) comes in a
-// later session.
+// can hold another one. Each of them is a level of nesting, and MaxNesting
+// bounds the levels (see recover.go).
 
 // block reads a block, the cursor being at its `{`, and returns it as an
 // ExprBlock. Each statement is read by expr(0), so it has the count of
@@ -27,13 +26,41 @@ import "github.com/aldezex/kilang/internal/base"
 //     end of the file (the missing `}` is reported once, at the top of the loop);
 //   - a `let` is always a statement, and needs no separator in front of the `}`.
 //
-// Any other token after a statement is E0201 `newline`, and it is left where it
-// is: it starts the next statement. The exception is a token that cannot start
-// a statement either, so that nothing was read for it (its E0201 is
-// "expected expression"): it is dropped, which is what makes every pass of the
-// loop consume a token or end it.
+// A statement that goes wrong is skipped to its end (syncStatement), which is
+// one of those separators or a `let` that begins a line, so the loop goes on
+// with the statement after it. Any other token after a statement that was read
+// without mistakes is E0201 `newline`, and it is left where it is: it starts
+// the next statement. The exception is a token with a line break in front of
+// it: the line break is its separator, whether or not the line rule turned it
+// into a Newline. The line rule does not turn it into one while a `(` that was
+// never closed is the innermost open bracket, which hides every line break up
+// to the `}` of the block, so the statements after a missing `)` are not
+// mistakes (see syncStatement). A token on the same line as the statement still
+// needs one.
 //
-// A missing `}` is E0201, and the block ends at the last token that was read.
+// A missing `}` is E0202, at the `{`, and the block ends at the last token that
+// was read. Until the end of the file the block reads what follows as its own
+// statements, the items after it included: a `fn` is not a statement that the
+// parser reads yet, so a statement that starts with a `fn`, a `pub` or a `#` is
+// an E0201 `expression`, and it is skipped to its end (see syncStatement): the
+// end of its line, a `;` or a `let` that begins a line, whichever comes first,
+// outside the brackets that the skipped tokens opened. The body of a function
+// opens one, so the skip goes on to the line of its `}`. So the cost is one
+// E0201 for each line that begins an item, and not for each item: an attribute
+// on a line of its own is one more. The E0202 is reported last, when the file
+// ends, and the sink keeps only the first diag.MaxErrors errors in the order
+// they are reported: once the errors reported before it reach that number it is
+// dropped (with no other mistake in the file, diag.MaxErrors such lines after
+// the brace are enough), and what the user gets is diag.MaxErrors errors and no
+// word about the `}` (TestRecover/unclosed_brace_swallows_the_next_items). The
+// block does not end at a `fn` instead, because the language allows a function
+// inside a block (spec 5.3) and a later chapter reads it as a statement.
+//
+// Every pass of the loop consumes a token or ends the block: a
+// statement that was read consumed one, and one that went wrong ends at a
+// separator, which the code below consumes, at a `let` that begins a line, which
+// starts the next statement, or at the `}` or the end of the file, which end the
+// block.
 func (p *parser) block() ExprID {
 	open := p.advance()
 	var stmts []StmtID
@@ -44,11 +71,11 @@ func (p *parser) block() ExprID {
 			break
 		}
 		if p.at(Eof) {
-			p.expected("`}`")
+			p.unclosed(open)
 			break
 		}
 
-		before := p.pos
+		errs := p.errs
 		isLet := p.at(KwLet)
 		var let StmtID
 		var e ExprID
@@ -56,6 +83,9 @@ func (p *parser) block() ExprID {
 			let = p.letStmt()
 		} else {
 			e = p.expr(0)
+		}
+		if p.errs != errs {
+			p.syncStatement()
 		}
 
 		isTail := false
@@ -70,10 +100,17 @@ func (p *parser) block() ExprID {
 		case p.at(Eof):
 			// The top of the loop reports the missing `}`.
 			isTail = !isLet
-		case p.pos == before:
-			p.advance()
 		default:
-			p.expected("newline")
+			// A token that is none of those needs a separator in front of it. A
+			// line break is one, although the line rule put no Newline there:
+			// NewlineBefore is the lexer's own answer to whether the source has
+			// one between the last token and this one. That also covers the
+			// token at which the skip of a statement that went wrong stopped
+			// (see syncStatement): the only one that is none of the cases above
+			// is a `let` that begins a line, and so has its line break.
+			if !p.tok().NewlineBefore {
+				p.expected("newline")
+			}
 		}
 
 		switch {
@@ -126,40 +163,81 @@ func (p *parser) letStmt() StmtID {
 }
 
 // ifExpr reads an if, the cursor being at the `if`. The condition is an
-// expression of its own, with its own count of operators (see expr). A branch is
-// a block; the `else` may be followed by another if, which is the else branch
-// of this one. A branch that is not a block is E0201 `{`.
+// expression of its own, with its own count of operators (see condition). A
+// branch is a block; the `else` may be followed by another if, which is the else
+// branch of this one. A branch that is not a block is E0201 `{`. The condition,
+// each branch and the else-if are each one level of nesting.
 //
-// If the condition is abandoned for being too long (E0205), the rest of the
-// statement, the branches included, has been skipped, and the if is one error
-// node that covers it all.
+// If the condition is abandoned, for being too long (E0205) or too deep (E0204),
+// the rest of the statement, the branches included, has been skipped, and the if
+// is one error node that covers it all. So is an if whose `else if` is abandoned.
 func (p *parser) ifExpr() ExprID {
 	kw := p.advance()
 	e := Expr{Kind: ExprIf}
-	cond, abandoned := p.exprOrSkip(0)
+	if !p.enter() {
+		return p.errorExpr(kw.Span)
+	}
+	cond, abandoned := p.condition()
+	p.leave()
 	if abandoned {
 		return p.errorExpr(kw.Span)
 	}
 	e.Cond = cond
 	e.Then = p.branch()
+	// Cannot happen today: the if was not abandoned when it began, and a block
+	// gives the chain back as it found it, because each statement in it restores
+	// the one it took (exprOrSkip). Kept so that a change to those rules ends in
+	// an error node and not in an if that goes on reading an abandoned
+	// expression. No test can reach it.
+	if p.chain.abandoned {
+		return p.errorExpr(kw.Span)
+	}
 	if _, ok := p.eat(KwElse); ok {
 		e.HasElse = true
 		if p.at(KwIf) {
-			e.Else = p.ifExpr()
+			e.Else = p.elseIf()
 		} else {
 			e.Else = p.branch()
+		}
+		if p.chain.abandoned {
+			return p.errorExpr(kw.Span)
 		}
 	}
 	e.Span = p.spanFrom(kw.Span)
 	return p.m.Exprs.Push(e)
 }
 
-// branch reads the block of an if or of its else. If the cursor is not at a
-// `{` that is E0201, and the branch is an error node with an empty span there.
-func (p *parser) branch() ExprID {
-	if p.at(LBrace) {
-		return p.block()
+// elseIf reads the if that follows an `else`, which is one level of nesting
+// below the if that has the else.
+func (p *parser) elseIf() ExprID {
+	// Cannot happen today: the if that has this else took a level at this same
+	// depth, and gave it back, so there is room for one more. Kept because a
+	// caller must not call leave after an enter that refused, and a change to the
+	// depth rules must not unbalance the two. No test can reach it.
+	if !p.enter() {
+		return p.errorExpr(p.tok().Span)
 	}
-	p.expected("`{`")
-	return p.errorExpr(p.tok().Span)
+	e := p.ifExpr()
+	p.leave()
+	return e
+}
+
+// branch reads the block of an if or of its else, which is one level of
+// nesting. If the cursor is not at a `{` that is E0201, and the branch is an
+// error node with an empty span there. A `{` on the next line is not the
+// branch: the line rule has put a Newline in front of it, and it starts a
+// statement of its own (TestRecover/if_brace_on_the_next_line).
+func (p *parser) branch() ExprID {
+	if !p.at(LBrace) {
+		p.expected("`{`")
+		return p.errorExpr(p.tok().Span)
+	}
+	// Cannot happen today, for the reason given in elseIf: the if took a level at
+	// this depth before it came to its branches. No test can reach it.
+	if !p.enter() {
+		return p.errorExpr(p.tok().Span)
+	}
+	b := p.block()
+	p.leave()
+	return b
 }

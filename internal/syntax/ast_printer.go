@@ -25,8 +25,10 @@ import (
 //
 // PrintModule does not change m. Printing recurses once per level of the tree
 // (a loop walks each list of children), so the depth of Go's call stack follows
-// the depth of the tree. Nothing bounds the depth of the trees that Parse builds
-// yet: the limit on the nesting of expressions comes in a later session.
+// the depth of the tree. Parse bounds the nesting of what it reads (MaxNesting
+// levels) and the operators and calls of one statement (MaxChain), so the depth
+// of a tree it builds is bounded, though by the two together and not by either
+// one alone: a statement at every level of nesting may have a chain of its own.
 func PrintModule(m *Module, in *base.Interner) string {
 	pr := printer{m: m, in: in}
 	for _, id := range m.Items {

@@ -563,8 +563,7 @@ func TestParseExpr(t *testing.T) {
 		// did not, and leave the cursor at the first token it did not use:
 		// a `)` or a `}` that it has no use for must stay for the caller. The
 		// diagnostics it reports for them are not looked at here (see
-		// TestParseStmt/e0201_sites), and the sessions that recover from
-		// errors may change what is printed.
+		// TestParseStmt/e0201_sites).
 		rows := []struct {
 			src  string
 			want string
@@ -674,6 +673,12 @@ func TestParseExpr(t *testing.T) {
 			// after the `)` ends the statement.
 			{"inside parentheses", "((" + plusChain(1025) + "\n)) + 3\nx", 0, Newline, uint32(len("((" + plusChain(1025) + "\n)) + 3"))},
 			{"unclosed call", "f(" + plusChain(1024) + " + 2;", 0, Semi, uint32(len("f(" + plusChain(1024) + " + 2"))},
+			// The token that passes the limit is the `(` of a call, and a `;` is
+			// inside it. The `(` is left for the skip, which opens it, so the `;`
+			// between it and its `)` does not end the statement. A parser that
+			// consumed the `(` before counting it would leave it out of the skip,
+			// and the skip would stop at that `;`.
+			{"call with a semicolon inside", plusChain(1024) + "(a; b) + 1; x", 0, Semi, uint32(len(plusChain(1024) + "(a; b) + 1"))},
 			// Braces opened in the skipped text close in it: the `;` and the
 			// line breaks between them do not end the statement.
 			{"braces", over + " + { ; \n 1 \n } ; x", 0, Semi, uint32(len(over + " + { ; \n 1 \n } "))},
@@ -763,96 +768,90 @@ func TestParseExpr(t *testing.T) {
 
 	t.Run("chained_comparison_counts_toward_chain", func(t *testing.T) {
 		// The operators that the parser reads to get past a chained comparison
-		// are operators of the expression like any other: 1022 additions and
-		// three comparisons are 1025. E0203 comes first, at the second
-		// comparison; E0205 at the third, which is the 1025th.
-		src := plusChain(1022) + " < 1 < 1 < 1"
+		// are operators of the expression like any other: 1021 additions, two
+		// comparisons and the two additions in the operand of the second are
+		// 1025. E0203 comes first, at the second comparison; E0205 at the last
+		// addition, which is the 1025th and is four tokens after the second
+		// comparison, so that the rule that suppresses a mistake close to the
+		// last one reported leaves it alone.
+		src := plusChain(1021) + " < 1 < 1 + 1 + 1"
 		r := newExprRun(t, src)
 		e := r.p.expr(0)
-		first := uint32(len(plusChain(1022)) + 1) // the first `<`; each next one is 4 bytes on
+		base := uint32(len(plusChain(1021)))
 		want := []diag.Diagnostic{
-			chainedDiag(r.file, first+4, first+5),
-			tooLongDiag(r.file, first+8, first+9),
+			chainedDiag(r.file, base+5, base+6),
+			tooLongDiag(r.file, base+13, base+14),
 		}
 		if got := r.sink.All(); !reflect.DeepEqual(got, want) {
 			t.Errorf("diagnostics\n%+v\nwant\n%+v", got, want)
 		}
-		wantText(t, "1022 additions and 3 comparisons", r.sexpr(e), "(error)")
-		r.wantAt(t, "1022 additions and 3 comparisons", Eof, uint32(len(src)))
+		wantText(t, "1021 additions, 2 comparisons and 2 more additions", r.sexpr(e), "(error)")
+		r.wantAt(t, "1021 additions, 2 comparisons and 2 more additions", Eof, uint32(len(src)))
 	})
 	t.Run("nested_expr_keeps_outer_count", func(t *testing.T) {
-		// A statement inside a block inside an expression has its own count,
-		// and the expression around it goes on with the count it had. The test
-		// starts from a parser that is in the middle of an expression, with the
-		// state of that expression set by hand.
+		// A statement inside a block inside an expression has its own count of
+		// operators, and the expression around the block goes on with the count
+		// it had. The three sources are expressions with a block in the middle.
 		//
-		// An outer expression at the limit does not make the inner one report...
-		r := newExprRun(t, "1 + 1")
-		outer := chainState{from: 0, count: MaxChain}
-		r.p.chain = outer
-		wantText(t, "inner at the limit of the outer", r.sexpr(r.p.expr(0)), "(+ 1 1)")
-		if n := len(r.sink.All()); n != 0 {
-			t.Errorf("inner expression: %d diagnostics, want none: %v", n, r.sink.All())
-		}
-		if r.p.chain != outer {
-			t.Errorf("chain state afterwards is %+v, want %+v", r.p.chain, outer)
-		}
+		// The expression around the block is at the limit when the block starts
+		// (1023 operators, and the `+` in front of the block is the 1024th), and
+		// the tail of the block has 1024 operators of its own. If the two shared
+		// a count, the block would overflow.
+		wantExpr(t, "both at the limit", plusChain(1023)+" + { "+plusChain(1024)+" }",
+			"(+ "+wrapPlus("1", 1023)+" (block "+wrapPlus("1", 1024)+"))")
 
-		// ...nor does an outer one that has already been marked as too long: the
-		// inner one starts from a clean state, and reports nothing.
-		r = newExprRun(t, "1 + 1")
-		outer = chainState{from: 0, count: MaxChain + 1, tooLong: true}
-		r.p.chain = outer
-		wantText(t, "inner of an outer that is too long", r.sexpr(r.p.expr(0)), "(+ 1 1)")
-		if n := len(r.sink.All()); n != 0 {
-			t.Errorf("inner expression: %d diagnostics, want none: %v", n, r.sink.All())
-		}
-		if r.p.chain != outer {
-			t.Errorf("chain state afterwards is %+v, want %+v", r.p.chain, outer)
-		}
-
-		// ...and an inner one that overflows leaves the outer one as it was.
-		r = newExprRun(t, plusChain(1025))
-		outer = chainState{from: 0, count: 5}
-		r.p.chain = outer
-		wantText(t, "inner that overflows", r.sexpr(r.p.expr(0)), "(error)")
-		if got := r.sink.Count(diag.E(205)); got != 1 {
-			t.Errorf("inner expression: %d E0205, want 1", got)
-		}
-		if r.p.chain != outer {
-			t.Errorf("chain state afterwards is %+v, want %+v", r.p.chain, outer)
-		}
-	})
-	t.Run("skip_statement_counts_consumed_braces", func(t *testing.T) {
-		// skipStatement starts in the middle of a statement. The braces that the
-		// statement opened before that point count: the `;` inside them does
-		// not end it, the `;` after the `}` that closes them does. The test
-		// moves the cursor by hand to the middle of a statement.
-		const src = "{ x ; y } ; z"
+		// The block ends and the expression around it goes on with the count it
+		// had, not with the block's: 1023 and the `+` before the block are 1024,
+		// and the `+` after it is the 1025th. The block's own `+` counts for the
+		// block only; if it counted for the expression around, the overflow would
+		// be there, and if the count of the block replaced the other, there
+		// would be none.
+		src := plusChain(1023) + " + { 1 + 1 } + 1"
 		r := newExprRun(t, src)
-		r.p.advance() // {
-		r.p.advance() // x
-		r.p.skipStatement()
-		r.wantAt(t, "inside a brace", Semi, uint32(strings.LastIndex(src, ";")))
+		e := r.p.expr(0)
+		lo := lastIndex(t, src, "+")
+		wantOnlyDiag(t, "outer count restored", r.sink, tooLongDiag(r.file, lo, lo+1))
+		wantText(t, "outer count restored", r.sexpr(e), "(error)")
+		r.wantAt(t, "outer count restored", Eof, uint32(len(src)))
 
-		// A brace that was opened before the statement began counts for nothing:
-		// it is the block that holds the statement. Here the statement is `x`,
-		// and its `;` is at depth 0 even though a `{` came before it.
-		const inBlock = "{ x ; y }"
-		r = newExprRun(t, inBlock)
-		r.p.advance() // {
-		r.p.chain.from = r.p.pos
-		r.p.advance() // x
-		r.p.skipStatement()
-		r.wantAt(t, "statement in a block", Semi, uint32(strings.Index(inBlock, ";")))
-
-		// A brace that was opened and closed before that point counts for nothing.
-		const closed = "{ x } ; y"
-		r = newExprRun(t, closed)
-		for range 3 { // { x }
-			r.p.advance()
+		// A statement of the block that overflows is abandoned alone: the block
+		// and the expression around it are read as usual afterwards, and are not
+		// marked as too long.
+		const prefix = "1 + 1 + 1 + 1 + 1 + { "
+		src = prefix + plusChain(1025) + " } + 1"
+		r = newExprRun(t, src)
+		e = r.p.expr(0)
+		lo = uint32(len(prefix) + strings.LastIndex(plusChain(1025), "+"))
+		wantOnlyDiag(t, "inner overflows", r.sink, tooLongDiag(r.file, lo, lo+1))
+		wantText(t, "inner overflows", r.sexpr(e), "(+ (+ "+wrapPlus("1", 4)+" (block (error))) 1)")
+		r.wantAt(t, "inner overflows", Eof, uint32(len(src)))
+	})
+	t.Run("skip_stops_at_the_end_of_the_inner_statement", func(t *testing.T) {
+		// A statement inside a block is abandoned up to its own end, not to the
+		// end of the statement that holds the block: the `}` of the block ends it
+		// (and is left for the block), and so does a `;`. The skip counts the
+		// brackets of the tokens it passes, not those that enclose the statement.
+		over := plusChain(1025)
+		overAt := uint32(strings.LastIndex(over, "+")) // the 1025th operator
+		rows := []struct {
+			name, src string
+			want      string
+			inner     uint32 // where the text of the statement starts, to place the E0205
+		}{
+			// The `}` ends the inner statement, and the call goes on to its `, 2)`.
+			{"call argument that is a block", "f({ " + over + " }, 2) + 3", "(+ (call f (block (error)) 2) 3)", uint32(len("f({ "))},
+			// The `;` ends it, and the block goes on to `y`.
+			{"statement of a block", "{ x; " + over + "; y }", "(block (expr x) (expr (error)) y)", uint32(len("{ x; "))},
+			// The same two, one block deeper.
+			{"nested block", "{ { " + over + " } ; y }", "(block (expr (block (error))) y)", uint32(len("{ { "))},
 		}
-		r.p.skipStatement()
-		r.wantAt(t, "after a closed brace", Semi, uint32(strings.Index(closed, ";")))
+		for _, row := range rows {
+			r := newExprRun(t, row.src)
+			e := r.p.expr(0)
+			lo := row.inner + overAt
+			wantOnlyDiag(t, row.name, r.sink, tooLongDiag(r.file, lo, lo+1))
+			wantText(t, row.name, r.sexpr(e), row.want)
+			r.wantAt(t, row.name, Eof, uint32(len(row.src)))
+		}
 	})
 }

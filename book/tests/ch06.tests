@@ -132,10 +132,10 @@ ref:     TestParser/spans
 kind:    unit (go test)      file: internal/syntax/parser_test.go
 case:    45 fuentes mal formadas: cortadas en varios puntos de una firma o de un atributo, con un solo token que falta en un item que de otro modo sería correcto, con tokens que no pueden empezar un item, con una coma de más en los parámetros y con un tipo escrito en minúscula; que el parser sigue leyendo items después de un error; y que una lista que falla no deja nada en su pool
 input:   `fn`, `fn f(x:`, `#[a("x",`, `# a] fn f() {}`, `#[a fn f() {}`, `fn f x) {}`, `pub f() {}`, `1`, `)`, `fn f(x,) {}`, `fn f(x: int) {}`, `fn f() {}}`… (45 fuentes en total, todas en el test); además `1 fn g() {}` y `fn f( fn g() {}`; y, para los pools, `#[a] # a`, `#[a] #[`, `#[a] #[b(1)]`, `#[a] #[b("x"` y `#[a] #[b` (atributos) y `fn f(x,) {}` (parámetros)
-expect:  para cada una de las 45 fuentes, `Parse` vuelve; el texto de `PrintModule` contiene `(error)`; se informa de al menos un E0201; y los items, de uno en uno, tienen un span del fichero, que no acaba antes de empezar, que empieza donde acabó el item anterior o más tarde y que no pasa del final del fichero. No se comprueba ningún otro diagnóstico ni cuántas veces se informa. `1 fn g() {}` y `fn f( fn g() {}` dan exactamente `(error)`, un salto de línea, `(fn g (params) (ret _) (block))` y otro salto de línea: el item que viene detrás del error se lee entero. Y tras cada una de las cinco fuentes de atributos el pool de atributos está vacío, y tras `fn f(x,) {}` el de parámetros también
+expect:  para cada una de las 45 fuentes, `Parse` vuelve; el texto de `PrintModule` contiene `(error)`; se informa de al menos un E0201, un E0202 (un delimitador que el fichero acaba sin cerrar) o el E0104 del lexer (el de `fn f() $`, cuyo error es un carácter que no es de Ki); y los items, de uno en uno, tienen un span del fichero, que no acaba antes de empezar, que empieza donde acabó el item anterior o más tarde y que no pasa del final del fichero. No se comprueba ningún otro diagnóstico ni cuántas veces se informa. `1 fn g() {}` y `fn f( fn g() {}` dan exactamente `(error)`, un salto de línea, `(fn g (params) (ret _) (block))` y otro salto de línea: el item que viene detrás del error se lee entero. Y tras cada una de las cinco fuentes de atributos el pool de atributos está vacío, y tras `fn f(x,) {}` el de parámetros también
 why:     un fichero roto no debe colgar el parser, ni hacerlo leer más allá del último token, ni darle un árbol
          que parezca un programa correcto: un `(error)` en el volcado es lo que se ve en lugar de un hueco, y
-         el E0201 es lo que ve el usuario (un nodo de error sin diagnóstico sería un programa roto que
+         el diagnóstico es lo que ve el usuario (un nodo de error sin diagnóstico sería un programa roto que
          `ki check` daría por bueno). Las filas a las que les falta un solo token en medio de un item que
          sería correcto (`#[a fn f() {}`, `fn f x) {}`, `pub f() {}`) existen porque un parser que ignorara
          ese token daría por bueno el item y dejaría un árbol sin ningún `(error)`; las cortadas al final
@@ -430,8 +430,7 @@ why:     el `)` o el `}` que un operando que falta deja sin tocar es el de la ll
          contiene: si el parser lo comiera, el error de una sola expresión desordenaría todo lo que hay
          alrededor. Las demás filas comprueban que cada bucle consume algo o termina, porque un bucle que no
          lo hiciera colgaría la prueba. Los E0201 de estas fuentes los mira `TestParseStmt/e0201_sites`;
-         aquí solo cuentan el árbol y el cursor, y la recuperación de la sesión siguiente puede cambiar lo
-         que se imprime
+         aquí solo cuentan el árbol y el cursor
 ref:     TestParseExpr/malformed_input_still_parses
 
 [T06.42] expr.chain_counts_calls                           level: core
@@ -459,19 +458,22 @@ input:   "1" seguido de 513 veces " - -1": 513 restas, cada una con un prefijo e
 expect:  en la primera, el árbol entero, `(- (- … 1 (neg 1)) … (neg 1))` con 513 niveles, y ningún diagnóstico; en la segunda, con 24 (1000 llamadas y 24 sumas, 1024 en total), el árbol entero y ningún diagnóstico; con 25 (1025 en total), exactamente un diagnóstico, el error E0205 con el primario en el último `+`, la expresión `(error)` y el cursor en el `Eof`
 why:     513 binarios y 513 prefijos son 1026 operadores, pero 513 en la cadena: si los prefijos contaran se
          informaría de un E0205 que no corresponde. Los prefijos tienen su propio límite, el del
-         anidamiento, en otra sesión. Y el operando de un prefijo no abre una cuenta nueva: si la abriera, una
+         anidamiento (`TestRecover/nesting_limit_of_each_construct`). Y el operando de un prefijo no abre una cuenta nueva: si la abriera, una
          cadena larga escondida detrás de un `-` o de un `!` se saltaría el límite
 ref:     TestParseExpr/chain_ignores_prefix_operators
 
 [T06.45] expr.chain_skips_to_statement_end                 level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    tras E0205 el parser salta lo que queda de la sentencia y deja el cursor en el token que la termina, sin consumirlo
-input:   11 filas con una cadena de 1025 operadores seguida de `; x`, de un salto de línea, de ` + 1 + 1;`, de ` + 1 }` o del final del fichero; la cadena dentro de una llamada o de unos paréntesis, con el resto de la sentencia detrás del `)`; una llamada sin cerrar; llaves (anidadas, con `;` y saltos de línea dentro) abiertas en el texto que se salta; y una sentencia dentro de un bloque, `{ ` + cadena + `; y }`
-expect:  en cada fila exactamente un diagnóstico, el E0205, la expresión `(error)` y un nodo de error que cubre desde el primer token de la expresión hasta el final del último token saltado; el cursor queda en el `;`, el salto de línea (`Newline`), el `}` o el `Eof` que termina la sentencia: los `;` y los saltos de línea que están dentro de llaves no la terminan, un `}` que no cierra ninguna llave abierta en el texto sí, y el `{` del bloque que contiene la sentencia no cuenta como suyo
+input:   12 filas con una cadena de 1025 operadores seguida de `; x`, de un salto de línea, de ` + 1 + 1;`, de ` + 1 }` o del final del fichero; la cadena dentro de una llamada o de unos paréntesis, con el resto de la sentencia detrás del `)`; una llamada sin cerrar; una llamada cuyo `(` es el que pasa el límite (1024 sumas y `(a; b) + 1; x`), con un `;` dentro del paréntesis; llaves (anidadas, con `;` y saltos de línea dentro) abiertas en el texto que se salta; y una sentencia dentro de un bloque, `{ ` + cadena + `; y }`
+expect:  en cada fila exactamente un diagnóstico, el E0205, la expresión `(error)` y un nodo de error que cubre desde el primer token de la expresión hasta el final del último token saltado; el cursor queda en el `;`, el salto de línea (`Newline`), el `}` o el `Eof` que termina la sentencia: los `;` y los saltos de línea que están dentro de llaves no la terminan, y tampoco el `;` de dentro del paréntesis de la llamada cuyo `(` pasó el límite (el cursor queda en el `;` de después), un `}` que no cierra ninguna llave abierta en el texto sí, y el `{` del bloque que contiene la sentencia no cuenta como suyo
 why:     la sentencia siguiente tiene que leerse desde un sitio sensato: si el parser parara antes, el resto de
          la cadena se leería como otra sentencia y daría errores de más; si consumiera el terminador, se
          comería el `;` o el `}` que otro necesita. Y si no contara las llaves abiertas en la sentencia, o
-         contara la del bloque, pararía en un `;` de dentro o se saltaría el final de la sentencia
+         contara la del bloque, pararía en un `;` de dentro o se saltaría el final de la sentencia. Y el `(` que
+         pasa el límite se deja donde está, sin consumirlo: si el parser lo leyera antes de contarlo, el salto
+         no sabría que ese paréntesis está abierto y pararía en el `;` de dentro, y el resto de la llamada
+         se leería como otra sentencia
 ref:     TestParseExpr/chain_skips_to_statement_end
 
 [T06.46] expr.chain_overflow_at_a_comparison               level: core
@@ -482,7 +484,10 @@ expect:  en la primera exactamente un diagnóstico, el E0205 con el primario en 
 why:     el parser deja sin consumir el operador que pasó el límite, y al deshacerse las llamadas las funciones
          que lo leían se lo encuentran. Si la comparación de fuera lo tomara por el segundo operador de una
          cadena se añadiría un E0203 falso, y si el bucle que lee el resto de una cadena lo contara otra vez
-         saldría un segundo E0205, y la cadena debe dar uno solo
+         saldría un segundo E0205, y la cadena debe dar uno solo. Desde la sesión 4, la supresión de errores
+         cercanos esconde esos dos errores falsos, porque caen sobre el mismo token que el E0205, a distancia
+         0: esta prueba ya no distingue un parser que los produce de uno que no, y fija lo que se ve, que son
+         los diagnósticos exactos, el `(error)` y el cursor en el `Eof`
 ref:     TestParseExpr/chain_overflow_at_a_comparison
 
 [T06.47] expr.chain_counter_restarts                       level: core
@@ -498,32 +503,38 @@ ref:     TestParseExpr/chain_counter_restarts
 [T06.48] expr.chained_comparison_counts_toward_chain       level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    los operadores que el parser lee para pasar una cadena de comparaciones cuentan en el límite como los demás
-input:   "1" + 1022 × " + 1" + " < 1 < 1 < 1": 1022 sumas y tres comparaciones
-expect:  exactamente dos diagnósticos, por este orden: el E0203 en el segundo `<` y el E0205 en el tercero, que es el operador 1025; la expresión se imprime `(error)` y el cursor queda en el `Eof`
+input:   "1" + 1021 × " + 1" + " < 1 < 1 + 1 + 1": 1021 sumas, dos comparaciones y dos sumas más
+expect:  exactamente dos diagnósticos, por este orden: el E0203 en el segundo `<` y el E0205 en la última suma, que es el operador 1025 y está cuatro tokens después del segundo `<`; la expresión se imprime `(error)` y el cursor queda en el `Eof`
 why:     los operadores que se leen al recuperarse de un E0203 son operadores de la expresión: si no se contaran,
-         una cadena de comparaciones larga escaparía al límite que el árbol necesita
+         una cadena de comparaciones larga escaparía al límite que el árbol necesita. El E0205 está a cuatro
+         tokens del E0203 a propósito: a menos de tres, la regla que suprime los errores cercanos
+         (`TestRecover/suppression_at_distance_two`) lo callaría y la prueba no vería si el parser lo contó
 ref:     TestParseExpr/chained_comparison_counts_toward_chain
 
 [T06.49] expr.nested_expr_keeps_outer_count                level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
-case:    una expresión de sentencia que se lee en medio de otra tiene su propia cuenta y deja la de la otra como estaba
-input:   un parser al que la prueba pone a mano el estado de una expresión de fuera: con 1024 operadores ya contados lee `1 + 1`, con la marca de «demasiado larga» ya puesta lee `1 + 1`, y con 5 contados lee una cadena de 1025
-expect:  las dos primeras dan `(+ 1 1)` sin diagnósticos; la tercera da `(error)` con exactamente un E0205; y en las tres el estado de la expresión de fuera, su principio, su cuenta y su marca de «demasiado larga», es el que era
-why:     un bloque dentro de una expresión (`1 + if c { … }`) tiene sentencias, y cada una es una expresión de
-         sentencia: si su cuenta se sumara a la de fuera, un programa largo y legal daría E0205; si heredara la
-         marca de «demasiado larga» de la de fuera, se abandonaría sin decir nada; y si una sentencia demasiado
-         larga dejara la marca puesta, la expresión que la rodea se abandonaría con ella
+case:    una sentencia dentro de un bloque que es parte de una expresión tiene su propia cuenta de operadores y llamadas, y la expresión de fuera sigue con la suya al salir del bloque
+input:   tres expresiones con un bloque en medio: 1023 sumas, ` + { ` y 1024 sumas, ` }`; 1023 sumas, ` + { 1 + 1 } + 1`; y `1 + 1 + 1 + 1 + 1 + { ` seguido de 1025 sumas y de ` } + 1`
+expect:  la primera, el árbol entero y ningún diagnóstico; la segunda, exactamente un E0205, en la última `+` (la 1025 de la expresión de fuera: las 1023, la que va delante del bloque y esa), la expresión `(error)` y el cursor en el `Eof`; la tercera, exactamente un E0205, en la última suma del bloque, el texto `(+ (+ <1 + 1 + 1 + 1 + 1> (block (error))) 1)` con las cinco primeras sumas anidadas como siempre, y el cursor en el `Eof`
+why:     un bloque dentro de una expresión (`1 + { … }`) tiene sentencias, y cada una es una expresión de
+         sentencia: si su cuenta se sumara a la de fuera, un programa largo y legal daría E0205 (primera
+         fuente); si al volver del bloque la cuenta de fuera fuera la del bloque, o la del bloque se hubiera
+         perdido, la segunda no daría el error donde debe; y si una sentencia demasiado larga dejara puesta
+         la marca de «abandonada», la expresión que rodea al bloque se descartaría con ella (tercera). La
+         regla es que cada expresión de sentencia empieza de cero, también la de un bloque anidado, y la
+         de fuera se restaura
 ref:     TestParseExpr/nested_expr_keeps_outer_count
 
-[T06.50] expr.skip_statement_counts_consumed_braces        level: core
+[T06.50] expr.skip_stops_at_the_end_of_the_inner_statement level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
-case:    el salto cuenta las llaves que la sentencia ya había abierto antes de empezar a saltar, y no las del bloque que la contiene
-input:   tres fuentes con el cursor movido a mano a mitad de una sentencia: `{ x ; y } ; z` con `{ x` ya leído y el principio de la sentencia en el primer token; `{ x ; y }` con `{ x` leído y el principio de la sentencia en `x`; y `{ x } ; y` con `{ x }` ya leído y el principio de la sentencia en el primer token
-expect:  el cursor para en el segundo `;` de la primera (el de dentro de las llaves no termina la sentencia), en el `;` de la segunda (la llave abierta antes de la sentencia no es de ella) y en el `;` de la tercera (una llave abierta y cerrada ya no cuenta)
-why:     sin esta cuenta, una sentencia que estuviera a medias dentro de un bloque no sabría que sigue dentro
-         de él y se saltaría el final de la sentencia; y contar de más, desde el `{` del bloque, haría lo mismo
-         por el otro lado. La prueba mueve el cursor a mano a ese punto
-ref:     TestParseExpr/skip_statement_counts_consumed_braces
+case:    una sentencia de un bloque que se abandona por E0205 se salta hasta su propio final, no hasta el final de la sentencia que contiene el bloque
+input:   tres fuentes con 1025 sumas en una sentencia de un bloque: como argumento de una llamada (`f({ ` cadena ` }, 2) + 3`), como sentencia de un bloque entre otras (`{ x; ` cadena `; y }`) y en un bloque dentro de otro (`{ { ` cadena ` } ; y }`)
+expect:  en cada una exactamente un E0205, en el operador 1025 de la cadena, el cursor en el `Eof` y estos volcados: `(+ (call f (block (error)) 2) 3)`, `(block (expr x) (expr (error)) y)` y `(block (expr (block (error))) y)`
+why:     el `}` o el `;` que acaba la sentencia de dentro lo necesita el bloque que la contiene (y la llamada
+         necesita su `, 2)`): si el salto solo parara en el final de la sentencia de fuera, se comería todo
+         eso y lo que sigue saldría como error. El salto cuenta los delimitadores de los tokens que pasa, no los
+         que rodean a la sentencia
+ref:     TestParseExpr/skip_stops_at_the_end_of_the_inner_statement
 
 [T06.51] stmt.block_tail_expression                        level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
@@ -607,8 +618,8 @@ input:   cinco fuentes: `fn f() { let x }`, `fn f() { let x` seguido de un salto
 expect:  el primer diagnóstico de cada una es un E0201 con exactamente este mensaje: «expected `=`, found `}`», «expected `=`, found newline», «expected `=`, found end of file», «expected identifier, found `1`» y «expected item, found `let`». Lo que se informa después del primero no se comprueba
 why:     el mensaje es lo único que el usuario lee de un error de sintaxis, y el token hallado tiene tres
          formas distintas según sea un token, el salto de línea que inserta la regla de línea o el final del
-         fichero. Tras el primer error el parser sigue en el token siguiente (la recuperación llega en otra
-         sesión), así que `let x = 1` arriba del todo da varios errores, uno por token, y solo el primero se fija
+         fichero. Lo que el parser informa después del primer error y lo que salta lo fija `TestRecover`, no
+         esta prueba
 ref:     TestParseStmt/found_token_descriptions
 
 [T06.60] stmt.block_statement_forms                        level: core
@@ -663,14 +674,16 @@ ref:     TestParseStmt/if_forms
 
 [T06.65] stmt.if_condition_chain_limit                     level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
-case:    la condición de un `if` es una expresión con su propia cuenta de operadores, y si pasa del límite se abandona toda la sentencia sin un segundo error; y la cuenta de la condición, o la de las sentencias de un bloque que es un operando, ni se suma a la de la expresión que las rodea ni la altera
-input:   `fn f() { if ` + 1024 o 1025 sumas + ` { x } else { y } }`; el mismo `if` como `else if` de otro; y `1 + if ` + 1025 sumas + ` { x }` como cola; y, como cola, 600 sumas + ` + if ` + 600 sumas + ` { x } else { y } + 1` y 600 sumas + ` + { ` + 600 sumas + ` } + 1`
-expect:  con 1024, el árbol entero y ningún diagnóstico; con 1025, exactamente un diagnóstico, el E0205 en el operador 1025, el `if` convertido en un solo nodo de error que va desde el `if` hasta el `}` de la rama `else` (la cola del bloque), y ningún E0201; en los otros dos casos también un solo E0205 y el nodo de error en su sitio (`(if a (block 1) (error))` y `(+ 1 (error))`); y en las dos últimas, el árbol entero y ningún diagnóstico
+case:    la condición de un `if` es una expresión con su propia cuenta de operadores, y si pasa del límite se abandona toda la sentencia que la contiene, sin un segundo error; y la cuenta de la condición, o la de las sentencias de un bloque que es un operando, ni se suma a la de la expresión que las rodea ni la altera
+input:   `fn f() { if ` + 1024 o 1025 sumas + ` { x } else { y } }`; con 1025 sumas en la condición, el mismo `if` como `else if` de otro, como operando de una suma (`1 + if …`), como condición de otro `if`, como argumento de una llamada (`g(if …, 2)`) y entre paréntesis (`(if …)`); y, como cuerpo de la función, 600 sumas + ` + if ` + 600 sumas + ` { x } else { y } + 1`, y 600 sumas + ` + { ` + 600 sumas + ` } + 1`
+expect:  con 1024, el árbol entero y ningún diagnóstico; con 1025, en todos los casos exactamente un diagnóstico, el E0205 en el operador 1025, y ningún E0201; el cuerpo de la función queda como `(block (error))`, y en el primer caso ese nodo de error va desde el `if` hasta el `}` de la rama `else` (la cola del bloque); y con las 600 de delante, las 600 de dentro y el `+ 1` de detrás, el árbol entero y ningún diagnóstico, con la condición y con el bloque
 why:     tras el E0205 el parser salta lo que queda de la sentencia, y eso incluye las ramas del `if`: si
-         después buscara el `{` que falta, saldría un E0201 que es mentira. Y la condición lleva un contador
-         propio, como cada expresión de sentencia. Las dos últimas fuentes fijan que esa cuenta propia lo es en los dos
-         sentidos: con 601 operadores delante, 600 dentro y uno detrás (1202 en total) no hay error, así
-         que ni la cuenta de fuera entra en la de dentro, ni la de dentro se queda en la de fuera al salir
+         después buscara el `{` que falta, saldría un E0201 que es mentira. Lo mismo vale para lo que rodea
+         al `if` (el `if` de fuera, la suma, la llamada, los paréntesis): lo que esperaban ya se saltó con el
+         resto de la sentencia, así que se abandonan con la condición. Y la condición tiene su cuenta, y el
+         bloque que es un operando también, en los dos sentidos: con 601 operadores delante, 600 dentro y uno
+         detrás (1202 en total) la fuente es legal, así que ni la cuenta de fuera entra en la de dentro ni la
+         de dentro se queda en la de fuera al salir
 ref:     TestParseStmt/if_condition_chain_limit
 
 [T06.66] stmt.chain_limit_per_statement                    level: core
@@ -711,41 +724,415 @@ ref:     TestParseStmt/spans
 [T06.69] stmt.e0201_sites                                  level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
 case:    cada sitio donde el parser necesita un token y no lo encuentra da un E0201 con su mensaje y su posición
-input:   44 fuentes, una o más por cada palabra del mensaje: `expression` (`fn f() { 1 + }`, `fn f() { ; }`, `fn f() { g(,) }`…), `identifier` (`fn 1`, `fn f(1) {}`, `#[1] fn f() {}`…), `type` (`fn f(x: ) {}`, `fn f() -> {}`…), `=`, `)` (parámetros, grupos, llamadas, el tipo `()` y los atributos), `{` (un `if` sin bloque, también ante un salto de línea, y un `else` sin bloque), `}` (el fichero acaba dentro de un bloque), `newline`, `item` (tokens sueltos arriba del todo y tras atributos o `pub`) y los sitios de la firma y de los atributos que piden `[`, `]`, `(` o `string`
-expect:  el primer diagnóstico de cada fuente es exactamente el E0201 con ese mensaje y la etiqueta primaria sobre el token hallado: sus bytes, los del salto de línea (`\n`) o el punto vacío al final del fichero; nada más en el diagnóstico (ni etiqueta secundaria, ni nota, ni ayuda)
+input:   41 fuentes, una o más por cada palabra del mensaje: `expression` (`fn f() { 1 + }`, `fn f() { ; }`, `fn f() { g(,) }`…), `identifier` (`fn 1`, `fn f(1) {}`, `#[1] fn f() {}`…), `type` (`fn f(x: ) {}`, `fn f() -> {}`…), `=` (también ante el final del fichero: `fn f() { let x`), `)` (parámetros, grupos, llamadas, el tipo `()` y los atributos), `{` (un `if` sin bloque, también ante un salto de línea, y un `else` sin bloque), `newline`, `item` (tokens sueltos arriba del todo y tras atributos o `pub`) y los sitios de la firma y de los atributos que piden `[`, `]`, `(` o `string`
+expect:  el primer diagnóstico de cada fuente es exactamente el E0201 con ese mensaje y la etiqueta primaria sobre el token hallado: sus bytes, los del salto de línea (`\n`) o, si es el final del fichero, el span vacío que hay justo detrás del último byte; nada más en el diagnóstico (ni etiqueta secundaria, ni nota, ni ayuda)
 why:     un error de sintaxis tiene que decir qué se esperaba y qué se encontró, y señalar el sitio exacto:
          si dijera `item` donde esperaba un `type`, o subrayara el token anterior al que falla, el usuario
          buscaría el fallo donde no está. Cada fila mata a un parser que se calla en ese sitio, que usa otra
-         palabra o que señala otro token
+         palabra o que señala otro token. La del final del fichero mata, además, al que pone la etiqueta en
+         el último token leído o en un byte más allá del final. Un delimitador sin cerrar al final del
+         fichero no está aquí: da un E0202 (`TestRecover/unclosed_delimiters_E0202`); esa fila es un `let`
+         sin `=`, y de ella solo se mira el primer diagnóstico
 ref:     TestParseStmt/e0201_sites
 
 [T06.70] stmt.found_text_is_the_source_text                level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
 case:    el token hallado se cita como lo escribió el fichero, no por su valor ni por su clase
 input:   `fn f() { let ` seguido de `0xFF`, `1_000`, `1.5`, `'a'`, `"a\n"` (con la barra tal como se escribe), `"a${x}b"`, `true`, `X`, `_`, `==`, `->`, `|>` y `..`, y ` }`; y `fn f() { $ }`
-expect:  en cada una de las trece, el primer diagnóstico dice «expected identifier, found » y el texto escrito entre comillas invertidas (para la cadena con interpolación, solo `"a${`, su primer token); en `fn f() { $ }`, el E0104 del lexer primero y después el E0201 «expected expression, found `$`» sobre el `$`
+expect:  en cada una de las trece, el primer diagnóstico dice «expected identifier, found » y el texto escrito entre comillas invertidas (para la cadena con interpolación, solo `"a${`, su primer token); en `fn f() { $ }`, exactamente un diagnóstico, el E0104 del lexer
 why:     un `0xFF` citado como `255` no se reconoce en el fichero, y una clase como `Int` no dice nada al
          usuario. El texto sale de los bytes del fichero que guarda el `TokenBuffer`, sea cual sea el token,
-         también el que el lexer rechazó. (El `$` da dos errores, el del lexer y el del parser: quien decida
-         que el parser calle ante un `Error` lo cambia aquí)
+         también el que el lexer rechazó. (El `$` da un solo error, el del lexer: el parser no repite lo que el
+         lexer ya dijo, como fija `TestRecover/error_token_is_reported_once`)
 ref:     TestParseStmt/found_text_is_the_source_text
 
 [T06.71] stmt.recovery_in_blocks                           level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
 case:    qué hace el parser con un bloque que sale mal: el árbol que deja y todos los diagnósticos que informa
-input:   10 fuentes, como `fn f() { f() x }`, `fn f() { ) }`, `fn f() { ; }`, `fn f() { 1 + }`, `fn f() { (1 }`, `fn f() {`, `fn f() { 1`, `fn f() { let x = 1`, `fn f() { if a { 1 } else }` y `fn f() { 1 }}`
-expect:  el texto de `PrintModule` y la lista de mensajes de cada una, exactos: un token que sigue a una sentencia sin separador da «expected newline» y se queda para la sentencia siguiente; uno que no puede empezar una sentencia da «expected expression» y se descarta, sin un «expected newline» más; un `(` sin cerrar da «expected `)`, found `}`» y el `}` sigue cerrando el bloque; un bloque sin cerrar acaba en el final del fichero con «expected `}`, found end of file», y su última expresión es la cola pero un `let` no; y un `}` de más arriba del todo es un item de error
-why:     con la recuperación más simple (el error es un nodo y se sigue por el token siguiente) lo importante
-         es que cada fallo diga una vez lo que le pasa y que el bucle avance siempre. Cuando otra sesión
-         salte al final de la sentencia y suprima los errores cercanos, estas filas son las que cambian
+input:   12 fuentes, como `fn f() { f() x }`, `fn f() { ) }`, `fn f() { ; }`, `fn f() { 1 + }`, `fn f() { (1 }`, `fn f() {`, `fn f() { 1`, `fn f() { let x = 1`, `fn f() { if a { 1 } else }`, `fn f() { 1 }}`, `fn f() { f(1 2) }` y `fn f() { let = 1 }`
+expect:  el texto de `PrintModule` y la lista de mensajes de cada una, exactos y con un solo mensaje en todas: un token que sigue a una sentencia sin separador da «expected newline» y se queda para la sentencia siguiente; uno que no puede empezar una sentencia da «expected expression» y la sentencia es un nodo de error; un `(` sin cerrar lo cierra el `}`; un bloque sin cerrar acaba en el final del fichero con «unclosed delimiter» (E0202), y su última expresión es la cola pero un `let` no; un `}` de más arriba del todo es un item de error; y el error dentro de `f(1 2)` y de `let = 1` es uno solo aunque queden tokens detrás
+why:     lo importante de la recuperación es que cada fallo diga una vez lo que le pasa y que el bucle avance
+         siempre. El salto en sí, y qué se informa cuando hay varios fallos juntos, lo fija `TestRecover`;
+         esta tabla es el resultado visible sobre los fallos corrientes de un bloque
 ref:     TestParseStmt/recovery_in_blocks
 
 [T06.72] stmt.malformed_blocks_terminate                   level: core
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
 case:    fuentes que fallan dentro de un bloque: cortadas en cada punto de un `if` y de un `let`, o con un token donde no toca
 input:   48 fuentes, como `fn f() { if a { 1 } else`, `fn f() { let x: Int =`, `fn f() { ) ) ) }`, `fn f() { ; ; }`, `fn f() { { { }`, `fn f() { let x = { }`, `fn f() { 1 = 2 }`, `fn f() { f(1 2) }` y `fn f() { 1 +\n}`
-expect:  para cada fuente, `module` vuelve con el cursor en el `Eof`, hay al menos un E0201 y los items, de uno en uno, tienen un span del fichero que no acaba antes de empezar, que empieza donde acabó el anterior o más tarde y que no pasa del final
+expect:  para cada fuente, `module` vuelve con el cursor en el `Eof`, hay al menos un E0201 o un E0202 y los items, de uno en uno, tienen un span del fichero que no acaba antes de empezar, que empieza donde acabó el anterior o más tarde y que no pasa del final
 why:     el bucle de un bloque tiene que consumir un token en cada vuelta o terminar, y una fuente rota que
          se tragara en silencio sería un programa que `ki check` da por bueno. Esta prueba no acota el
          tiempo con un reloj: si algún bucle no consumiera, la prueba no acabaría, y eso es lo que se ve
 ref:     TestParseStmt/malformed_blocks_terminate
+
+[T06.73] recover.missing_expression_E0201                   level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    una expresión que falta justo antes del `}` es un solo error, y el token hallado es ese `}`
+input:   "fn f() -> Int { 1 + }"
+expect:  exactamente un diagnóstico: el E0201 «expected expression, found `}`», con la etiqueta primaria sobre el `}` y nada más (ni etiqueta secundaria, ni nota, ni ayuda)
+why:     es el olvido más corriente al escribir una cuenta: un parser que además se quejara del `}` que viene
+         detrás, o que no dijera nada, dejaría al usuario con dos errores o con ninguno por una sola omisión
+ref:     TestRecover/missing_expression_E0201
+
+[T06.74] recover.unclosed_brace_E0202                       level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un fichero que acaba con un `{` sin cerrar da E0202 sobre el `{`, no sobre el final del fichero
+input:   "fn f() {"
+expect:  exactamente un diagnóstico: el E0202 «unclosed delimiter», con la etiqueta primaria sobre el `{` y el texto de la etiqueta «this `{` is never closed»; sin etiqueta secundaria, nota ni ayuda
+why:     el parser se da cuenta al llegar al final del fichero, pero el error está donde se abrió la llave: si
+         subrayara el final, el usuario tendría que buscar a mano cuál de las llaves del fichero es la que falta
+ref:     TestRecover/unclosed_brace_E0202
+
+[T06.75] recover.unclosed_paren_closed_by_brace             level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un `(` sin cerrar se da por cerrado al encontrar el `}` del bloque, con un solo error
+input:   "fn f() { (1 }"
+expect:  exactamente un diagnóstico, el E0201 «expected `)`, found `}`» sobre el `}`; y el volcado es `(fn f (params) (ret _) (block (error)))`, es decir, el `}` cierra también el bloque
+why:     si el `}` se tomara por parte del paréntesis, el bloque y la función quedarían abiertos hasta el final
+         del fichero y saldría un segundo error por el mismo olvido
+ref:     TestRecover/unclosed_paren_closed_by_brace
+
+[T06.76] recover.suppression_at_distance_two                level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un error a dos tokens del último que se informó no se informa
+input:   "fn f() { let =\nlet = }", donde los índices cuentan los tokens que no son Newline desde `fn` = 0
+expect:  exactamente un diagnóstico: el E0201 «expected identifier, found `=`» sobre el primer `=` (índice 6); el segundo `=` está en el 8, 8 - 6 = 2 < 3, y no se informa; el volcado es `(fn f (params) (ret _) (block (error) (error)))`
+why:     el spec (7.3) pide no emitir errores nuevos a menos de 3 tokens del anterior: un error que sale justo
+         después de otro casi siempre es el mismo error visto desde otro sitio, y repetirlo ensucia la pantalla
+         sin decir nada nuevo
+ref:     TestRecover/suppression_at_distance_two
+
+[T06.77] recover.no_suppression_at_distance_three           level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un error a tres tokens del último que se informó sí se informa
+input:   "fn f() { let =\nlet y }"
+expect:  exactamente dos diagnósticos, por este orden: el E0201 «expected identifier, found `=`» sobre el `=` (índice 6) y el E0201 «expected `=`, found `}`» sobre el `}` (índice 9), 9 - 6 = 3; el volcado es `(fn f (params) (ret _) (block (error) (let y _ (error))))`
+why:     es el otro lado del límite: un umbral que suprimiera también la distancia 3 (`<=` en vez de `<`) se
+         tragaría errores distintos que están a tres tokens de otro
+ref:     TestRecover/no_suppression_at_distance_three
+
+[T06.78] recover.suppression_counts_non_newline_tokens      level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    la distancia entre errores se cuenta en tokens que no son Newline
+input:   "fn f() { let =\n\n\n\n\nlet = }" (el lexer no pone ningún Newline tras un `=`, así que no tiene ninguno) y "fn f() { let x\n\n\nlet = }" (aquí sí hay un Newline entre los dos errores)
+expect:  en la primera, un diagnóstico, el E0201 «expected identifier, found `=`» sobre el primer `=` (índice 6), y el volcado `(block (error) (error))`. En la segunda, un diagnóstico, el E0201 «expected `=`, found newline» sobre el salto de línea, que está en el `x` (índice 6); el `=` del segundo `let` está en el 8, 8 - 6 = 2, y no se informa; el volcado es `(block (let x _ (error)) (error))`
+why:     un Newline no es un token del programa, sino una marca de la regla de línea: si contara, el mismo código
+         daría errores distintos según cómo se reparta en líneas. La primera fuente no tiene
+         ningún Newline entre los errores, así que no distingue nada; la segunda es la que hace que contarlos
+         cambie el resultado (con ellos, la distancia sería 3 y el segundo error saldría)
+ref:     TestRecover/suppression_counts_non_newline_tokens
+
+[T06.79] recover.nesting_at_limit_ok                        level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    256 paréntesis anidados caben; 257 son un error
+input:   "fn main() { let x = " + 256 × "(" + "1" + 256 × ")" + " }", y lo mismo con 257
+expect:  `MaxNesting` vale 256. Con 256, ningún diagnóstico y el volcado `(let x _ 1)`. Con 257, exactamente un diagnóstico, el E0204 «expression is nested too deeply» con la etiqueta primaria sobre el `(` número 257 del inicializador y la nota «the limit is 256», y el inicializador es `(error)`
+why:     el límite es una frontera, y las fronteras se rompen por uno: con `>` en vez de `==` o con 255 se
+         aceptaría una profundidad de más o se rechazaría una de menos, y un test que solo probara un valor muy
+         grande no lo vería
+ref:     TestRecover/nesting_at_limit_ok
+
+[T06.80] recover.deep_nesting_reports_E0204                 level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    diez mil paréntesis dan un solo E0204, y 257 con un `;` dentro también
+input:   "fn main() { let x = " + 10000 × "(" + "1" + 10000 × ")" + " }"; y "fn main() { let x = " + 257 × "(" + "a; b" + 257 × ")" + " }"
+expect:  con los diez mil, exactamente un diagnóstico, el E0204, con la etiqueta sobre el `(` número 257 del inicializador; el inicializador es `(error)`; el parser vuelve sin panic. Con los 257 y el `;`, lo mismo: exactamente un diagnóstico, el E0204 sobre el `(` 257, y el volcado de la función con un solo `let` cuyo inicializador es `(error)`, sin ninguna sentencia detrás: el `;` de dentro del paréntesis no termina la sentencia
+why:     sin el límite, cada paréntesis sería un nivel del árbol y una llamada más del parser y de todos los
+         pases que lo recorren; con el límite, la sentencia se abandona en el nivel 257 y los 9743 paréntesis
+         que quedan se saltan sin leerlos. El test comprueba el diagnóstico y el árbol, no la profundidad
+         de la pila de Go. Y el paréntesis que se rechaza se deja para el salto, sin consumirlo: si el parser
+         lo leyera antes de abandonar, el salto no sabría que está abierto y pararía en el `;` de dentro,
+         con un «expected newline, found `)`» que no es ningún error del programa
+ref:     TestRecover/deep_nesting_reports_E0204
+
+[T06.81] recover.recovers_to_next_item                      level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un error dentro de una función no estropea la función siguiente
+input:   "fn a() { ) }\nfn b() {}"
+expect:  el volcado contiene `(fn b (params) (ret _) (block))`; y exactamente un diagnóstico, el E0201 «expected expression, found `)`» sobre el segundo `)` del fichero (el primero es el de `a()`)
+why:     recuperarse es poder seguir: si el error de `a` arrastrara a `b`, un solo `)` de más estropearía todo
+         lo que viene detrás en el fichero
+ref:     TestRecover/recovers_to_next_item
+
+[T06.82] recover.error_nodes_print_as_error                 level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    el sitio de un error es un nodo `Error` que el volcado escribe como `(error)`
+input:   "fn f() { 1 + }"
+expect:  el volcado acaba en `(+ 1 (error))))` y es exactamente `(fn f (params) (ret _) (block (+ 1 (error))))`
+why:     el árbol sale completo aunque el programa esté roto, y los pases siguientes lo recorren sin comprobar
+         si falta algo; el `(error)` del volcado es lo que ves en `ki emit ast` en lugar de un hueco
+ref:     TestRecover/error_nodes_print_as_error
+
+[T06.83] recover.suppression_does_not_move_the_index        level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un error suprimido no mueve el punto desde el que se mide la distancia
+input:   "fn f() { let =\nlet =\nlet = }": errores en los `=` de tres `let`, índices 6, 8 y 10
+expect:  exactamente dos diagnósticos, los E0201 «expected identifier, found `=`» sobre el primer y el tercer `=`; el segundo (8 - 6 = 2) no se informa y el tercero sí (10 - 6 = 4); el volcado es `(block (error) (error) (error))`
+why:     si el error suprimido pasara a ser el último, el tercero se mediría desde él (10 - 8 = 2) y se
+         suprimiría también: una cadena de errores seguidos no se informaría nunca más allá del primero
+ref:     TestRecover/suppression_does_not_move_the_index
+
+[T06.84] recover.suppression_index_of_a_line_break          level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un error que se encuentra en un salto de línea está en el token al que sigue el salto, no en el siguiente
+input:   "fn f() { let =\nlet y\n}" y "fn f() { let =\nlet z w\n}"
+expect:  en la primera, un diagnóstico, el E0201 «expected identifier, found `=`» (índice 6); el segundo error se encuentra en el salto de línea tras la `y`, que tiene el índice de la `y` (8), 8 - 6 = 2, y no se informa; el volcado es `(block (error) (let y _ (error)))`. En la segunda, dos diagnósticos: el del `=` y el E0201 «expected `=`, found `w`» sobre la `w` (índice 9), 9 - 6 = 3
+why:     el salto de línea no se cuenta, así que el error que se encuentra en él tiene que medirse desde el
+         token anterior; medirlo desde el siguiente (el `}`, índice 9) lo pondría a distancia 3 y lo informaría
+         de más. La segunda fuente comprueba el otro lado: una vuelta más y el error sí se informa
+ref:     TestRecover/suppression_index_of_a_line_break
+
+[T06.85] recover.every_parser_error_is_suppressed           level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    la supresión vale también para los demás errores del parser, no solo para el E0201: un E0205 a dos tokens de un E0203 y un E0204 a dos tokens de un E0201 no se informan
+input:   "fn f() { 1" + 1022 × " + 1" + " < 1 < 1 < 1 }": el segundo `<` es una comparación encadenada y el tercero es el operador 1025; y "fn f() { " + 255 × "{ " + "a b { { } } " + 255 × "} " + "}": falta el separador antes de la `b`, y el segundo `{` de `b { { } }` pasa del límite de 256 niveles
+expect:  en la primera, exactamente un diagnóstico, el E0203 sobre el segundo `<`; el E0205 del tercero, a dos tokens, no se informa; la sentencia sigue abandonada, y el volcado es `(fn f (params) (ret _) (block (error)))`. En la segunda, exactamente un diagnóstico, el E0201 «expected newline, found `b`» sobre la `b`; el E0204 del segundo `{`, a dos tokens de la `b`, no se informa (el volcado de esta no se mira)
+why:     la regla es del parser entero: un E0205 pegado a un E0203, o un E0204 pegado a un E0201, es el mismo
+         problema. Que se calle no cambia lo que el parser hace con la expresión, solo lo que ve el usuario. El
+         E0204 tiene su fila porque se informa por un sitio aparte del de los demás (al entrar en un nivel): un
+         parser que lo mandara al `DiagSink` sin pasar por la supresión no lo notaría ninguna de las otras filas
+ref:     TestRecover/every_parser_error_is_suppressed
+
+[T06.86] recover.statement_sync_stops_at_the_end_of_the_statement level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    tras un error dentro de una sentencia, el parser salta hasta el siguiente Newline o `;` que no esté dentro de delimitadores abiertos por lo que salta, un `}` que no cierre una llave abierta por lo que salta (aunque haya un `(` o un `[` abierto) o un `let` que empiece una línea fuera de esos delimitadores, y sigue desde ahí; un `let` dentro de esos delimitadores, o en medio de una línea, no acaba la sentencia y se salta con ella, también cuando él mismo es el error
+input:   19 fuentes con un solo error, el `)` donde debería haber una expresión tras `1 +`: el final por un salto de línea, por un `;` o por el `}` del bloque (con otra función detrás); el resto de la línea con más tokens; un `;` o un salto de línea dentro de paréntesis, corchetes o llaves, también anidadas; un `let` dentro de llaves (`{ let y = 2; y }`), dentro de paréntesis (`(let y = 2)`) o al principio de una línea dentro de llaves; un `let` que empieza una línea tras un `+` (la línea anterior no ha acabado) y un `let` en medio de una línea; cierres sin pareja (`) ) ]`); un `]` que no cierra un `(`; y un `(` o un `[` abierto que cierra el `}` del bloque. Y 3 fuentes con el `let` como error: `if let y = x { y } else { 0 }`, `foo(let x = 1)` y `let x = let y = 1`
+expect:  en cada una de las 19 exactamente un diagnóstico, el E0201 «expected expression, found `)`» sobre el segundo `)` del fichero (el primero es el de `f()`), y el volcado exacto de la fila: la sentencia rota acaba en su separador o en el `let` que empieza línea, lo que viene después se lee como siempre (el `g`, el `let y = 3` o la función siguiente) y el `}` del bloque no se consume; los `let` de dentro de delimitadores y el de en medio de la línea no llegan al árbol. En las 3 del `let` como error, exactamente un diagnóstico, el E0201 «expected expression, found `let`» sobre ese `let`, y el volcado exacto: `(block (if (error) (error)))`, `(block (error))` y `(block (let x _ (error)))`, sin la `y`
+why:     el sitio donde el parser vuelve a leer decide qué errores salen después: parar antes dejaría
+         tokens del error para la sentencia siguiente, y pasarse se comería sentencias buenas. Los
+         delimitadores se cuentan como los cuenta la regla de línea, para que el parser y el lexer
+         coincidan en dónde un salto de línea es solo un espacio; la excepción son las interpolaciones de
+         cadena que dejan un delimitador abierto, que el lexer cierra en el `StringTail` y el salto no, y
+         que ninguna fuente de esta prueba tiene, porque las cadenas aún no se leen. Los `let` fijan
+         cuándo acaba la sentencia: solo uno que empieza una línea y está fuera de esos delimitadores,
+         porque el lexer no pone ningún Newline delante de él si la línea anterior no ha acabado (tras un
+         `+` o un `=`), y sin esa parada el salto se comería la sentencia siguiente. Dentro de
+         delimitadores es parte de lo que se salta, y un salto que parase en él leería `let y = 2; y` como
+         sentencias del bloque de la función, cerraría ese bloque con un `}` que no era suyo, y lo que
+         queda saldría como un segundo error; y en medio de una línea también es parte de la línea rota.
+         Las tres últimas fuentes son el caso en que ese `let` es el propio error, que es lo que escribe
+         quien viene de Rust o de Swift (`if let`): un salto que parase en él leería `let y = x` como una
+         sentencia y daría tres errores, dos de ellos sobre texto correcto (el `{` y el `else`), o dos en
+         `foo(let x = 1)`, el segundo sobre el `)`. El precio es el de la última: el `let` que va detrás
+         de basura en la misma línea no llega al árbol, y su nombre tampoco. Cada fila mata un salto
+         distinto: el que mira solo las llaves se deja engañar por los paréntesis, y el que mira solo los
+         paréntesis, por las llaves
+ref:     TestRecover/statement_sync_stops_at_the_end_of_the_statement
+
+[T06.87] recover.sync_leaves_the_next_statement_alone       level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    lo que sigue a una sentencia rota se lee como siempre, y sus errores se informan si están lo bastante lejos
+input:   "fn f() {\n  let a = )\n  let b = 1\n  let c = )\n  b\n}"
+expect:  exactamente dos diagnósticos, los E0201 «expected expression, found `)`» sobre el segundo y el tercer `)` del fichero; el volcado es `(fn f (params) (ret _) (block (let a _ (error)) (let b _ 1) (let c _ (error)) b))`
+why:     un parser que al fallar tirara todo el bloque, o que siguiera suprimiendo, solo informaría del primer
+         error de cada función; aquí el `let b` bueno se conserva entre los dos errores
+ref:     TestRecover/sync_leaves_the_next_statement_alone
+
+[T06.88] recover.expected_newline_keeps_the_token           level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un token que sigue a una sentencia correcta sin separador se informa y empieza la sentencia siguiente, no se salta
+input:   "fn f() { f() x\n y }"
+expect:  exactamente un diagnóstico, el E0201 «expected newline, found `x`» sobre la `x`; el volcado es `(fn f (params) (ret _) (block (expr (call f)) (expr x) y))`
+why:     la sentencia anterior estaba bien: lo que falla es el separador, y la `x` es el principio de otra
+         sentencia. Si el parser saltara como tras un error dentro de la sentencia, se perdería la `x`
+ref:     TestRecover/expected_newline_keeps_the_token
+
+[T06.89] recover.item_sync_stops_at_the_next_item           level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    tras un error en un item, el parser salta hasta el siguiente `fn`, `pub`, `#`, `type`, `trait`, `impl`, `effect` o `import` que no esté dentro de delimitadores abiertos por lo que salta
+input:   8 fuentes: "1 2 3 4 fn g() {}", lo mismo con `pub` y con `#[a] fn`; "fn f(x y) {}\nfn g() {}"; "1 { fn g() {} } 2 3 fn h() {}" y lo mismo con paréntesis y con corchetes; y "} ) ] fn g() {}"; después, para cada una de `type`, `trait`, `impl`, `effect` e `import`, "1 2 3 4 PALABRA 5 6" y "1 { PALABRA } 2 3 4 fn g() {}"
+expect:  en las ocho, exactamente un diagnóstico y el volcado exacto de la fila: un `(error)` y el item que sigue, leído como siempre; los cierres sin pareja se saltan como cualquier token. En "1 2 3 4 PALABRA 5 6", exactamente dos diagnósticos, «expected item, found `1`» y «expected item, found `PALABRA`», y el volcado `(error)` dos veces: la palabra para el salto, pero el parser aún no sabe leer ese item. En "1 { PALABRA } 2 3 4 fn g() {}", un solo diagnóstico y el volcado `(error)` y `fn g`: dentro de llaves la palabra no para el salto
+why:     el salto se detiene donde puede empezar algo que se sabe leer: si no parara en `pub` o en `#`
+         perdería items buenos, y si parara dentro de unas llaves leería el cuerpo de una función como items
+ref:     TestRecover/item_sync_stops_at_the_next_item
+
+[T06.90] recover.unclosed_delimiters_E0202                  level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un `{`, `(` o `[` abierto al llegar al final del fichero es E0202 sobre el delimitador, en cada sitio donde el parser deja uno abierto
+input:   15 fuentes: `fn f() {`, el mismo bloque con una expresión, con un `let` o con un `if` ya cerrado, un `if` o un `else` con la llave abierta, un bloque dentro de otro, un paréntesis de grupo, de llamada y de una llamada dentro de otra, el de una lista de parámetros, el de un tipo de retorno `-> (` y el de un tipo de parámetro, el `[` de un atributo y el `(` de sus argumentos; dos más, "fn f() { (if " y "fn f() { g(if " seguidos de 1025 sumas y de ` { x } else { y }`, sin cerrar nada; y cuatro fuentes cuyo delimitador cierra otro token: "fn f() { (1 }", "fn f() { g(1 }", "fn f(x }" y "#[a }"
+expect:  en las quince, exactamente un diagnóstico: el E0202 «unclosed delimiter» sobre el delimitador que se muestra, con la etiqueta «this `X` is never closed» (siempre el más interior: los de fuera se notan en el mismo token y quedan suprimidos). En las dos de las sumas, dos diagnósticos: el E0205 en el operador 1025 y el E0202 sobre el `{` de la función; el paréntesis queda abandonado con el E0205 y no se informa; el volcado es `(fn f (params) (ret _) (block (error)))`. En las cuatro últimas, ningún E0202
+why:     un E0202 sobre el final del fichero obligaría a buscar a mano qué se dejó abierto; y si un paréntesis
+         que otro token cierra diera E0202 en vez de E0201, el mensaje diría que falta el final del fichero
+         cuando el fallo está en el `}` de antes
+ref:     TestRecover/unclosed_delimiters_E0202
+
+[T06.91] recover.error_token_is_reported_once               level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un carácter que el lexer rechaza se informa una vez, por el lexer; el parser se recupera y no lo repite
+input:   6 fuentes con un `$`: como expresión, como operando de una suma, como nombre de un `let`, donde iría el `)` de una llamada, como item y dentro de los paréntesis de una firma; y "fn f() { $; 1 + }"
+expect:  en las seis, exactamente un diagnóstico, el E0104 del lexer, y el volcado exacto de la fila. En "fn f() { $; 1 + }", exactamente dos: el E0104 y el E0201 «expected expression, found `}`» del `1 +`, y el volcado `(fn f (params) (ret _) (block (expr (error)) (+ 1 (error))))`
+why:     un solo carácter malo no puede dar dos mensajes, el del lexer y otro del parser con el mismo texto;
+         pero el silencio es para ese token: un error del parser después de él se sigue informando
+ref:     TestRecover/error_token_is_reported_once
+
+[T06.92] recover.nesting_limit_of_each_construct            level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    cada construcción que anida cuenta un nivel: paréntesis, argumento de llamada, operando de un prefijo, bloque, condición de un `if`, rama `then`, rama `else` y `else if`
+input:   nueve formas de anidar: paréntesis (también con un `()` en el fondo), `f(`, los prefijos `-` y `!` alternados, `{ x; `, `if`, `if t { `, `if t { 1 } else { ` y una cadena de `else if`, con 256, 257 y 10000 niveles alrededor de un `1`
+expect:  con 256 niveles, ningún diagnóstico y el volcado tal como se escribió. Con 257 y con 10000, exactamente un diagnóstico, el E0204 con la nota «the limit is 256» y la etiqueta sobre el primer token que se lee a profundidad 257 (los desplazamientos exactos, uno por forma, los fija la tabla del test), y el volcado de la sentencia con un `(error)`: el inicializador entero, o, donde el nivel que se rechaza está dentro de un bloque, la sentencia de ese bloque
+why:     un límite que se olvida de una construcción es un agujero: 10 000 `if t { …` anidados o 10 000 `- `
+         darían un árbol tan hondo como el de los paréntesis. Cada fila mata al parser que no cuenta su
+         construcción, o que la cuenta con otro límite
+ref:     TestRecover/nesting_limit_of_each_construct
+
+[T06.93] recover.nesting_levels_of_different_constructs_add_up level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    las construcciones distintas comparten un solo contador de profundidad
+input:   un paréntesis, una llamada, un bloque y un prefijo, por turnos, hasta 256 y hasta 257 niveles en total, alrededor de un `1`
+expect:  con 256, ningún diagnóstico y ningún `(error)` en el volcado; con 257, exactamente un diagnóstico, un E0204, y un `(error)` en el volcado
+why:     si cada construcción llevara su propio contador, nadie pasaría de 256 de cada una y el programa
+         podría anidar el cuádruple; lo que se limita es la profundidad del árbol, que es la suma
+ref:     TestRecover/nesting_levels_of_different_constructs_add_up
+
+[T06.94] recover.nesting_depth_is_released                  level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    salir de una construcción devuelve su nivel, ni uno menos ni uno más
+input:   siete fuentes con 300 construcciones una detrás de otra: paréntesis, argumentos de llamada, prefijos, bloques, `if`, `else if` y bloques de tres niveles; y un bloque con una de cada construcción (`()`, `(1)`, `f(1)`, `- 1`, `{ 1 }` y un `if` con `else if`) seguido de 256 y, en otra fuente, de 257 paréntesis
+expect:  las siete, ningún diagnóstico y ningún `(error)`. Tras una de cada construcción, 256 paréntesis no dan ningún diagnóstico ni `(error)`, y 257 dan exactamente un E0204 sobre el `(` número 257 de esa última sentencia, y un `(error)`
+why:     300 construcciones seguidas son 300 veces un nivel, no 300 niveles: un nivel que no se devuelve
+         acabaría dando E0204 a un programa largo y legal. Y uno que se devuelve dos veces deja la cuenta por
+         debajo de cero, y el límite sería 257 o más para lo que viene después
+ref:     TestRecover/nesting_depth_is_released
+
+[T06.95] recover.nesting_overflow_does_not_leak_depth       level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    una sentencia abandonada por E0204 no deja profundidad a la siguiente, ni de más ni de menos
+input:   "fn f() {\n let a = " + 257 paréntesis + " + 2 + 3\n let b = " + 256 paréntesis + "\n let c = " + 257 paréntesis + " + 2 + 3\n g\n}"
+expect:  exactamente dos diagnósticos, el E0204 sobre el `(` número 257 del primer `let` y el E0204 sobre el `(` número 257 del tercero; el volcado es `(fn f (params) (ret _) (block (let a _ (error)) (let b _ 1) (let c _ (error)) g))`
+why:     la sentencia se abandona en mitad de unos paréntesis que no llegan a cerrarse: si el nivel que
+         llevaban se quedara contado, el `let b`, que cabe justo, daría otro E0204; y si el desbordamiento
+         devolviera un nivel que nunca tomó, el límite subiría de 256 a 257 y el tercer `let` no daría el
+         suyo (las dos sentencias que desbordan están lo bastante lejos para que la supresión de errores
+         cercanos no esconda el segundo)
+ref:     TestRecover/nesting_overflow_does_not_leak_depth
+
+[T06.96] recover.nesting_counts_through_nested_blocks       level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    las sentencias de un bloque anidado empiezan a la profundidad del bloque, no a 0
+input:   "fn f() {\n let a = { " + 256 paréntesis + "1" + 256 paréntesis que cierran + "\n g }\n h\n}"; y lo mismo con 255
+expect:  con 256, exactamente un diagnóstico, el E0204 sobre el `(` número 256 de dentro del bloque (el bloque es el nivel 1), y el volcado `(block (let a _ (block (expr (error)) g)) h)`: la sentencia se abandona hasta su salto de línea y el bloque sigue con `g`. Con 255, ningún diagnóstico y `(block (let a _ (block (expr 1) g)) h)`
+why:     el bloque es un nivel y sus sentencias están dentro de él: si cada sentencia volviera a contar desde
+         0, `1 + { 1 + { … } }` escaparía del límite por la vía de los bloques. La regla es que la
+         profundidad empieza en 0 en la sentencia y cada bloque anidado suma 1
+ref:     TestRecover/nesting_counts_through_nested_blocks
+
+[T06.97] parser.emit_ast_golden                             level: core
+kind:    golden              file: tests/golden/ch06/fib_ast.ki
+case:    `ki emit ast` sobre la función `fib` con un `if` y dos llamadas recursivas
+expect:  sale con 0, stderr vacío y stdout exactamente una línea: `(fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))`
+why:     es el árbol de punta a punta: el binario completo, el lexer, el parser y el volcado. Es el formato
+         contra el que se escriben los goldens de los capítulos siguientes, y la función que va a ejecutar
+         el intérprete más adelante
+ref:     tests/golden/ch06/fib_ast.ki
+
+[T06.98] recover.three_errors                               level: core
+kind:    diag                file: tests/errors/ch06/three_errors.ki
+case:    `ki check` sobre un fichero con tres errores de sintaxis en tres funciones y una función correcta al final
+expect:  sale con 1 y los diagnósticos son exactamente tres E0201: en la línea 3, columna 14, en la 4, columna 21 y en la 5, columna 20; ninguno más
+why:     en este fichero cada función rota da un error y ninguno más: es lo que separa un parser que se
+         recupera de uno que acaba en el primer error o que da diez por cada uno. Los tres errores están a
+         12 y a 10 tokens de distancia, por encima del umbral de supresión, y `fn main() {}` al final
+         confirma que la recuperación llegó hasta el final del fichero
+ref:     tests/errors/ch06/three_errors.ki
+
+[T06.99] parser.fuzz_parse_properties                       level: core
+kind:    prop                file: internal/syntax/parser_fuzz_test.go
+case:    para cualquier entrada, `Parse` sobre los tokens de `Lex` no hace panic, `PrintModule` recorre el árbol que sale sin hacer panic y todo span del árbol y de los diagnósticos está dentro del fichero
+input:   las cuatro semillas: `fn main() {}`, `fn f() { (1 }`, `fn f() -> Int { 1 + }` y el texto de `tests/golden/ch06/fib_ast.ki`
+expect:  con `go test`, las cuatro semillas cumplen las propiedades (`go test -json` las lista como `FuzzParse/seed#0` a `FuzzParse/seed#3`): un span (el de un item, un atributo, un parámetro, un tipo, una sentencia o una expresión, sus spans de nombre y de operador, y las etiquetas de los diagnósticos) es de este fichero (que no es el primero de su `SourceManager`: su id es 1, no 0), empieza antes de acabar o donde acaba, y no pasa del final del fichero; un span vacío del todo se salta; y `PrintModule` recorre el árbol de cada semilla sin hacer panic, y el texto que devuelve no se mira. `go test ./internal/syntax -run=^$ -fuzz=FuzzParse -fuzztime=10s` busca entradas que las rompan
+why:     el parser lee lo que escribe cualquiera, roto de todas las maneras que nadie escribiría a mano, y todo
+         lo que viene después se fía de sus spans para dibujar los errores, y de sus ids y de sus listas para
+         bajar por el árbol. Los spans se comprueban pool por pool, sin seguir ningún id, así que un id que
+         no nombra ningún nodo o una lista que pasa del final de su pool, hechos por un camino de error raro,
+         pasarían sin que esa parte se enterase: por eso el fuzzer llama también a `PrintModule`, que baja
+         desde los items y hace panic al topar con uno. El fichero no es el primero del `SourceManager` para
+         que un span que perdiera su `File` (el valor cero) no pase por uno bueno. Un bucle que no consumiera
+         un token no volvería, y eso no lo caza el fuzzer, que se queda parado y no falla, sino el tiempo
+         máximo de `go test` (`-timeout`) sobre un test como `TestRecover/unclosed_brace_E0202`
+ref:     FuzzParse
+
+[T06.100] cli.emit_ast                                      level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki emit ast` imprime el árbol en stdout, también el de un fichero con errores, y informa de los errores en stderr; el parser se ejecuta aunque el lexer haya informado de un error; sus errores de uso son los de `emit tokens`; y un fichero con un byte que no es UTF-8 válido da su E0101 una sola vez
+input:   un fichero correcto con dos funciones (la primera `pub`, con un parámetro y un tipo de retorno); "fn f() -> Int { 1 + }" con `--diagnostics=short`; dos funciones, "fn a() { let x = $ }" y "fn b() -> Int { 1 + }", una por línea y con `--diagnostics=short`; `let x = ` seguido de un byte 0xFF, que no es UTF-8 válido; `emit ast` sin fichero; y `emit ast -h`
+expect:  el correcto: código 0, stderr vacío y stdout exactamente dos líneas, una por item. El roto: código 1, stdout `(fn f (params) (ret Int) (block (+ 1 (error))))` y stderr exactamente "<ruta>:1:21: error[E0201]: expected expression, found `}`". El de las dos funciones: código 1, stdout exactamente dos líneas, `(fn a (params) (ret _) (block (let x _ (error))))` y `(fn b (params) (ret Int) (block (+ 1 (error))))`, y stderr exactamente dos líneas, "<ruta>:1:18: error[E0104]: unexpected character `$`" y "<ruta>:2:21: error[E0201]: expected expression, found `}`". El del byte 0xFF: código 1, stdout vacío (Lex no lee un fichero que la revisión de los bytes rechaza, y su árbol no tiene items) y `error[E0101]` exactamente una vez en stderr. Sin fichero: código 2, stdout vacío y stderr «ki emit: missing FILE» y la línea «usage: ki emit tokens|ast [--diagnostics=human|short|json] FILE». Con `-h`: código 0, stderr vacío y stdout esa línea de uso
+why:     `ki emit ast` es lo que se mira para depurar el parser, y un fichero roto es cuando más hace falta: el
+         árbol con sus `(error)` tiene que salir aunque haya errores, y el código 1 solo después de escribirlo.
+         El `$` de la primera función es un error del lexer, y el comando no puede darse por vencido ahí: si
+         saltara el parser cuando el lexer ya informó, el árbol saldría vacío y la `b` rota ni se mencionaría,
+         un error por ejecución. Y `Lex` ya revisa los bytes del fichero: un comando que los revisara también
+         lo diría dos veces
+ref:     TestCLI/emit_ast
+
+[T06.101] recover.unclosed_brace_swallows_the_next_items    level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    una `{` que no se cierra deja dentro de su bloque a los items que vienen detrás: cada línea que empieza un item (con `#`, `pub` o `fn`) es un E0201 propio, además del E0202 de la llave, y ninguno llega al árbol; y con 100 funciones detrás el E0202 ya no sale, porque el límite de errores lo descarta, y con 99 sí
+input:   "fn a() {\n  1\n\nfn b() { 2 }\nfn c() { 3 }\n" (con saltos de línea reales); lo mismo con cinco funciones detrás, de `b` a `f`; lo mismo con dos items detrás, `b` con su atributo en una línea propia (`#[extern("k")]`, `pub fn b(x: Int)`, una línea en blanco y `fn c() { 2 }`); y lo mismo con 99 y con 100 funciones `fn g() { 2 }` detrás, una por línea
+expect:  con dos funciones detrás, exactamente tres diagnósticos, en el orden en que se informan: el E0201 «expected expression, found `fn`» sobre el `fn` de `b`, el mismo sobre el de `c` y el E0202 «unclosed delimiter» sobre la `{` de `a`; el volcado es `(fn a (params) (ret _) (block (expr 1) (expr (error)) (error)))`. Con cinco, un E0201 por cada una y el E0202, seis en total, y el módulo tiene un solo item. Con el atributo en su línea, exactamente cuatro diagnósticos: el E0201 «expected expression, found `#`» sobre el `#`, el de «found `pub`» sobre el `pub`, el de «found `fn`» sobre el `fn` de `c` y el E0202; el volcado es `(fn a (params) (ret _) (block (expr 1) (expr (error)) (expr (error)) (error)))` y el módulo tiene un solo item. Con 99, un E0201 por cada una y el E0202 en último lugar, cien errores en total, y el sumidero no se marca como truncado; con 100, exactamente 100 E0201, ningún E0202 y el sumidero truncado (`Truncated`). En las dos, el volcado es `(fn a (params) (ret _) (block (expr 1)`, tantos `(expr (error))` como funciones menos una y un `(error)`, y el módulo tiene un solo item
+why:     una llave que falta es el descuido más común, y esto es lo que cuesta: el parser no termina el bloque
+         en un `fn`, porque una función dentro de un bloque será una sentencia (una función local), así que
+         lo que viene detrás de la llave que falta se lee como sentencias de ese bloque, y cada línea que
+         empieza un item (con `#`, `pub` o `fn`), que todavía no sabe leer, da su propio error. «Un error, un
+         diagnóstico» vale por sentencia o por item, no por fichero. La prueba fija ese coste, con cinco
+         funciones para que se vea que crece con ellas; cuando el parser lea funciones locales, será ella la
+         que cambie a propósito. La fila del atributo en su propia línea, como se escribe el de una función
+         `extern`, deja ver que se cuenta por líneas y no por items: dos items dan tres E0201, y un bloque
+         que se cerrara en el `#` no daría ninguno de los tres, y uno que se cerrara en el `pub`, solo el
+         primero. El coste tiene además un techo: el E0202 se informa el último, al llegar al final del
+         fichero, y el sumidero se queda con los cien primeros errores, así que en cuanto los que se
+         informan antes que él llegan a cien (con cien funciones detrás de la llave, si el fichero no tiene
+         otro error) el usuario recibe cien «expected expression» y ni una palabra sobre la `}` que falta.
+         Las filas de 99 y de 100 fijan el borde exacto de ese caso, para que se vea lo que cuesta ese techo
+         y, si algún día el E0202 llega antes, sea esta prueba la que cambie a propósito
+ref:     TestRecover/unclosed_brace_swallows_the_next_items
+
+[T06.102] recover.if_brace_on_the_next_line                 level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    una `{` en la línea siguiente a la condición de un `if` no es su bloque: el `if` acaba en el salto de línea, y el bloque y su `else` son una sentencia aparte, con su propio error
+input:   "fn f() {\n  if x\n  { 1 } else { 2 }\n}" (con saltos de línea reales)
+expect:  exactamente dos diagnósticos, en el orden en que se informan: el E0201 «expected `{`, found newline» sobre el salto de línea que sigue a `x` y el E0201 «expected newline, found `else`» sobre el `else`; el volcado es `(fn f (params) (ret _) (block (expr (if x (error))) (expr (block 1)) (error)))`
+why:     la regla de línea pone un Newline detrás de `x`, así que el `if` se queda sin bloque justo donde lo
+         esperaba (el primer error), y la `{` de la línea siguiente abre una sentencia nueva: un bloque seguido
+         de un `else` que nadie espera (el segundo). Es el estilo de otros lenguajes, con la llave en su propia
+         línea, y un descuido cuesta dos errores; la prueba lo deja fijado, y si un día el parser busca la
+         llave en la línea siguiente, será ella la que cambie a propósito
+ref:     TestRecover/if_brace_on_the_next_line
+
+[T06.103] cli.emit_dump_before_diagnostics                  level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki emit tokens` y `ki emit ast` escriben el volcado antes que los diagnósticos: si stdout y stderr son el mismo escritor, primero sale el volcado y detrás los errores
+input:   `let x = 1` seguido de un byte 0x01 y un salto de línea, con `emit tokens`; y `fn f() -> Int { 1 + }` con `emit ast`
+expect:  para cada fichero, con un escritor para cada flujo: código 1 y algo escrito en stdout y en stderr; y con un solo escritor para los dos: código 1 y exactamente el contenido de stdout seguido del de stderr
+why:     en una terminal, o con `2>&1`, stdout y stderr se mezclan en el orden en que se escriben, y
+         `runCLI` recoge los dos flujos por separado, así que con él no se ve el orden. Si un comando
+         escribiera los diagnósticos antes que el volcado, `ki emit ast` sobre un fichero roto se leería
+         al revés: los errores primero, y lo que el parser entendió debajo de ellos. Los dos comandos
+         terminan en `finishEmit`, y la prueba mira los dos para que ninguno se salte la regla
+ref:     TestCLI/emit_dump_before_diagnostics
+
+[T06.104] recover.unclosed_paren_is_one_diagnostic          level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    un `(` que no se cierra cuesta un solo error aunque detrás haya varias sentencias en líneas propias; si lo que falta es el separador entre dos sentencias de la misma línea, sigue siendo un error
+input:   4 fuentes con el `)` que falta al final de una línea: una llamada `g(1` seguida de dos `let`, una llamada y una expresión final; un grupo `(1 + 2` seguido de dos `let` y una expresión; una llamada seguida de dos llamadas, que se saltan con la sentencia rota, de un `let` y de una expresión final; y la llamada `fib(10` en el `main` de un fichero con otra función, con tres sentencias y una expresión final detrás. Y 2 con dos `let` en la misma línea: `fn f() { let a = 1 let b = 2 }`, y `let b = 2 let c = 3` tras un `g(1` sin cerrar
+expect:  en cada una de las cuatro primeras exactamente un diagnóstico, el E0201 «expected `)`, found …» sobre el primer token que no es ni una coma ni un `)` (un `let`, o la `h` de la tercera), y el volcado exacto de la fila, con todas las sentencias de detrás en su sitio (en la tercera, sin las dos llamadas que se saltaron); en `let a = 1 let b = 2` exactamente un diagnóstico, el E0201 «expected newline, found `let`» sobre el segundo `let`, y el volcado exacto con las dos sentencias; y en la otra exactamente dos, el «expected `)`, found `let`» sobre el segundo `let` del fichero y el «expected newline, found `let`» sobre el tercero, con el volcado exacto
+why:     mientras un `(` sigue abierto la regla de línea no pone ningún Newline, hasta el `}` del bloque, así
+         que las sentencias de detrás llegan sin separador. Un parser que lo exigiera daría un «expected
+         newline» por cada una de ellas: cuatro errores en el fichero de diez líneas por un solo `)` que falta,
+         tres de ellos sobre líneas que están bien, y uno más por cada sentencia que se añadiera. El parser
+         toma como separador el salto de línea del fichero, aunque no haya Newline, y solo lo pide cuando no
+         hay ninguno, es decir, en la misma línea. Las filas de los dos `let` en una línea matan al parser que,
+         para arreglar lo de arriba, dejara de pedirlo delante de un `let` o después de un paréntesis roto;
+         las de una línea por sentencia, al que lo pidiera siempre, o solo tras un `let`, o solo tras una
+         expresión
+ref:     TestRecover/unclosed_paren_is_one_diagnostic
+
+[T06.105] recover.lexical_and_syntax                        level: core
+kind:    diag                file: tests/errors/ch06/lexical_and_syntax.ki
+case:    `ki check` sobre un fichero con un error del lexer en una función y un error de sintaxis en otra
+expect:  sale con 1 y los diagnósticos son exactamente dos: el E0104 en la línea 3, columna 18, y el E0201 en la línea 4, columna 21; ninguno más
+why:     el lexer no es una puerta: tras un error suyo el parser sigue, y lo que encuentra se suma a lo que ya
+         se informó. Un comando que se saltara el parser cuando el lexer ya informó daría un error por
+         ejecución, y el usuario tendría que corregir uno para ver el siguiente. Y es el comando completo, el
+         binario con sus códigos de salida, el que lo comprueba
+ref:     tests/errors/ch06/lexical_and_syntax.ki

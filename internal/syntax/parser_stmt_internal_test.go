@@ -184,11 +184,8 @@ func TestParseStmt(t *testing.T) {
 		wantExpr(t, "example", "{\n f()\n}", "(block (call f))")
 	})
 	t.Run("found_token_descriptions", func(t *testing.T) {
-		// Only the message of the E0201 is compared. After the first mistake
-		// the parser goes on at the next token (recovery is for a later
-		// session), so the follow-up mistakes that this causes (`let x = 1` at
-		// the top level is four tokens that are none of them an item) are not
-		// pinned here: only the first diagnostic is.
+		// Only the message of the first diagnostic is compared; what the parser
+		// reports after it, and what it skips, is the business of TestRecover.
 		rows := []struct{ src, want string }{
 			{"fn f() { let x }", "expected `=`, found `}`"},
 			{"fn f() { let x\n}", "expected `=`, found newline"},
@@ -340,17 +337,40 @@ func TestParseStmt(t *testing.T) {
 			t.Errorf("the error node spans %v, want %v", r.m.Exprs.Get(body.Tail).Span, want)
 		}
 
-		// The same in an else-if, and with the if as an operand.
+		// The same in an else-if, and with the if as an operand. The condition
+		// was skipped to the end of the statement, and so was whatever the if is
+		// part of: the whole statement is the error node, because the
+		// expression around the if cannot go on in the tokens after the end of
+		// the statement.
 		src = "fn f() { if a { 1 } else if " + plusChain(1025) + " { x } }"
 		r = parseModule(t, src)
 		lo = nth(t, src, "+", 1024)
 		wantOnlyDiag(t, "else if", r.sink, tooLongDiag(r.file, lo, lo+1))
-		wantText(t, "else if", r.text(), "(fn f (params) (ret _) (block (if a (block 1) (error))))\n")
+		wantText(t, "else if", r.text(), "(fn f (params) (ret _) (block (error)))\n")
 		src = "fn f() { 1 + if " + plusChain(1025) + " { x } }"
 		r = parseModule(t, src)
 		lo = nth(t, src, "+", 1025) // the first `+` is the one in front of the if
 		wantOnlyDiag(t, "operand", r.sink, tooLongDiag(r.file, lo, lo+1))
-		wantText(t, "operand", r.text(), "(fn f (params) (ret _) (block (+ 1 (error))))\n")
+		wantText(t, "operand", r.text(), "(fn f (params) (ret _) (block (error)))\n")
+		// An if in the condition of another, in the argument of a call and in
+		// parentheses: the ifs, the call and the group around the abandoned
+		// condition are abandoned with it, and do not ask for the `{` and the `)`
+		// that were skipped.
+		src = "fn f() { if if " + plusChain(1025) + " { x } else { y } { z } }"
+		r = parseModule(t, src)
+		lo = nth(t, src, "+", 1024)
+		wantOnlyDiag(t, "if in a condition", r.sink, tooLongDiag(r.file, lo, lo+1))
+		wantText(t, "if in a condition", r.text(), "(fn f (params) (ret _) (block (error)))\n")
+		src = "fn f() { g(if " + plusChain(1025) + " { x } else { y }, 2) }"
+		r = parseModule(t, src)
+		lo = nth(t, src, "+", 1024)
+		wantOnlyDiag(t, "if in an argument", r.sink, tooLongDiag(r.file, lo, lo+1))
+		wantText(t, "if in an argument", r.text(), "(fn f (params) (ret _) (block (error)))\n")
+		src = "fn f() { (if " + plusChain(1025) + " { x } else { y }) }"
+		r = parseModule(t, src)
+		lo = nth(t, src, "+", 1024)
+		wantOnlyDiag(t, "if in parentheses", r.sink, tooLongDiag(r.file, lo, lo+1))
+		wantText(t, "if in parentheses", r.text(), "(fn f (params) (ret _) (block (error)))\n")
 
 		// The count of the condition is its own, not the one of the expression
 		// that holds the if, in both directions. The 601 operators in front of
@@ -536,9 +556,12 @@ func TestParseStmt(t *testing.T) {
 			// `=`
 			{"fn f() { let x 5 }", "5", 0, "expected `=`, found `5`"},
 			{"fn f() { let x: Int }", "}", 0, "expected `=`, found `}`"},
+			// What is found is the end of the file: the label is the empty span
+			// right after the last byte, and not the last token. Only the first
+			// diagnostic is compared, as in every row.
+			{"fn f() { let x", "<eof>", 0, "expected `=`, found end of file"},
 			// `)`
 			{"fn f(x y) {}", "y", 0, "expected `)`, found `y`"},
-			{"fn f(x", "<eof>", 0, "expected `)`, found end of file"},
 			{"fn f() { (1 2) }", "2", 0, "expected `)`, found `2`"},
 			{"fn f() { g(1 2) }", "2", 0, "expected `)`, found `2`"},
 			{"fn f() -> (Int) {}", "Int", 0, "expected `)`, found `Int`"},
@@ -547,10 +570,6 @@ func TestParseStmt(t *testing.T) {
 			{"fn f() { if a }", "}", 0, "expected `{`, found `}`"},
 			{"fn f() { if a\n{ 1 } }", "\n", 0, "expected `{`, found newline"},
 			{"fn f() { if a { 1 } else 2 }", "2", 0, "expected `{`, found `2`"},
-			// `}`
-			{"fn f() {", "<eof>", 0, "expected `}`, found end of file"},
-			{"fn f() { 1", "<eof>", 0, "expected `}`, found end of file"},
-			{"fn f() { if a { 1 }", "<eof>", 0, "expected `}`, found end of file"},
 			// newline
 			{"fn f() { f() x }", "x", 0, "expected newline, found `x`"},
 			{"fn f() { let a = 1 b }", "b", 0, "expected newline, found `b`"},
@@ -617,25 +636,22 @@ func TestParseStmt(t *testing.T) {
 			}
 		}
 		// A character the lexer rejects is an Error token. The lexer reports
-		// it (E0104), and the parser finds it where an expression should be.
+		// it (E0104), and the parser finds it where an expression should be and
+		// says nothing more about it: the text of the token would be the same
+		// mistake again (see TestRecover/error_token_is_reported_once).
 		const src = "fn f() { $ }"
 		r, lexical := parseModuleLoose(t, src)
-		if lexical != 1 || r.sink.All()[0].Code != diag.E(104) {
-			t.Fatalf("%s: %d lexical diagnostics, first %v, want one E0104", show(src), lexical, r.sink.All())
-		}
-		lo := nth(t, src, "$", 0)
-		if got, want := r.sink.All()[1], e0201(r.file, lo, lo+1, "expected expression, found `$`"); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: parser diagnostic\n%+v\nwant\n%+v", show(src), got, want)
+		if got := r.sink.All(); lexical != 1 || len(got) != 1 || got[0].Code != diag.E(104) {
+			t.Errorf("%s: %d lexical diagnostics, diagnostics %v, want only the lexer's E0104", show(src), lexical, got)
 		}
 	})
 	t.Run("recovery_in_blocks", func(t *testing.T) {
 		// What the parser makes of a block that goes wrong, with every
-		// diagnostic it reports. The recovery of this session is the simplest:
-		// the mistake becomes an error node and the parser goes on with the next
-		// token. A token that cannot start a statement and that nothing was
-		// read for is dropped, so that the loop moves on. A later session
-		// recovers to the end of the statement and suppresses the follow-ups,
-		// and then these rows change.
+		// diagnostic it reports. The mistake becomes an error node, the rest of
+		// the statement is skipped (see TestRecover for the skip itself), and the
+		// parser goes on with the statement after it. A token that follows a
+		// statement that was read without mistakes and has no separator is the
+		// exception: it is reported and starts the next statement.
 		rows := []struct {
 			src  string
 			want string
@@ -643,7 +659,7 @@ func TestParseStmt(t *testing.T) {
 		}{
 			{"fn f() { f() x }", "(fn f (params) (ret _) (block (expr (call f)) x))\n",
 				[]string{"expected newline, found `x`"}},
-			{"fn f() { ) }", "(fn f (params) (ret _) (block (expr (error))))\n",
+			{"fn f() { ) }", "(fn f (params) (ret _) (block (error)))\n",
 				[]string{"expected expression, found `)`"}},
 			{"fn f() { ; }", "(fn f (params) (ret _) (block (expr (error))))\n",
 				[]string{"expected expression, found `;`"}},
@@ -652,15 +668,20 @@ func TestParseStmt(t *testing.T) {
 			{"fn f() { (1 }", "(fn f (params) (ret _) (block (error)))\n",
 				[]string{"expected `)`, found `}`"}},
 			{"fn f() {", "(fn f (params) (ret _) (block))\n",
-				[]string{"expected `}`, found end of file"}},
+				[]string{"unclosed delimiter"}},
 			{"fn f() { 1", "(fn f (params) (ret _) (block 1))\n",
-				[]string{"expected `}`, found end of file"}},
+				[]string{"unclosed delimiter"}},
 			{"fn f() { let x = 1", "(fn f (params) (ret _) (block (let x _ 1)))\n",
-				[]string{"expected `}`, found end of file"}},
+				[]string{"unclosed delimiter"}},
 			{"fn f() { if a { 1 } else }", "(fn f (params) (ret _) (block (if a (block 1) (error))))\n",
 				[]string{"expected `{`, found `}`"}},
 			{"fn f() { 1 }}", "(fn f (params) (ret _) (block 1))\n(error)\n",
 				[]string{"expected item, found `}`"}},
+			// One mistake, one message, though tokens follow it in the statement.
+			{"fn f() { f(1 2) }", "(fn f (params) (ret _) (block (error)))\n",
+				[]string{"expected `)`, found `2`"}},
+			{"fn f() { let = 1 }", "(fn f (params) (ret _) (block (error)))\n",
+				[]string{"expected identifier, found `=`"}},
 		}
 		for _, row := range rows {
 			r := parseModule(t, row.src)
@@ -674,7 +695,8 @@ func TestParseStmt(t *testing.T) {
 		// Sources that go wrong inside a block, cut short at every point of an
 		// `if` and of a `let`, or with a token in the wrong place. For each, the
 		// parser comes back after reading every token, reports at least one
-		// E0201 (a source that is not a program must not parse in silence),
+		// E0201 or E0202 (a source that is not a program must not parse in
+		// silence),
 		// gives every item a span inside the file, and gives each item its own
 		// piece of the file, in order. Each loop of the parser has to consume
 		// a token or end, or this test never ends.
@@ -695,8 +717,8 @@ func TestParseStmt(t *testing.T) {
 			if !r.p.at(Eof) {
 				t.Errorf("%s: the parser stops at token %d (%v), want it to read them all", show(src), r.p.pos, r.p.tok().Kind)
 			}
-			if r.sink.Count(diag.E(201)) == 0 {
-				t.Errorf("%s: no E0201 reported, want at least one", show(src))
+			if r.sink.Count(diag.E(201))+r.sink.Count(diag.E(202)) == 0 {
+				t.Errorf("%s: no E0201 or E0202 reported, want at least one", show(src))
 			}
 			prevHi := uint32(0)
 			for _, id := range r.p.m.Items {

@@ -10,10 +10,12 @@ import (
 // MaxChain is the most binary operators and calls that one statement-level
 // expression may chain (E0205). `1 + 1 + 1 + …` is a tree as deep as it has
 // operators, and every pass after the parser walks it. The limit bounds the
-// operators and calls of one statement, so that a statement cannot be a tree of
-// a hundred thousand levels made of them. It does not bound the nesting of
-// parentheses, arguments and prefix operators: a later session adds a limit for
-// those (see expr).
+// operators and calls of one statement, those inside its parentheses and
+// arguments included, so that a statement cannot be a tree of a hundred
+// thousand levels made of them. It does not bound the whole tree: the
+// statements of a block inside the statement count apart, and what nests is
+// bounded by MaxNesting. The depth of a tree is therefore bounded by the two
+// together and not by either one alone (see PrintModule).
 const MaxChain = 1024
 
 // The binding powers of the operators (spec 5.3), loosest first: the higher the
@@ -74,26 +76,31 @@ func isComparison(k TokenKind) bool {
 // chainState is what the parser keeps about the statement-level expression it
 // is reading (see expr).
 type chainState struct {
-	// from is the index, in the token buffer, of the first token of the
-	// expression.
-	from int
 	// count is how many binary operators and calls the expression has consumed
 	// so far, inside parentheses and arguments as well.
 	count int
-	// tooLong says that count passed MaxChain and E0205 was reported. From then
-	// on countChain refuses every operator and call, so the loops of pratt stop,
-	// and expr replaces the whole expression with an error node.
+	// abandoned says that the parser gave up on the expression: its chain passed
+	// MaxChain (E0205), its nesting passed MaxNesting (E0204), or an expression
+	// inside it that was a condition was abandoned (see condition). The mistake
+	// has been reported. From then on countChain and enter refuse, so the loops
+	// of pratt stop, expected and unclosed report nothing, and exprOrSkip
+	// replaces the whole expression with an error node.
 	//
-	// The operator or call that passed the limit stays unconsumed, and the
-	// functions that were reading the expression come back one after the other
-	// with a partial result that expr drops. Most of them need not look at the
-	// flag: a group wants a `)` and the arguments of a call a `,` or a `)`, and
-	// that token is neither. The ones that would do something visible with it
-	// look: pratt after a right operand (the token may be a comparison, which
-	// would be taken for a chained one) and countChain (it would count the token
-	// again). A function that reports a diagnostic of its own has to look too, so
-	// as not to report a mistake in an expression that is being abandoned.
-	tooLong bool
+	// The token that was refused stays unconsumed, and the functions that were
+	// reading the expression come back one after the other with a partial result
+	// that exprOrSkip drops. Most of them need not look at the flag: a group wants
+	// a `)` and the arguments of a call a `,` or a `)`, and that token is neither.
+	// A function that reports a diagnostic of its own has to look, so as not to
+	// report a mistake in an expression that is being abandoned: countChain (which
+	// would count the token again), expected and unclosed. pratt after a right
+	// operand, callArgs and ifExpr after its else look as well, to stop reading at
+	// once and not to read on with a result that is going to be dropped. Those
+	// are the readers that run. enter, and ifExpr after its then branch, look too,
+	// but no test reaches them: the functions that call enter have stopped before,
+	// and a block gives the chain of its if back as it found it, since each of its
+	// statements restores the one it took (exprOrSkip). They stay so that a change
+	// to those rules ends in an error node and not in more reading.
+	abandoned bool
 }
 
 // expr reads an expression of a statement: the initializer of a `let`, an
@@ -108,35 +115,48 @@ type chainState struct {
 // argument) are not entry points: they go through pratt, and add to the count
 // of the expression they are in.
 //
-// If the expression has more than MaxChain operators and calls, expr reports
-// E0205 once and consumes the rest of the statement (skipStatement). The
-// expression it returns is then one error node that covers all of it, so no
-// pass after the parser gets a tree as deep as the chain.
-//
-// What expr does not limit yet is nesting: parentheses, arguments, prefix
-// operators, blocks and the branches of an if each take a level of Go's call
-// stack, and the limit that bounds them (E0204) comes in a later session.
+// If the expression has more than MaxChain operators and calls, or nests deeper
+// than MaxNesting, expr reports E0205 or E0204 once and consumes the rest of the
+// statement (syncStatement). The expression it returns is then one error node
+// that covers all of it, so no pass after the parser gets a tree as deep as the
+// chain or the nesting.
 func (p *parser) expr(minBP int) ExprID {
 	e, _ := p.exprOrSkip(minBP)
 	return e
 }
 
-// exprOrSkip is expr, and it also says whether the expression was abandoned
-// because it was too long, in which case the cursor is at the end of the
-// statement and the expression is an error node. A caller that needs more
-// tokens after the expression (the `{` after the condition of an if) must not
-// ask for them then: they were skipped with the rest of the statement.
+// exprOrSkip is expr, and it also says whether the expression was abandoned, in
+// which case the cursor is at the end of the statement and the expression is an
+// error node. A caller that needs more tokens after the expression (the `{`
+// after the condition of an if) must not ask for them then: they were skipped
+// with the rest of the statement.
 func (p *parser) exprOrSkip(minBP int) (e ExprID, abandoned bool) {
 	outer := p.chain
-	p.chain = chainState{from: p.pos}
+	p.chain = chainState{}
 	start := p.tok().Span
 	e = p.pratt(minBP)
-	abandoned = p.chain.tooLong
+	abandoned = p.chain.abandoned
 	if abandoned {
-		p.skipStatement()
+		p.syncStatement()
 		e = p.errorExpr(start)
 	}
 	p.chain = outer
+	return e, abandoned
+}
+
+// condition reads the condition of an if. It is a statement-level expression
+// with a count of its own, like the others, but not a statement: the if it is
+// in is part of an expression that goes on after it. If the condition is
+// abandoned, the statement was skipped to its end, with the rest of that if and
+// of whatever the if is in. So the expression around the if is abandoned too:
+// without that, an if inside the condition of another would look for its `{`
+// and the call that holds it for its `)` in the tokens after the end of the
+// statement, and report mistakes that are not in the program.
+func (p *parser) condition() (e ExprID, abandoned bool) {
+	e, abandoned = p.exprOrSkip(0)
+	if abandoned {
+		p.chain.abandoned = true
+	}
 	return e, abandoned
 }
 
@@ -151,9 +171,9 @@ func (p *parser) exprOrSkip(minBP int) (e ExprID, abandoned bool) {
 // after an operand always belongs to the operand.
 //
 // The operators and calls it consumes are counted in p.chain, and it stops, with
-// whatever it has read, as soon as the count passes MaxChain (see
-// chainState.tooLong). Every pass of the loop consumes a token (an operator or a
-// `(`), so the loop ends.
+// whatever it has read, as soon as the count passes MaxChain or the expression is
+// abandoned for any other reason (see chainState.abandoned). Every pass of the
+// loop consumes a token (an operator or a `(`), so the loop ends.
 func (p *parser) pratt(minBP int) ExprID {
 	start := p.tok().Span
 	lhs := p.prefix()
@@ -164,7 +184,7 @@ func (p *parser) pratt(minBP int) ExprID {
 				break
 			}
 			p.advance()
-			args, ok := p.callArgs()
+			args, ok := p.callArgs(t)
 			if !ok {
 				lhs = p.errorExpr(start)
 				continue
@@ -181,10 +201,10 @@ func (p *parser) pratt(minBP int) ExprID {
 		}
 		p.advance()
 		rhs := p.pratt(bp + 1)
-		if p.chain.tooLong {
-			// The token the right operand stopped at is the one that passed the
-			// limit. It could be a comparison, and the check below would take
-			// it for a chained one.
+		if p.chain.abandoned {
+			// The token the right operand stopped at is the one that was refused.
+			// It could be a comparison, and the check below would take it for a
+			// chained one.
 			break
 		}
 		lhs = p.m.Exprs.Push(Expr{Kind: ExprBinary, Span: p.spanFrom(start), Op: op, OpSpan: t.Span, Lhs: lhs, Rhs: rhs})
@@ -203,7 +223,7 @@ func (p *parser) pratt(minBP int) ExprID {
 // start: a tree of comparisons would make a type error out of a mistake that the
 // parser has already reported.
 func (p *parser) chainedComparison(start base.Span) ExprID {
-	p.sink.Report(diag.NewError(diag.E(203), "comparison operators cannot be chained",
+	p.report(diag.NewError(diag.E(203), "comparison operators cannot be chained",
 		diag.Label{Span: p.tok().Span}).
 		WithHelp("use `&&`: `a < b && b < c`"))
 	for isComparison(p.tok().Kind) {
@@ -218,61 +238,23 @@ func (p *parser) chainedComparison(start base.Span) ExprID {
 
 // countChain adds the operator or call at span at to the count of the
 // expression being read, and returns true. If that makes the count pass
-// MaxChain, it reports E0205 at at, marks the expression as too long and
-// returns false: the caller must stop without consuming the token. Once the
-// expression is marked, it returns false without reporting anything, so E0205
-// is reported once per expression however many functions meet the token.
+// MaxChain, it reports E0205 at at, abandons the expression and returns false:
+// the caller must stop without consuming the token. Once the expression is
+// abandoned, for this reason or another, it returns false without reporting
+// anything, so E0205 is reported once per expression however many functions
+// meet the token.
 func (p *parser) countChain(at base.Span) bool {
-	if p.chain.tooLong {
+	if p.chain.abandoned {
 		return false
 	}
 	p.chain.count++
 	if p.chain.count <= MaxChain {
 		return true
 	}
-	p.chain.tooLong = true
-	p.sink.Report(diag.NewError(diag.E(205), "expression chain is too long", diag.Label{Span: at}).
+	p.chain.abandoned = true
+	p.report(diag.NewError(diag.E(205), "expression chain is too long", diag.Label{Span: at}).
 		WithNote("the limit is " + strconv.Itoa(MaxChain) + " operators and calls in one expression"))
 	return false
-}
-
-// skipStatement consumes the rest of a statement-level expression that has been
-// abandoned, and leaves the cursor at the token that ends the statement, which
-// it does not consume: a Newline or a `;` that is not inside braces, a `}`
-// that closes no brace opened in the text of the statement, or the Eof.
-//
-// Only braces matter. The lexer puts no Newline token inside parentheses or
-// brackets (line rule), so a line break there is skipped like a blank, and a
-// `}` closes the parentheses that are still open, so it ends the statement
-// whatever is open inside it. The braces opened since the first token of the
-// expression are counted from the tokens already consumed, so that a skip that
-// starts in the middle of a block inside the statement knows what it is in. A
-// later session writes the general recovery; this is the part of it that E0205
-// needs.
-func (p *parser) skipStatement() {
-	braces := 0
-	note := func(k TokenKind) {
-		switch k {
-		case LBrace:
-			braces++
-		case RBrace:
-			braces--
-		}
-	}
-	for _, t := range p.tb.Tokens[p.chain.from:p.pos] {
-		note(t.Kind)
-	}
-	for {
-		switch p.tok().Kind {
-		case Eof:
-			return
-		case Newline, Semi, RBrace:
-			if braces == 0 {
-				return
-			}
-		}
-		note(p.advance().Kind)
-	}
 }
 
 // errorExpr adds an ExprError that covers the tokens from start to the last one
@@ -283,9 +265,9 @@ func (p *parser) errorExpr(start base.Span) ExprID {
 }
 
 // prefix reads an operand: a primary expression or a prefix operator (`-` or
-// `!`) and the operand it applies to. The operand binds tighter than every
-// binary operator but looser than a call, so `-a * b` is `(-a) * b` and `-f(x)`
-// is `-(f(x))`.
+// `!`) and the operand it applies to, which is one level of nesting. The operand
+// binds tighter than every binary operator but looser than a call, so `-a * b`
+// is `(-a) * b` and `-f(x)` is `-(f(x))`.
 func (p *parser) prefix() ExprID {
 	t := p.tok()
 	if t.Kind != Minus && t.Kind != Bang {
@@ -296,7 +278,11 @@ func (p *parser) prefix() ExprID {
 	if t.Kind == Bang {
 		op = Not
 	}
+	if !p.enter() {
+		return p.errorExpr(t.Span)
+	}
 	operand := p.pratt(bpPrefix)
+	p.leave()
 	return p.m.Exprs.Push(Expr{Kind: ExprUnary, Span: p.spanFrom(t.Span), UnOp: op, OpSpan: t.Span, Operand: operand})
 }
 
@@ -323,7 +309,12 @@ func (p *parser) primary() ExprID {
 	case LParen:
 		return p.group()
 	case LBrace:
-		return p.block()
+		if !p.enter() {
+			return p.errorExpr(t.Span)
+		}
+		b := p.block()
+		p.leave()
+		return b
 	case KwIf:
 		return p.ifExpr()
 	}
@@ -334,38 +325,59 @@ func (p *parser) primary() ExprID {
 // group reads what starts with a `(`: `()`, or an expression between
 // parentheses. A parenthesis is not a node, so the group is its inner
 // expression, with the span of that expression, which leaves the parentheses
-// out. If the `)` is missing, that is E0201 and the group is an error node that
-// covers what was read.
+// out. It is one level of nesting. If the `)` is missing, that is E0201 (E0202
+// at the end of the file) and the group is an error node that covers what was
+// read.
 func (p *parser) group() ExprID {
+	if !p.enter() {
+		return p.errorExpr(p.tok().Span)
+	}
+	e := p.groupBody()
+	p.leave()
+	return e
+}
+
+// groupBody is group without the level of nesting, the cursor being at the `(`.
+func (p *parser) groupBody() ExprID {
 	open := p.advance()
 	if _, ok := p.eat(RParen); ok {
 		return p.m.Exprs.Push(Expr{Kind: ExprUnit, Span: p.spanFrom(open.Span)})
 	}
 	inner := p.pratt(0)
-	if _, ok := p.expect(RParen, "`)`"); !ok {
+	if !p.expectClose(RParen, "`)`", open) {
 		return p.errorExpr(open.Span)
 	}
 	return inner
 }
 
 // callArgs reads the arguments of a call, the cursor being just after its `(`,
-// and the `)` that ends them. A comma after the last argument is allowed. It
-// returns false, and adds nothing to ExprPool, if the arguments are cut short
-// or do not end with a `)`, which is E0201. Every pass of the loop either
-// consumes a comma or ends the loop, so it ends.
+// which is open, and the `)` that ends them. A comma after the last argument is
+// allowed. Each argument is one level of nesting. It returns false, and adds
+// nothing to ExprPool, if the arguments are cut short or do not end with a `)`,
+// which is E0201 (E0202 at the end of the file), or if the expression is
+// abandoned. Every pass of the loop either consumes a comma or ends the loop,
+// so it ends.
 //
 // The arguments are collected in a slice of their own and added to the pool
 // when the list is complete: the arguments that are calls add theirs first, and
 // a ListRange must be contiguous.
-func (p *parser) callArgs() (base.ListRange, bool) {
+func (p *parser) callArgs(open Token) (base.ListRange, bool) {
 	var args []ExprID
 	for !p.at(RParen) {
-		args = append(args, p.pratt(0))
+		if !p.enter() {
+			return base.ListRange{}, false
+		}
+		arg := p.pratt(0)
+		p.leave()
+		if p.chain.abandoned {
+			return base.ListRange{}, false
+		}
+		args = append(args, arg)
 		if _, ok := p.eat(Comma); !ok {
 			break
 		}
 	}
-	if _, ok := p.expect(RParen, "`)`"); !ok {
+	if !p.expectClose(RParen, "`)`", open) {
 		return base.ListRange{}, false
 	}
 	return appendRange(&p.m.ExprPool, args), true

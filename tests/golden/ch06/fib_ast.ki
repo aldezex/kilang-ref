@@ -1,0 +1,6 @@
+// test: T06.97
+// run: emit ast
+// expect-stdout: (fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}

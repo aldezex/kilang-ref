@@ -267,7 +267,7 @@ func TestCLI(t *testing.T) {
 		}
 	})
 	t.Run("emit_unknown_target", func(t *testing.T) {
-		const usage = "usage: ki emit tokens [--diagnostics=human|short|json] FILE\n"
+		const usage = "usage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"
 		tests := []struct {
 			name string
 			args []string
@@ -295,6 +295,94 @@ func TestCLI(t *testing.T) {
 			code, out, err := runCLI(t, tc.args...)
 			if code != tc.code || out != tc.out || err != tc.err {
 				t.Errorf("%s: got %d %q %q, want %d %q %q", tc.name, code, out, err, tc.code, tc.out, tc.err)
+			}
+		}
+	})
+	t.Run("emit_ast", func(t *testing.T) {
+		write := func(src string) string {
+			t.Helper()
+			path := filepath.Join(t.TempDir(), "a.ki")
+			if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+				t.Fatalf("cannot write the file: %v", err)
+			}
+			return path
+		}
+		// A correct file: the tree on stdout, one line per item, and nothing on
+		// stderr.
+		path := write("pub fn id(x: Int) -> Int { x }\nfn main() {}\n")
+		code, out, err := runCLI(t, "emit", "ast", path)
+		want := "(pub fn id (params (x Int)) (ret Int) (block x))\n(fn main (params) (ret _) (block))\n"
+		if code != 0 || out != want || err != "" {
+			t.Errorf("correct file: got %d %q %q, want 0 %q \"\"", code, out, err, want)
+		}
+		// A file with a syntax error: the tree of what the parser understood,
+		// with an (error) where it did not, on stdout, and then the diagnostic on
+		// stderr, and exit code 1 only after both are written.
+		path = write("fn f() -> Int { 1 + }\n")
+		code, out, err = runCLI(t, "emit", "ast", "--diagnostics=short", path)
+		want = "(fn f (params) (ret Int) (block (+ 1 (error))))\n"
+		wantErr := path + ":1:21: error[E0201]: expected expression, found `}`\n"
+		if code != 1 || out != want || err != wantErr {
+			t.Errorf("syntax error: got %d %q %q, want 1 %q %q", code, out, err, want, wantErr)
+		}
+		// A lexical error and a syntax error in different functions: Parse runs
+		// after a lexer that reported, so both functions are in the tree, with an
+		// (error) where each could not be read, and both diagnostics come out, in
+		// the order of the file. A command that skipped the parser when the lexer
+		// had reported would print an empty tree and only the lexer's diagnostic.
+		path = write("fn a() { let x = $ }\nfn b() -> Int { 1 + }\n")
+		code, out, err = runCLI(t, "emit", "ast", "--diagnostics=short", path)
+		want = "(fn a (params) (ret _) (block (let x _ (error))))\n(fn b (params) (ret Int) (block (+ 1 (error))))\n"
+		wantErr = path + ":1:18: error[E0104]: unexpected character `$`\n" + path + ":2:21: error[E0201]: expected expression, found `}`\n"
+		if code != 1 || out != want || err != wantErr {
+			t.Errorf("lexical and syntax errors: got %d %q %q, want 1 %q %q", code, out, err, want, wantErr)
+		}
+		// A file with an invalid UTF-8 byte (E0101): Lex checks the bytes and
+		// refuses it, and a command that checked the source as well would report
+		// it twice. The tree of a refused file is empty, so stdout gets nothing,
+		// and the exit code is 1. The code is counted with its `error[` prefix
+		// for the reason given in check_reports_E0101_once.
+		path = write("let x = \xff")
+		code, out, err = runCLI(t, "emit", "ast", path)
+		if code != 1 || out != "" || strings.Count(err, "error[E0101]") != 1 {
+			t.Errorf("refused file: got %d %q %q, want 1, nothing on stdout and error[E0101] exactly once on stderr", code, out, err)
+		}
+		// The usage errors are those of emit tokens, with the line of both.
+		code, out, err = runCLI(t, "emit", "ast")
+		wantErr = "ki emit: missing FILE\nusage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"
+		if code != 2 || out != "" || err != wantErr {
+			t.Errorf("no file: got %d %q %q, want 2 \"\" %q", code, out, err, wantErr)
+		}
+		code, out, err = runCLI(t, "emit", "ast", "-h")
+		if wantOut := "usage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"; code != 0 || out != wantOut || err != "" {
+			t.Errorf("-h: got %d %q %q, want 0 %q \"\"", code, out, err, wantOut)
+		}
+	})
+	t.Run("emit_dump_before_diagnostics", func(t *testing.T) {
+		// Both targets end through finishEmit: the dump on stdout, then the
+		// diagnostics on stderr. runCLI keeps the two streams in separate
+		// builders, so it cannot show the order. Each file is run twice: once
+		// with separate writers, to see what each stream gets, and once with
+		// one writer for both, as on a terminal or with `2>&1`, where the dump
+		// has to come first.
+		tests := []struct{ name, target, src string }{
+			{"emit tokens", "tokens", "let x = 1\x01\n"},
+			{"emit ast", "ast", "fn f() -> Int { 1 + }\n"},
+		}
+		for _, tc := range tests {
+			path := filepath.Join(t.TempDir(), "a.ki")
+			if err := os.WriteFile(path, []byte(tc.src), 0o644); err != nil {
+				t.Fatalf("cannot write the file: %v", err)
+			}
+			code, out, errOut := runCLI(t, "emit", tc.target, path)
+			if code != 1 || out == "" || errOut == "" {
+				t.Errorf("%s, separate writers: got %d %q %q, want 1 and something on each stream", tc.name, code, out, errOut)
+				continue
+			}
+			var both strings.Builder
+			code = Main([]string{"emit", tc.target, path}, strings.NewReader(""), &both, &both)
+			if want := out + errOut; code != 1 || both.String() != want {
+				t.Errorf("%s, one writer for both: got %d %q, want 1 %q (the dump, then the diagnostics)", tc.name, code, both.String(), want)
 			}
 		}
 	})
