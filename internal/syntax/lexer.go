@@ -55,7 +55,7 @@ type lexer struct {
 func (lx *lexer) emit(kind TokenKind, start int, payload uint32) {
 	lx.tb.Tokens = append(lx.tb.Tokens, Token{
 		Kind:          kind,
-		Span:          base.Span{File: lx.id, Lo: uint32(start), Hi: uint32(lx.pos)},
+		Span:          lx.span(start),
 		Payload:       payload,
 		NewlineBefore: lx.newline,
 	})
@@ -128,6 +128,10 @@ func (lx *lexer) skipBlockComment() {
 // trivia and not the end of the file.
 func (lx *lexer) next() {
 	c := lx.src[lx.pos]
+	if isDecDigit(c) {
+		lx.number()
+		return
+	}
 	if isIdentStart(c) {
 		lx.ident()
 		return

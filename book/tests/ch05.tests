@@ -148,3 +148,138 @@ why:     los mensajes de error y `emit tokens` calculan líneas y columnas a par
          desplazado un byte pone el caret bajo el carácter equivocado, y uno que se sale del fichero
          hace un panic al buscar su línea
 ref:     TestLexer/spans_are_within_file
+
+[T05.14] numbers.int_decimal_hex_binary                    level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    los enteros decimales, hexadecimales (`0x`) y binarios (`0b`) se leen en su base, los `_` no cuentan (tampoco el que va justo tras el prefijo), los dígitos hexadecimales valen en minúscula y en mayúscula, y lo que no es un prefijo, o no es un dígito de la base, termina el número sin ningún error
+input:   "42 0xFF 0b1010 1_000"; en otro fichero, "0xabcdef 0xABCDEF 0xDEAD_beef 0x_FF"; y, uno por uno, "0X1", "0B1", "5x1", "1b1", "0b102", "12abc" y "0xFG"
+expect:  en el primero, sin diagnósticos; cuatro tokens Int y Eof, con los valores 42, 255, 10 y 1000, y los spans [0,2) [3,7) [8,14) [15,20), que cubren el literal entero con su prefijo y sus guiones bajos. En el segundo, sin diagnósticos; cuatro tokens Int y Eof, con los valores 11259375, 11259375, 3735928559 y 255. En los otros siete, sin diagnósticos y acabados en Eof: "0X1" da Int(0) y el nombre `X1` (UpperIdent); "0B1", Int(0) y `B1`; "5x1", Int(5) y `x1`; "1b1", Int(1) y `b1`; "0b102", Int(2) e Int(2); "12abc", Int(12) y `abc`; y "0xFG", Int(15) y `G`
+why:     si el lexer pasara `0b1010` a `ParseInt` con base 10, valdría 1010 sin ningún error, y es
+         el fallo que más cuesta encontrar; con `0xFF`, o con los `_` dentro de los dígitos,
+         `ParseInt` falla y el lexer hace un panic con un literal del usuario. Y si el lexer
+         aceptara como dígitos hexadecimales solo las letras mayúsculas, o solo las minúsculas,
+         `0xff` o `0xFF` se rechazaría o se partiría en un número y un nombre. Si un `_` justo tras
+         el prefijo bastara para decir «faltan dígitos», `0x_FF` sería un error seguido de un
+         nombre, y no 255. Los prefijos son solo en minúscula y solo tras un 0: `0X1` y `0B1` son un
+         0 y un nombre, y `5x1` y `1b1` un número y un nombre; un lexer que aceptara la mayúscula, o
+         que mirara la `x` y la `b` tras cualquier cifra, leería otro número donde el programa tiene
+         un nombre. Y un dígito que la base no tiene termina el número: si `0b102` aceptara el 2, o
+         `0xFG` la G, `ParseInt` fallaría con un error que no es de rango y el lexer haría un panic
+         con un literal que ha escrito el usuario
+ref:     TestNumbers/int_decimal_hex_binary
+
+[T05.15] numbers.int_max_ok                                level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    el mayor `Int` en decimal es un literal válido
+input:   "9223372036854775807"
+expect:  sin diagnósticos; un token Int y Eof, con el valor 9223372036854775807
+why:     el límite de E0105 está en el valor siguiente; un lexer que rechazara también este
+         recortaría un bit al `Int` de 64 bits que promete el lenguaje
+ref:     TestNumbers/int_max_ok
+
+[T05.16] numbers.int_hex_max_ok                            level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    el mayor `Int` en hexadecimal, con guiones bajos, es un literal válido
+input:   "0x7FFF_FFFF_FFFF_FFFF"
+expect:  sin diagnósticos; un token Int y Eof, con el valor 9223372036854775807
+why:     el mismo límite por otro camino: si el hexadecimal se leyera como entero sin signo de 64
+         bits y se convirtiera después, el mayor valor válido y el primero inválido se confundirían
+ref:     TestNumbers/int_hex_max_ok
+
+[T05.17] numbers.int_overflow_E0105                        level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un decimal una unidad por encima del mayor `Int` da E0105 y el token sigue siendo un Int
+input:   "9223372036854775808"
+expect:  un solo E0105 con mensaje `integer literal is too large`, etiqueta ``does not fit in a 64-bit `Int` ``, span [0,19) y una sola nota, `the largest `Int` is 9223372036854775807`; los tokens son Int y Eof, y el Int vale 0
+why:     el error tiene que ser uno solo y estar en el literal; si el token desapareciera, el parser
+         daría otro error encima, y si guardara un valor envuelto, el programa seguiría con un número falso
+ref:     TestNumbers/int_overflow_E0105
+
+[T05.18] numbers.hex_overflow_E0105                        level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un hexadecimal una unidad por encima del mayor `Int` también da E0105
+input:   "0x8000_0000_0000_0000"
+expect:  un solo E0105 con mensaje `integer literal is too large`, etiqueta ``does not fit in a 64-bit `Int` `` y span [0,21); los tokens son Int y Eof, y el Int vale 0
+why:     en hexadecimal es muy fácil escribir un valor que en complemento a dos sería negativo;
+         el lenguaje no lo acepta en silencio como `MIN`, lo rechaza
+ref:     TestNumbers/hex_overflow_E0105
+
+[T05.19] numbers.trailing_underscore_E0107                 level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un `_` al final de cualquier tramo de dígitos (entero, hexadecimal, binario, parte entera, fracción o exponente) da E0107
+input:   "1_", "0xFF_", "0b1_", "1_.5", "1.5_" y "1e5_"
+expect:  en cada una, un solo E0107 con mensaje `malformed number literal`, etiqueta ``trailing `_` `` y como span el literal entero; los tokens son Int (las tres primeras) o Float (las otras tres) y Eof, con el valor 0
+why:     un `_` colgando casi siempre es un dígito que falta; si cada tramo no se comprobara por
+         separado, `1_.5` o `1e5_` pasarían como números válidos
+ref:     TestNumbers/trailing_underscore_E0107
+
+[T05.20] numbers.hex_without_digits_E0107                  level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    `0x` o `0b` sin ningún dígito, aunque lleven guiones bajos, dan E0107, y también cuando lo que les sigue no es un dígito de su base, incluidos los dos caracteres que quedan justo antes de la `a` y de la `A` (`` ` `` y `@`), que además son un E0104 por su cuenta
+input:   "0x", "0x_", "0b" y "0b_"; "0b2" y "0xg"; y ``"0x`"`` y "0x@"
+expect:  en cada una de las cuatro primeras, un solo E0107 con mensaje `malformed number literal`, etiqueta ``missing digits after `0x` `` (o `0b`, según el prefijo) y como span el literal entero; los tokens son Int y Eof, con el valor 0. En "0b2": el mismo E0107 con la etiqueta de `0b`, pero con span [0,2), el del prefijo; los tokens son Int, Int y Eof, con los valores 0 y 2. En "0xg": el E0107 de `0x` con span [0,2); los tokens son Int(0), el nombre `g` (LowerIdent) y Eof. En ``0x` `` y en `0x@`: exactamente dos diagnósticos, por este orden, el mismo E0107 de `0x` con span [0,2) y un E0104 de mensaje `unexpected character` seguido del carácter entre comillas invertidas, con span [2,3) y etiqueta `not valid in Ki source`; los tokens son Int(0), Error y Eof
+why:     `ParseInt` de una cadena vacía falla sin decir qué pasó; sin esta comprobación el error
+         de `0x` sería uno que no explica nada, o el literal se colaría como un 0 válido. Y el `2` de
+         `0b2`, la `g` de `0xg` y el `` ` `` y la `@` de ``0x` `` y `0x@` no son dígitos de su base: un lexer
+         que los aceptara (con un rango de dígitos hexadecimales que empezara un carácter antes de la `a` o
+         de la `A`, por ejemplo) los pasaría a `ParseInt`, que falla con un error que no es de rango, y
+         haría un panic con un literal que ha escrito el usuario. El E0104 de esos dos se suma al E0107 y
+         no lo tapa: el prefijo solo ya es un error, y el carácter que sigue se lee como un token más
+ref:     TestNumbers/hex_without_digits_E0107
+
+[T05.21] numbers.float_forms                               level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    las formas de un flotante: con fracción, con exponente, con ambos, con signo en el exponente y con guiones bajos en la parte entera, en la fracción y en el exponente
+input:   "3.14 1e-9 2.5E3 1_000.5" y, en otro fichero, "1e+2 1E1_0 0.5e0 0.1_5"
+expect:  en cada fichero, sin diagnósticos y solo tokens Float y Eof; los valores son 3.14, 1e-9, 2500 y 1000.5 en el primero, y 100, 1e10, 0.5 y 0.15 en el segundo. El `_` está en la parte entera de `1_000.5`, en la fracción de `0.1_5` y en el exponente de `1E1_0`
+why:     cada tramo de dígitos de un flotante (la parte entera, la fracción y el exponente) admite un `_`
+         entre dígitos sin que cambie el valor del número; si un tramo no lo admitiera, `0.1_5` o `1E1_0`
+         se partirían en un número y un nombre (`_5`, `_0`). Y una `E` mayúscula o un `+` en el exponente
+         son fáciles de olvidar. Cada forma que falla aquí es un número válido que se leería con otro
+         valor, o se partiría en un número y un nombre
+ref:     TestNumbers/float_forms
+
+[T05.22] numbers.exponent_needs_digits                     level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    una `e` que no va seguida de dígitos (con un signo opcional entre medias) no forma parte del número
+input:   "1e" y "1e+"
+expect:  sin diagnósticos; "1e" da Int(1), LowerIdent `e` y Eof; "1e+" da Int(1), LowerIdent `e`, Plus y Eof
+why:     si el lexer se comiera la `e` y el `+`, daría un error de número malformado donde el programa
+         tenía un entero seguido de un nombre y una suma, y el mensaje apuntaría al sitio equivocado
+ref:     TestNumbers/exponent_needs_digits
+
+[T05.23] numbers.float_out_of_range_E0109                  level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un flotante demasiado grande para 64 bits da E0109 y el token sigue siendo un Float
+input:   "1e999"
+expect:  un solo E0109 con mensaje `float literal is out of range`, etiqueta ``does not fit in a 64-bit `Float` ``, span [0,5); los tokens son Float y Eof, y el Float vale 0
+why:     `ParseFloat` devuelve `+Inf` junto con el error; si el lexer guardara ese `+Inf`, un literal
+         roto entraría en las cuentas del programa como un valor que no se puede escribir
+ref:     TestNumbers/float_out_of_range_E0109
+
+[T05.24] numbers.float_underflow_is_zero                   level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un flotante demasiado pequeño para 64 bits no es un error: vale 0
+input:   "1e-999"
+expect:  sin diagnósticos; un token Float y Eof, con el valor 0
+why:     es una decisión de diseño, la misma que toma Go; un lexer que tratara cualquier error de
+         `ParseFloat` igual daría E0109 a un literal que solo perdió precisión
+ref:     TestNumbers/float_underflow_is_zero
+
+[T05.25] numbers.int_then_range                            level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un punto seguido de otro punto, tras un entero, no forma un flotante
+input:   "1..2"
+expect:  sin diagnósticos; Int, DotDot, Int y Eof, con los valores 1 y 2
+why:     si el lexer leyera `1.` como un flotante, el rango `1..2` quedaría hecho pedazos antes de
+         que el parser lo viera
+ref:     TestNumbers/int_then_range
+
+[T05.26] numbers.int_then_method                           level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un punto seguido de una letra, tras un entero, es una llamada a método y no un flotante
+input:   "1.abs"
+expect:  sin diagnósticos; Int, Dot, LowerIdent `abs` y Eof, con el valor 1
+why:     un flotante lleva dígitos tras el punto; si `1.` bastara, `1.abs` daría un E0107 o un
+         flotante sin fracción en vez de la llamada que se escribió
+ref:     TestNumbers/int_then_method
