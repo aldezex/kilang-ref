@@ -1,5 +1,5 @@
-// Package syntax turns the text of a source file into tokens and, in later
-// chapters, into a syntax tree. Its first step is not a lexer yet: CheckSource
+// Package syntax turns the text of a source file into tokens (Lex) and, in
+// later chapters, into a syntax tree. Before lexing anything, CheckSource
 // refuses a file whose bytes are not valid Ki source at all.
 package syntax
 

@@ -1,0 +1,71 @@
+KwFn	fn
+KwLet	let
+KwVar	var
+KwType	type
+KwTrait	trait
+KwImpl	impl
+KwEffect	effect
+KwFor	for
+KwIn	in
+KwWhile	while
+KwBreak	break
+KwContinue	continue
+KwReturn	return
+KwIf	if
+KwElse	else
+KwMatch	match
+KwHandle	handle
+KwWith	with
+KwUses	uses
+KwSpawn	spawn
+KwLazy	lazy
+KwSelect	select
+KwImport	import
+KwPub	pub
+KwTrue	true
+KwFalse	false
+LParen	(
+RParen	)
+LBracket	[
+RBracket	]
+LBrace	{
+RBrace	}
+Comma	,
+Semi	;
+Colon	:
+Dot	.
+DotDot	..
+FatArrow	=>
+Arrow	->
+Pipe	|>
+Eq	=
+EqEq	==
+NotEq	!=
+Lt	<
+Le	<=
+Gt	>
+Ge	>=
+Plus	+
+Minus	-
+Star	*
+Slash	/
+Percent	%
+Bang	!
+AndAnd	&&
+OrOr	||
+Bar	|
+Question	?
+Hash	#
+Underscore	_
+LowerIdent	
+UpperIdent	
+Int	
+Float	
+Char	
+String	
+StringHead	
+StringMid	
+StringTail	
+Newline	
+Eof	
+Error	

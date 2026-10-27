@@ -1,0 +1,150 @@
+[T05.01] token.generated_file_is_up_to_date                level: core
+kind:    unit (go test)      file: internal/syntax/token_kind_test.go
+case:    `token_kind.go` es exactamente lo que el generador produce a partir de `token_kinds.txt`
+input:   la salida estándar de `go run ./gen` (sin `-o`), ejecutado en el directorio del paquete, y el contenido de `token_kind.go`
+expect:  las dos son iguales byte a byte
+why:     `token_kind.go` se escribe con `go generate`, no a mano; si alguien añade una palabra clave a
+         `token_kinds.txt` y olvida regenerar, el lexer compila y pasa sus pruebas con la tabla vieja,
+         y la palabra nueva se lee como un identificador sin que nada avise
+ref:     TestTokenKind/generated_file_is_up_to_date
+
+[T05.02] token.kind_strings                                level: core
+kind:    unit (go test)      file: internal/syntax/token_kind_test.go
+case:    `String` devuelve el nombre de la constante, en la primera, en una del medio, en las últimas y en un valor que no es ninguna clase de token
+input:   `KwFn`, `LParen`, `Eof`, `Error` y `TokenKind(255)`
+expect:  "KwFn", "LParen", "Eof", "Error" y "TokenKind(255)"
+why:     los volcados de tokens y los mensajes de error nombran cada token por su `String`; una tabla de
+         nombres desplazada una posición haría que `emit tokens` llamara `Plus` a un `Minus`, y este test
+         es el que lo dice con su causa y no con el síntoma. Y un valor fuera de la tabla no debe hacer un
+         panic al imprimirlo
+ref:     TestTokenKind/strings
+
+[T05.03] lexer.empty_file_is_eof                           level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un fichero vacío da un solo token, `Eof`
+input:   ""
+expect:  los tipos de los tokens son exactamente [Eof]
+why:     todos los pases posteriores leen tokens hasta encontrar `Eof` sin comprobar el final del buffer;
+         si el lexer devolviera un buffer vacío para un fichero vacío, el parser leería fuera de él
+ref:     TestLexer/empty_file_is_eof
+
+[T05.04] lexer.punctuation_maximal_munch                   level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    la puntuación toma siempre el token más largo que cabe, y cada signo da su tipo; los signos de un carácter miden exactamente un byte y los de dos caracteres, dos
+input:   "|>=>..->"; los 22 signos de un carácter separados por espacios; y los diez de dos caracteres (`..` `=>` `->` `|>` `==` `!=` `<=` `>=` `&&` `||`) separados por espacios
+expect:  Pipe FatArrow DotDot Arrow Eof para la primera; para las otras dos, el tipo de cada signo en orden, seguido de Eof; en la de los 22 signos de un carácter, el signo número i (desde 0) ocupa los bytes [2i, 2i+1) y el Eof tiene el span vacío [43,43); y en la de los diez de dos caracteres, el signo número i ocupa los bytes [3i, 3i+2) y el Eof tiene el span vacío [29,29)
+why:     `=>` es una sola flecha y no un `=` seguido de un `>`; un lexer que leyera de un carácter en un
+         carácter rompería los brazos de `match`, las comparaciones y la tubería `|>`, y con los
+         signos juntos el fallo sale en la primera línea que los use. Y un signo de un carácter mide un
+         byte: si uno tomara dos se comería el espacio que le sigue, y con el `#` al final del fichero el
+         `Eof` quedaría fuera de él. Los de dos caracteres, igual: si uno tomara tres bytes se comería el
+         espacio que le sigue, y el tipo de los tokens no lo delata (el siguiente se encuentra igual), pero
+         sí su span
+ref:     TestLexer/punctuation_maximal_munch
+
+[T05.05] lexer.keywords_and_identifiers                    level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    la clase de un identificador la decide su primer carácter, `_` solo es `Underscore`, las palabras clave tienen su propio tipo, el tabulador y el `\r` suelto separan tokens como un espacio, y un nombre admite los extremos de cada rango (`a` y `z`, `A` y `Z`, `0` y `9`) y no admite el carácter que queda justo fuera de él: `` ` `` (antes de la `a`), `@` (antes de la `A`), `/` (antes del `0`) y `:` (después del `9`)
+input:   "fn fib Shape _x _X _1 _"; las 26 palabras clave en una línea; "fnx f For IF if2 _fn"; "a\tb\rc" (con un tabulador y un retorno de carro reales); "az AZ a0 Z9 z9"; y ``"a`b a@b a/b a:b"``
+expect:  KwFn LowerIdent UpperIdent LowerIdent LowerIdent LowerIdent Underscore Eof, sin diagnósticos, y los payloads de los cinco identificadores se internan como "fib", "Shape", "_x", "_X" y "_1"; para las palabras clave, su tipo `KwXxx` en orden; para la tercera, LowerIdent LowerIdent UpperIdent UpperIdent LowerIdent LowerIdent Eof; para la cuarta, LowerIdent tres veces y Eof; para la quinta, LowerIdent, UpperIdent, LowerIdent, UpperIdent, LowerIdent y Eof; para la sexta, por este orden, LowerIdent, Error y LowerIdent (de ``a`b``), otra vez LowerIdent, Error y LowerIdent (de `a@b`), LowerIdent, Slash y LowerIdent (de `a/b`), LowerIdent, Colon y LowerIdent (de `a:b`) y Eof
+why:     el parser distingue un constructor de una variable solo por el tipo del token, sin mirar el
+         texto; si `_X` saliera como `UpperIdent`, un patrón `_X` se tomaría por un constructor. Y una
+         palabra que solo empieza como una clave (`fnx`, `if2`) o que la contiene (`_fn`) es un nombre.
+         Si el tabulador o el `\r` no fueran espacio en blanco, cada fichero con sangría de tabuladores
+         o con saltos CRLF daría un E0104 en cada línea. Y un rango que se queda un carácter corto, o
+         que empieza un carácter tarde, parte justo los nombres con un extremo: sin la `Z`, `AZ` sería un
+         nombre y un carácter inesperado; sin el `9`, `Z9` y `z9` serían un nombre y un número; y sin el
+         `0`, `a0` sería un nombre y un número. Y uno que llega un carácter más allá junta con el nombre lo
+         que no es suyo: si el rango de las minúsculas empezara en `` ` ``, ``a`b`` sería un solo nombre y no un
+         nombre, un carácter inesperado y otro nombre; si el de las mayúsculas empezara en `@`, pasaría lo mismo
+         con `a@b`; si el de los dígitos dentro de un nombre empezara en `/`, `a/b` sería un solo nombre y no una
+         división; y si acabara en `:`, `a:b` sería un solo nombre y no un nombre, los dos puntos y otro nombre
+ref:     TestLexer/keywords_and_identifiers
+
+[T05.06] lexer.contextual_words_are_identifiers            level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    las palabras contextuales no son palabras clave: se lexan como identificadores
+input:   "from as only" y "recv send default"
+expect:  LowerIdent tres veces y Eof, en cada una
+why:     `from`, `as`, `only`, `recv`, `send` y `default` solo significan algo en un sitio concreto
+         de la gramática; si el lexer las hiciera palabras clave, `let from = 1` dejaría de ser un
+         programa válido y los nombres más corrientes quedarían prohibidos en todas partes
+ref:     TestLexer/contextual_words_are_identifiers
+
+[T05.07] lexer.line_comment_skipped                        level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un comentario `//` se ignora hasta el final de la línea, y el salto de línea que lo termina se anota en el token siguiente
+input:   "a // b\nc" y "a // b"
+expect:  LowerIdent LowerIdent Eof, sin diagnósticos, con `NewlineBefore` en false, true y false; y, para la segunda, LowerIdent Eof
+why:     la regla de línea decide dónde termina una sentencia mirando `NewlineBefore`; si el comentario
+         se tragara el salto de línea, `a // b` seguido de `c` se leería como una sola sentencia, y
+         un comentario al final del fichero, sin salto, no debe quedarse buscando uno
+ref:     TestLexer/line_comment_skipped
+
+[T05.08] lexer.nested_block_comment                        level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    los comentarios `/* */` se anidan: el primer `*/` cierra solo el comentario más interno; un comentario vacío `/**/` se cierra con su propio `*/`, también dentro de otro; y un salto de línea dentro de un comentario cuenta como salto de línea para el token que viene después
+input:   "/* a /* b */ c */ x", "a /* x\ny */ b" (con un salto de línea real) y, uno por uno, "/**/ x" y "/* /**/ */ x"
+expect:  para la primera, LowerIdent y Eof, sin diagnósticos, y la `x` ocupa el span [18,19). Para la segunda, sin diagnósticos, y el token que empieza en 12 es un LowerIdent (la `b`) con `NewlineBefore` en true. Para las dos últimas, LowerIdent y Eof, sin diagnósticos
+why:     el anidamiento permite comentar un trozo de código que ya tiene comentarios; si el primer
+         `*/` cerrara todo, ` c */ x` quedaría como código y el error saldría lejos del comentario.
+         Y si el salto de línea de dentro del comentario se perdiera, un comentario de varias líneas
+         pegaría la línea siguiente a la anterior. Y un `/**/` vacío se cierra con su propio `*/`: si
+         el lexer, al abrir, se saltara también el asterisco (tres bytes en vez de dos), no vería el
+         cierre y el comentario se comería el resto del fichero, con un E0103 aunque el comentario
+         esté bien escrito
+ref:     TestLexer/nested_block_comment
+
+[T05.09] lexer.unterminated_block_comment_E0103            level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un comentario de bloque sin cerrar da un solo E0103, con la etiqueta en el `/*` más externo
+input:   "/* a /* b */", "x /* a /* b */", "/*/" y "/* /*/ */ x"
+expect:  un error E0103 `unterminated block comment`, con la etiqueta primaria `comment starts here` en el span [0,2), [2,4), [0,2) y [0,2) respectivamente; los tokens son solo Eof, o LowerIdent y Eof en la segunda
+why:     necesitas ver dónde empieza el comentario que se comió el resto del fichero, no dónde
+         se acabó el fichero; y `/*/` abre un comentario en vez de cerrarlo con su propio asterisco, también
+         dentro de otro: ahí abre un segundo nivel, y el `*/` que le sigue cierra solo ese, así que el fichero
+         acaba aún dentro del primero. Si el `/*` de dentro avanzara un byte en vez de dos, su asterisco
+         cerraría el nivel que acaba de abrir, el `*/` siguiente cerraría el primero, y la `x` se leería
+         como código sin ningún error
+ref:     TestLexer/unterminated_block_comment_E0103
+
+[T05.10] lexer.unexpected_char_E0104                       level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un carácter que no empieza ningún token da E0104 y un token `Error`, y el lexer sigue
+input:   "$", "a $ b" y "&"
+expect:  para "$": Error y Eof, y un solo E0104 `unexpected character `$`` con la etiqueta `not valid in Ki source` en [0,1); para "a $ b": LowerIdent Error LowerIdent Eof, el Error en [2,3) y un solo E0104 en ese span; para "&": un solo E0104 `unexpected character `&``, porque un `&` suelto no es `&&`
+why:     el programa tiene que seguir lexándose para que se vean todos los errores de una vez, pero sin
+         inventar tokens: el `Error` marca el sitio para que el parser no dé un segundo error encima
+ref:     TestLexer/unexpected_char_E0104
+
+[T05.11] lexer.unexpected_multibyte_char_E0104             level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un carácter de varios bytes es un solo carácter inesperado, no uno por byte; y el mensaje enseña como `<U+XXXX>` el carácter que no se puede imprimir
+input:   "é" (2 bytes), "€" (3 bytes), "😀" (4 bytes), y cinco caracteres que no se ven como lo que son: U+202E (3 bytes), U+0085 (2), U+2028 (3), U+200B (3) y el espacio de no separación U+00A0 (2)
+expect:  en cada una, Error y Eof, con el token Error en [0,n) y un solo E0104 con etiqueta `not valid in Ki source` y span [0,n), con n = 2, 3, 4, 3, 2, 3, 3 y 2. El mensaje es `unexpected character` seguido del carácter entre comillas invertidas en las tres primeras, y de `<U+202E>`, `<U+0085>`, `<U+2028>`, `<U+200B>` y `<U+00A0>` (también entre comillas invertidas) en las otras
+why:     si el lexer avanzara un byte, partiría el carácter por la mitad y daría un error por cada
+         byte, cada uno con un byte suelto que ni siquiera se puede mostrar. Y un mensaje que
+         llevara tal cual un control bidireccional o un espacio de ancho cero sería invisible, o
+         reordenaría el texto que lo rodea, y no diría qué carácter sobra. Con el espacio de no
+         separación, que se cuela al pegar código y se ve igual que un espacio normal, el mensaje
+         tendría unas comillas con un hueco dentro y no diría cuál es
+ref:     TestLexer/unexpected_multibyte_char_E0104
+
+[T05.12] lexer.invalid_utf8_stops_with_E0101               level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    un fichero que `CheckSource` rechaza no se lexa: el buffer es solo `Eof` y el único diagnóstico es el de `CheckSource`
+input:   "\xff", "fn fib\xff x" y "fn fib\x01 x"
+expect:  en cada una, los tokens son exactamente [Eof] y hay un solo diagnóstico, de código E0101, E0101 y E0102 respectivamente
+why:     lo que viene antes del byte inválido no se puede fiar de que sea texto; si el lexer entregara
+         `fn fib` al parser, este daría errores de sintaxis encima de un error de codificación
+ref:     TestLexer/invalid_utf8_stops_with_E0101
+
+[T05.13] lexer.spans_are_within_file                       level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    los spans de los tokens están dentro del fichero, son los exactos, y el de `Eof` es vacío y está al final; y `DumpTokens` escribe donde empieza cada uno como línea:columna
+input:   "fn fib(n) { }"
+expect:  sin diagnósticos; para cada token, Lo <= Hi <= 13 y el fichero del span es el del fichero lexado; los spans, en orden, [0,2) [3,6) [6,7) [7,8) [8,9) [10,11) [12,13) y [13,13). El volcado es exactamente ocho líneas: `1:1 KwFn`, `1:4 LowerIdent(fib)`, `1:7 LParen`, `1:8 LowerIdent(n)`, `1:9 RParen`, `1:11 LBrace`, `1:13 RBrace` y `1:14 Eof`
+why:     los mensajes de error y `emit tokens` calculan líneas y columnas a partir del span; un span
+         desplazado un byte pone el caret bajo el carácter equivocado, y uno que se sale del fichero
+         hace un panic al buscar su línea
+ref:     TestLexer/spans_are_within_file
