@@ -411,4 +411,43 @@ func TestRunner(t *testing.T) {
 			t.Errorf("got %d %q %q, want 7 \"out\\n\" \"err\\n\"", code, out.String(), errOut.String())
 		}
 	})
+	t.Run("update_ignores_a_run_that_did_not_exit", func(t *testing.T) {
+		// With Update on, what the run printed is written into the file. A run
+		// that did not exit (the Exec gives -1 when the program cannot start or
+		// dies of a signal) did not print the output of the program, so the file
+		// stays as it is, it is not run again, and it fails on the exit code.
+		const before = "// test: T00.01\n// run: check\n// expect-stdout: old\nfn main() {}\n"
+		dir := t.TempDir()
+		writeFiles(t, dir, map[string]string{"f.ki": before})
+		unchanged := func() bool {
+			data, err := os.ReadFile(filepath.Join(dir, "f.ki"))
+			if err != nil {
+				t.Fatalf("cannot read the file back: %v", err)
+			}
+			return string(data) == before
+		}
+
+		var calls []call
+		died := func([]string) (int, string, string) { return -1, "partial\n", "crash report\n" }
+		r := &kitest.Runner{Root: dir, Update: true, Out: io.Discard, Exec: fakeExec(&calls, died)}
+		ok, report := r.RunFile("f.ki")
+		if want := "FAIL f.ki\n- exit 0\n+ exit -1\n- old\n+ partial\n- <eof>\n+ crash report\n"; ok || report != want {
+			t.Errorf("a run that died: got ok=%v and %q, want false and %q", ok, report, want)
+		}
+		if !unchanged() || len(calls) != 1 {
+			t.Errorf("a run that died: the file changed or the program ran %d times, want the file as it was and 1 run", len(calls))
+		}
+
+		// The real thing: a program that cannot be started prints its reason on
+		// stderr, and that must not become the expect-stderr of the file.
+		r = &kitest.Runner{Root: dir, Update: true, Out: io.Discard, Exec: kitest.ExecSubprocess("/nonexistent/ki")}
+		ok, report = r.RunFile("f.ki")
+		if ok || !strings.HasPrefix(report, "FAIL f.ki\n- exit 0\n+ exit -1\n") {
+			t.Errorf("a program that cannot start: got ok=%v and %q, want false and a report that starts with the exit code", ok, report)
+		}
+		if !unchanged() {
+			data, _ := os.ReadFile(filepath.Join(dir, "f.ki"))
+			t.Errorf("a program that cannot start: the file is %q afterwards, want it as it was", data)
+		}
+	})
 }

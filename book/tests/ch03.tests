@@ -601,7 +601,7 @@ kind:    unit (go test)      file: internal/driver/cli_test.go
 case:    `Main` con `test` y sin ninguna ruta
 input:   ["test"]
 expect:  código de salida 2; stdout vacío; stderr exactamente
-         "ki test: missing PATH\nusage: ki test [--root DIR] PATH...\n"
+         "ki test: missing PATH\nusage: ki test [--root DIR] [--update] PATH...\n"
 why:     sin ninguna ruta `ki test` no ejecutaría nada y saldría con 0: un script con una variable vacía
          creería que los tests pasan
 ref:     TestCLI/test_without_path_is_usage_error
@@ -691,8 +691,8 @@ ref:     TestReportAll/unknown_format_panics
 [T03.66] cli.test_exit_code_and_summary                          level: core
 kind:    unit (go test)      file: internal/driver/cli_test.go
 case:    `ki test --root` sobre un golden que pasa y otro que falla, con una o con dos rutas, en los dos órdenes
-input:   `test --root DIR pass.ki`, `… fail.ki`, `… pass.ki fail.ki` y `… fail.ki pass.ki`, con el `Exec` en proceso (`Main`), porque bajo `go test` el ejecutable es el binario de test
-expect:  el código de salida es 0 solo cuando pasa el único fichero y 1 en los otros tres; stdout es exactamente los informes en el orden de las rutas y el resumen ("ki test: 1 passed, 1 failed\n", por ejemplo); stderr, vacío
+input:   `test --root DIR pass.ki`, `… fail.ki`, `… pass.ki fail.ki` y `… fail.ki pass.ki`, y `test --root DIR --update fail.ki pass.ki`, cada uno con una copia nueva de los dos ficheros y con el `Exec` en proceso (`Main`), porque bajo `go test` el ejecutable es el binario de test
+expect:  el código de salida es 0 solo cuando pasa el único fichero y con `--update`, y 1 en los otros tres; stdout es exactamente los informes en el orden de las rutas y el resumen ("ki test: 1 passed, 1 failed\n", por ejemplo); con `--update`, `fail.ki` se reescribe y pasa ("PASS fail.ki\nPASS pass.ki\nki test: 2 passed, 0 failed\n"); stderr, vacío
 why:     el paso `ki test --root . tests` de `ci-local.sh` solo puede fallar si el código de salida lo dice;
          si fuera siempre 0, si ignorara `--root` o si ejecutara solo la primera o la última ruta, la CI
          daría por buenos unos golden rotos

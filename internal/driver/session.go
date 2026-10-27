@@ -36,7 +36,7 @@ func parseDiagFormat(v string) (DiagFormat, error) {
 
 // Session holds what every command shares: the standard streams, the source
 // files read so far and the diagnostics the passes have reported about them.
-// It grows with the book (interner…).
+// It grows with the book.
 //
 // Commands read and write through the Session instead of os.Stdin, os.Stdout
 // and os.Stderr, so a test can run ki in-process and capture its output.
@@ -45,7 +45,8 @@ type Session struct {
 	Stdout, Stderr io.Writer
 	Sources        base.SourceManager
 	Sink           diag.Sink
-	Format         DiagFormat // how ReportAll writes the diagnostics; one of the constants above
+	Interner       *base.Interner // the identifiers of the files lexed so far; NewSession makes it
+	Format         DiagFormat     // how ReportAll writes the diagnostics; one of the constants above
 }
 
 // NewSession returns a Session that reads from stdin and writes to stdout and
@@ -54,7 +55,7 @@ type Session struct {
 // is set here as the book adds it, so build a Session with NewSession and not
 // with a &Session{...} literal.
 func NewSession(stdin io.Reader, stdout, stderr io.Writer) *Session {
-	return &Session{Stdin: stdin, Stdout: stdout, Stderr: stderr, Format: FormatHuman}
+	return &Session{Stdin: stdin, Stdout: stdout, Stderr: stderr, Interner: base.NewInterner(), Format: FormatHuman}
 }
 
 // truncationNote is the last line of the diagnostics when the sink dropped

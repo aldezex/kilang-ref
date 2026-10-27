@@ -1,7 +1,9 @@
 package syntax_test
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aldezex/kilang/internal/base"
@@ -169,10 +171,11 @@ func TestLexer(t *testing.T) {
 	})
 	t.Run("line_comment_skipped", func(t *testing.T) {
 		tb, sink := lexAll(t, "a // b\nc")
-		if len(tb.Tokens) != 3 || tb.Tokens[0].Kind != syntax.LowerIdent || tb.Tokens[1].Kind != syntax.LowerIdent || tb.Tokens[2].Kind != syntax.Eof {
-			t.Fatalf("got %+v, want LowerIdent LowerIdent Eof", tb.Tokens)
+		if len(tb.Tokens) != 4 || tb.Tokens[0].Kind != syntax.LowerIdent || tb.Tokens[1].Kind != syntax.Newline ||
+			tb.Tokens[2].Kind != syntax.LowerIdent || tb.Tokens[3].Kind != syntax.Eof {
+			t.Fatalf("got %+v, want LowerIdent Newline LowerIdent Eof", tb.Tokens)
 		}
-		for i, want := range []bool{false, true, false} {
+		for i, want := range []bool{false, false, true, false} {
 			if got := tb.Tokens[i].NewlineBefore; got != want {
 				t.Errorf("token %d: NewlineBefore = %v, want %v", i, got, want)
 			}
@@ -353,6 +356,76 @@ func TestLexer(t *testing.T) {
 		const wantDump = "1:1 KwFn\n1:4 LowerIdent(fib)\n1:7 LParen\n1:8 LowerIdent(n)\n1:9 RParen\n1:11 LBrace\n1:13 RBrace\n1:14 Eof\n"
 		if got := dumpTokens(t, src); got != wantDump {
 			t.Errorf("DumpTokens of %q = %q, want %q", src, got, wantDump)
+		}
+	})
+	t.Run("dump_tokens", func(t *testing.T) {
+		// One line per token: where it starts as line:column, its kind and, for
+		// the kinds that carry a value, the value in parentheses.
+		for _, row := range []struct{ src, want string }{
+			// The end of the file after a line break is on the next line.
+			{"fn fib\n", "1:1 KwFn\n1:4 LowerIdent(fib)\n2:1 Eof\n"},
+			// A Newline starts at the line feed, or at the carriage return of a CRLF.
+			{"a\nb", "1:1 LowerIdent(a)\n1:2 Newline\n2:1 LowerIdent(b)\n2:2 Eof\n"},
+			{"a\r\nb", "1:1 LowerIdent(a)\n1:2 Newline\n2:1 LowerIdent(b)\n2:2 Eof\n"},
+			// The values: an Int, a Float, a Char as a code point and a String
+			// quoted as Go does, with its escape resolved.
+			{`20 1_000.5 'a' "a\tb"`, "1:1 Int(20)\n1:4 Float(1000.5)\n1:12 Char(U+0061)\n1:16 String(\"a\\tb\")\n1:22 Eof\n"},
+			{`"a${x}b${y}c"`, "1:1 StringHead(\"a\")\n1:5 LowerIdent(x)\n1:6 StringMid(\"b\")\n1:10 LowerIdent(y)\n1:11 StringTail(\"c\")\n1:14 Eof\n"},
+			{"$", "1:1 Error\n1:2 Eof\n"},
+			// A Char is U+ and its code point in upper-case hexadecimal with at
+			// least four digits: a letter stays a capital, and a code point past
+			// U+FFFF takes a fifth digit.
+			{`'é' '\u{1F600}'`, "1:1 Char(U+00E9)\n1:5 Char(U+1F600)\n1:16 Eof\n"},
+			// A Float is written as strconv does with 'g' and no fixed precision:
+			// the shortest text that reads back as the same number, however many
+			// digits that takes (3.141592653589793 has sixteen), with an exponent
+			// when it is very large or very small.
+			{"1e21 1e-7 3.141592653589793", "1:1 Float(1e+21)\n1:6 Float(1e-07)\n1:11 Float(3.141592653589793)\n1:28 Eof\n"},
+			// A token several lines down, after a blank line and a comment, and
+			// tokens after a multibyte one, a tab and a lone carriage return on
+			// the same line: the String "ñ" is 3 code points but 4 bytes, so b
+			// is in column 7 (the tab takes one column, not four), and c is in
+			// column 9 (the carriage return takes one column and starts no line).
+			{"a\n\n// c\n  \"ñ\"\tb\rc", "1:1 LowerIdent(a)\n1:2 Newline\n4:3 String(\"ñ\")\n4:7 LowerIdent(b)\n4:9 LowerIdent(c)\n4:10 Eof\n"},
+		} {
+			if got := dumpTokens(t, row.src); got != row.want {
+				t.Errorf("DumpTokens of %q = %q, want %q", row.src, got, row.want)
+			}
+		}
+
+		// The long row below, with a DumpTokens that is wrong and slow, would
+		// run until the time limit of go test and hide the messages of the rows
+		// above behind a panic. So stop here if one of them failed.
+		if t.Failed() {
+			return
+		}
+
+		// A file that is one very long line. A DumpTokens that asked
+		// SourceManager.LineCol for the position of every token would count
+		// the code points from the start of the line each time, and its cost
+		// would grow with the square of the line: this file would not finish
+		// within the default time limit of go test, which is the only clock
+		// here (the test measures no time, so a slow machine does not fail it).
+		// The tokens are the strings "ñ" followed by a space: 5 bytes but 4
+		// code points, so a column counted in bytes is wrong from the second
+		// token on.
+		const n = 2_000_000
+		rest := dumpTokens(t, strings.Repeat(`"ñ" `, n))
+		for i := 0; i <= n; i++ {
+			want := fmt.Sprintf("1:%d String(\"ñ\")", 1+4*i)
+			if i == n {
+				want = fmt.Sprintf("1:%d Eof", 1+4*n)
+			}
+			line, after, found := strings.Cut(rest, "\n")
+			if !found || line != want {
+				// The first line that differs is enough: the dump has two
+				// million of them.
+				t.Fatalf("DumpTokens of %d strings on one line: line %d is %q, want %q", n, i+1, line, want)
+			}
+			rest = after
+		}
+		if rest != "" {
+			t.Errorf("DumpTokens of %d strings on one line goes on after the Eof: %d more bytes", n, len(rest))
 		}
 	})
 }

@@ -1,0 +1,12 @@
+// test: T05.63
+// run: emit tokens
+// expect-stdout:
+// | 11:1 KwLet
+// | 11:5 LowerIdent(total)
+// | 11:11 Eq
+// | 11:13 LowerIdent(xs)
+// | 12:3 Pipe
+// | 12:6 LowerIdent(sum)
+// | 13:1 Eof
+let total = xs
+  |> sum

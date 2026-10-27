@@ -43,11 +43,20 @@ func (o *outWriter) Flush() error {
 	return err
 }
 
-// runTest is `ki test [--root DIR] PATH...`: it runs the golden files under
-// each PATH (relative to DIR, the working directory by default) and prints a
-// PASS or FAIL line for each, the differences of the failures and a summary.
+// runTest is `ki test [--root DIR] [--update] PATH...`: it runs the golden files
+// under each PATH (relative to DIR, the working directory by default) and prints
+// a PASS or FAIL line for each, the differences of the failures and a summary.
 // It exits with 1 if any file failed, or if the report could not be written to
 // stdout (a full disk, say): a script must not take a lost report for a pass.
+//
+// With --update each file first has its expect-stdout and expect-stderr rewritten
+// with what the run printed (see kitest.Runner), and is then judged as it now is.
+// It can still fail on what --update never changes (the exit code and the
+// annotations) and on what the rewrite cannot fix in one run: an output that
+// names a line of the file (a second --update settles it), a file that cannot
+// be written, an output with no final line feed, which the header cannot say,
+// and, in a file whose lines end in LF, an output line that ends in a carriage
+// return, which the header reads without it.
 //
 // Each file runs as a subprocess of ki's own executable, so what is tested is
 // the real binary: its exit code and, once there is one, the flushing of its
@@ -56,6 +65,7 @@ func (o *outWriter) Flush() error {
 func runTest(s *Session, c *command, args []string) int {
 	fs := newFlagSet(c)
 	root := fs.String("root", ".", "the directory the paths are relative to")
+	update := fs.Bool("update", false, "rewrite expect-stdout and expect-stderr with what the run printed")
 	if code, done := parseFlags(s, c, fs, args); done {
 		return code
 	}
@@ -72,7 +82,7 @@ func runTest(s *Session, c *command, args []string) int {
 		exec = kitest.ExecSubprocess(exe)
 	}
 	out := &outWriter{w: s.Stdout}
-	r := &kitest.Runner{Root: *root, Exec: exec, Out: out}
+	r := &kitest.Runner{Root: *root, Exec: exec, Out: out, Update: *update}
 	_, failed := r.RunPaths(fs.Args())
 	if out.err != nil {
 		return writeError(s, c, out.err)

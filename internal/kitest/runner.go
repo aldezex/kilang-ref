@@ -35,6 +35,19 @@ type Runner struct {
 	// that hangs or crashes ki cannot hide the lines before it, and a buffered
 	// Out does not lose the result because its owner forgot to flush it.
 	Out io.Writer
+
+	// Update makes the runner rewrite the expect-stdout and the expect-stderr of
+	// each file with what the run printed, and then judge the file as it is
+	// afterwards. It never changes the expect-exit or the annotations, so a file
+	// can still fail on those: a key inserted above an annotation moves its line
+	// down, and an absolute `@LINE:COL` keeps the line it had, while a relative
+	// `@COL` goes with its line. See updateFile for the form of the keys.
+	//
+	// A run that did not exit (Exec gave a negative code: the program could not
+	// start, or died of a signal) is not recorded, because what it printed is
+	// not the output of the program; the file stays as it is and fails on the
+	// exit code.
+	Update bool
 }
 
 // root returns the directory the runner works in.
@@ -81,6 +94,13 @@ func (r *Runner) enterRoot() (absRoot string, restore func(), err error) {
 //
 // A malformed header is a failure whose only difference is
 // `- malformed header: …`.
+//
+// With Update the file is rewritten first (see updateFile) and, if that changed
+// it, run again: the lines it added or removed move the code, and an output that
+// names a line must be the one of the file as it now is. The report is about
+// that second run. A file that cannot be written fails with
+// `- cannot write file: …`. A run that did not exit is not recorded (see
+// Runner.Update).
 func (r *Runner) RunFile(path string) (ok bool, report string) {
 	absRoot, restore, err := r.enterRoot()
 	if err != nil {
@@ -104,7 +124,22 @@ func (r *Runner) runHere(absRoot, path string) (ok bool, report string) {
 
 	command := append(slices.Clone(spec.Run), spec.Args...)
 	var stdout, stderr bytes.Buffer
-	exit := r.Exec(append(slices.Clone(command), rel), &stdout, &stderr)
+	run := func() int {
+		stdout.Reset()
+		stderr.Reset()
+		return r.Exec(append(slices.Clone(command), rel), &stdout, &stderr)
+	}
+	exit := run()
+	if r.Update && exit >= 0 {
+		updated, changed, err := updateFile(path, data, spec, stdout.String(), stderr.String())
+		if err != nil {
+			return false, failReport(rel, "- "+err.Error())
+		}
+		if changed {
+			spec = updated
+			exit = run()
+		}
+	}
 
 	wantExit := 0
 	switch {

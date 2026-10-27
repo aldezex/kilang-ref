@@ -75,7 +75,7 @@ ref:     TestLexer/contextual_words_are_identifiers
 kind:    unit (go test)      file: internal/syntax/lexer_test.go
 case:    un comentario `//` se ignora hasta el final de la línea, y el salto de línea que lo termina se anota en el token siguiente
 input:   "a // b\nc" y "a // b"
-expect:  LowerIdent LowerIdent Eof, sin diagnósticos, con `NewlineBefore` en false, true y false; y, para la segunda, LowerIdent Eof
+expect:  LowerIdent Newline LowerIdent Eof (el Newline lo inserta la regla de línea, sesión 4), sin diagnósticos, con `NewlineBefore` en false, false, true y false; y, para la segunda, LowerIdent Eof
 why:     la regla de línea decide dónde termina una sentencia mirando `NewlineBefore`; si el comentario
          se tragara el salto de línea, `a // b` seguido de `c` se leería como una sola sentencia, y
          un comentario al final del fichero, sin salto, no debe quedarse buscando uno
@@ -343,7 +343,7 @@ ref:     TestStrings/two_chars_E0108
 kind:    unit (go test)      file: internal/syntax/strings_test.go
 case:    un literal de carácter sin cerrar en su línea da E0108 y un token Char que llega hasta el final del contenido de la línea; el lexer sigue en el salto de línea, y un CRLF que son los dos últimos bytes del fichero también acaba la línea
 input:   `'a`, `'`, `'a b`, `'a\nx`, `'a\r\nx`, `'\` al final del fichero, `'\` y un salto de línea y `x`, `'\` y un CRLF y `x`, `'a` seguido de un `\r` suelto que acaba el fichero, y `'a` y `'\` seguidos de un CRLF que acaba el fichero
-expect:  un solo diagnóstico E0108 (ningún E0106, aunque la barra esté al final de la línea) y un Char con payload 0xFFFD y span [0,2) [0,1) [0,4) [0,2) [0,2) [0,2) [0,2) [0,2) [0,3) [0,2) [0,2) (el `\r` suelto del final del fichero es contenido, no un salto de línea, y con el `\n` detrás es el salto de línea y el Char no lo incluye); después, Eof o bien LowerIdent(x) y Eof. En `'a\nx`, la `x` lleva NewlineBefore
+expect:  un solo diagnóstico E0108 (ningún E0106, aunque la barra esté al final de la línea) y un Char con payload 0xFFFD y span [0,2) [0,1) [0,4) [0,2) [0,2) [0,2) [0,2) [0,2) [0,3) [0,2) [0,2) (el `\r` suelto del final del fichero es contenido, no un salto de línea, y con el `\n` detrás es el salto de línea y el Char no lo incluye); después, Eof o bien Newline, LowerIdent(x) y Eof (un Char, aunque sea erróneo, puede cerrar una expresión, así que la regla de línea inserta el Newline). En `'a\nx`, la `x` lleva NewlineBefore y el Newline no
 why:     un carácter sin cerrar no puede tragarse el resto del fichero: acaba donde acaba la línea, sin
          el `\r` de un CRLF. Y una barra al final de la línea no es un escape inválido: el único error
          es el literal sin cerrar. Un `\r` que acaba el fichero no tiene ningún `\n` detrás, y
@@ -384,7 +384,7 @@ ref:     TestStrings/lone_dollar_is_literal
 kind:    unit (go test)      file: internal/syntax/strings_test.go
 case:    un string que no se cierra en su línea da un solo E0110 en la comilla de apertura y un token Error desde esa comilla hasta el final del contenido de la línea; el lexer sigue en el salto de línea
 input:   `"abc\nx`, `"abc`, `"`, `"abc\n`, `"abc\r\nx`, `"a\rb\nx`, `"abc` seguido de un `\r` suelto que acaba el fichero, `a\n  "abc\nx`, `a\n"abc` y `"abc\n"def\nx`
-expect:  en `"abc\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof con los spans [0,4) [5,6) [6,6), y solo la `x` con NewlineBefore. En las demás, un solo E0110 en la comilla y un Error que acaba en 4, 1, 4, 4, 4 y 5 (sin el `\r` del CRLF, y con el `\r` suelto dentro, también cuando acaba el fichero); en `a\n  "abc\nx` la comilla está en 4 y el Error y la `x` llevan NewlineBefore; en `a\n"abc` solo el Error lo lleva y Eof no. En `"abc\n"def\nx`, dos diagnósticos E0110 (en 0 y en 5) y los tokens Error, Error, LowerIdent(x), Eof
+expect:  en `"abc\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof con los spans [0,4) [5,6) [6,6), y solo la `x` con NewlineBefore. En las demás, un solo E0110 en la comilla y un Error que acaba en 4, 1, 4, 4, 4 y 5 (sin el `\r` del CRLF, y con el `\r` suelto dentro, también cuando acaba el fichero); en `a\n  "abc\nx` la comilla está en 4, los tokens son LowerIdent(a), Newline, Error, LowerIdent(x) y Eof, y el Error y la `x` llevan NewlineBefore; en `a\n"abc` los tokens son LowerIdent(a), Newline, Error y Eof, y solo el Error lleva NewlineBefore. En `"abc\n"def\nx`, dos diagnósticos E0110 (en 0 y en 5) y los tokens Error, Error, LowerIdent(x), Eof
 why:     el error es de una línea, no del fichero: el lexer vuelve a sincronizar en el salto y el resto del
          programa se lee con normalidad. Es un token Error y no un String para que la regla de línea
          no vea aquí el final de una expresión (es una decisión de diseño)
@@ -436,7 +436,7 @@ ref:     TestStrings/string_in_interpolation
 kind:    unit (go test)      file: internal/syntax/strings_test.go
 case:    un salto de línea (o el final del fichero) dentro de una interpolación da un solo E0110 en la comilla del string más externo; el string pasa a ser un único token Error, en el sitio de su primer token, y el lexer sigue en el salto
 input:   `"${\nx`; quince filas más, `"${ y\nx`, `"${\r\nx`, `"${\n\n  \nx`, `"${x`, `"${`, `"${x\n`, `"${\r\n`, `"${ "a${ \nx`, `"${ "abc\nx`, `"a${x}b\ny`, `"a${x}b${y}c\nz`, `"${ /* a\nb */ x`, `"${ "a${x}b" \ny`, `"${ "a" \ny` y `"${ x // c\ny`; `"${ x /* c` y `"${ 'a`; y `a\n"${\nx`, `"${\n}x` y `"${\n}"`
-expect:  en `"${\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof, con los spans [0,3) [4,5) [5,5), y solo la `x` con NewlineBefore. En cada una de las quince filas: un solo E0110 con la etiqueta en la comilla, en 0, el más externo aunque haya strings dentro de otros; un Error que empieza en 0 y acaba en 5, 3, 3, 4, 3, 4, 3, 9, 8, 7, 12, 8, 13, 8 y 10 (sin el `\r` de un CRLF y en el primer salto de una racha, también si está dentro de un comentario y también si el salto es lo último del fichero); los tokens de la expresión (`y`, `x`, `z`…) y los strings completos que ya estaban dentro se quedan detrás del Error; los StringHead y StringMid de los strings abiertos no están; y los spans nunca retroceden. En `"${ x /* c`: dos diagnósticos, el E0103 de siempre con la etiqueta «comment starts here» en [6,8) y después el E0110 en la comilla, y los tokens Error, LowerIdent(x) y Eof. En `"${ 'a`: dos diagnósticos, el E0108 de siempre en [4,6) y después el E0110 en la comilla, y los tokens Error, Char con payload 0xFFFD y Eof. En `a\n"${\nx`: un E0110 con la comilla en 2, y el Error lleva NewlineBefore. En `"${\n}x`: un E0110 y los tokens Error, RBrace, LowerIdent(x) y Eof. En `"${\n}"`: dos E0110 (en 0 y en 5) y los tokens Error [0,3), RBrace [4,5), Error [5,6) y Eof [6,6)
+expect:  en `"${\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof, con los spans [0,3) [4,5) [5,5), y solo la `x` con NewlineBefore. En cada una de las quince filas: un solo E0110 con la etiqueta en la comilla, en 0, el más externo aunque haya strings dentro de otros; un Error que empieza en 0 y acaba en 5, 3, 3, 4, 3, 4, 3, 9, 8, 7, 12, 8, 13, 8 y 10 (sin el `\r` de un CRLF y en el primer salto de una racha, también si está dentro de un comentario y también si el salto es lo último del fichero); los tokens de la expresión (`y`, `x`, `z`…) y los strings completos que ya estaban dentro se quedan detrás del Error, y la regla de línea (sesión 4) inserta un Newline delante del primer token de la línea siguiente si el último de ellos puede cerrar una expresión (`y`, `x`, `y`, un StringTail, un String y `x`: seis filas); los StringHead y StringMid de los strings abiertos no están; y los spans nunca retroceden. En `"${ x /* c`: dos diagnósticos, el E0103 de siempre con la etiqueta «comment starts here» en [6,8) y después el E0110 en la comilla, y los tokens Error, LowerIdent(x) y Eof. En `"${ 'a`: dos diagnósticos, el E0108 de siempre en [4,6) y después el E0110 en la comilla, y los tokens Error, Char con payload 0xFFFD y Eof. En `a\n"${\nx`: un E0110 con la comilla en 2, los tokens LowerIdent(a), Newline, Error, LowerIdent(x) y Eof, y el Error lleva NewlineBefore. En `"${\n}x`: un E0110 y los tokens Error, RBrace, LowerIdent(x) y Eof. En `"${\n}"`: dos E0110 (en 0 y en 5) y los tokens Error [0,3), RBrace [4,5), Error [5,6) y Eof [6,6)
 why:     si el Error se añadiera al final, tras los tokens de la expresión, los spans irían hacia atrás y
          el fuzz de la sesión 4 lo vería; si se quedara el StringHead, el parser encontraría un trozo de
          string sin su final. Y si el lexer no vaciara sus pilas, la `}` de la línea siguiente cerraría
@@ -445,3 +445,323 @@ why:     si el Error se añadiera al final, tras los tokens de la expresión, lo
          salto de línea, el Error acaba antes del salto y no incluye ese último byte. Y un comentario o
          un carácter sin cerrar dentro de la interpolación es un error propio, que no oculta el del string
 ref:     TestStrings/newline_inside_interpolation_E0110
+
+[T05.42] line_rule.newline_between_statements              level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    un salto de línea entre dos tokens, cuando el anterior puede cerrar una expresión, termina la sentencia: el lexer inserta un `Newline` cuyo span es el primer terminador de línea que sigue al token anterior
+input:   "a\nb"; "a\n\n\nb", "a   \n  b", "a // c\nb", "a /* x\ny */ b", "a /* x\ny\nz */ b", "a\n b\n c", "\na", "\n\n  // c\n  a", "a b" y "a /* x */ b"; y cada una de las 17 clases que pueden cerrar una expresión (`a`, `A`, `1`, `1.5`, `'a'`, `"s"`, `"${x}"`, `true`, `false`, `(a)`, `[a]`, `{a}`, `a?`, `_`, `return`, `break` y `continue`) seguida de un salto de línea y `b`
+expect:  "a\nb" da LowerIdent(a), Newline, LowerIdent(b) y Eof, con los spans [0,1) [1,2) [2,3) [3,3), con NewlineBefore solo en la `b` (el Newline no lo lleva) y sin diagnósticos. Las demás filas dan un solo Newline en [1,2), [4,5), [6,7), [6,7) y [6,7) (el primer salto, aunque haya comentarios o más saltos entre los dos tokens), dos en [1,2) y [4,5) en la sexta, y ninguno cuando el salto va antes del primer token (`\na`, `\n\n  // c\n  a`) ni cuando no hay salto. Con las 17 clases, exactamente un Newline, en el salto que sigue al token, justo antes de la `b`, y sin diagnósticos
+why:     sin el separador, `let a = 1` y `let b = 2` en dos líneas serían una sola sentencia. La posición del
+         Newline es la que imprime `emit tokens` y la del error «found newline», así que es la del primer
+         salto tras el token anterior, también si hay un comentario por medio; y olvidar una de las 17 clases
+         haría que una sentencia que acaba en `?` o en `return` se pegara con la siguiente
+ref:     TestLineRule/newline_between_statements
+
+[T05.43] line_rule.no_newline_inside_parens                level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    dentro de `(` y de `[` el salto de línea es un espacio, aunque el token anterior pueda cerrar una expresión; al cerrarse el paréntesis, vuelve a terminar la sentencia
+input:   "f(a,\nb)"; "f(a\nb)", "(a\nb)", "[a\nb]", "f(a\n)", "[\n[a\nb]\n]", "(f(a)\nb)" y "({a}\nb)"; y "(a)\nb", "[a]\nb", "(a\nb)\nc" y "(a)\n(b)\nc"
+expect:  en las ocho primeras filas, ningún Newline y sin diagnósticos. En las cuatro últimas, un Newline justo después del `)` o `]` de cierre, en [3,4), [3,4), [5,6) y, la última, dos, en [3,4) y [7,8)
+why:     el caso más simple, `f(a,\nb)`, pasaría aunque el lexer no llevara cuenta de los paréntesis, porque una
+         coma no cierra una expresión; las otras filas acaban cada línea en `a` y solo pasan con una pila
+         de delimitadores. Y la pila tiene que sacar el delimitador al cerrarlo: si no, todo lo que venga después
+         del primer `)` quedaría pegado
+ref:     TestLineRule/no_newline_inside_parens
+
+[T05.44] line_rule.no_newline_after_operator               level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    una línea que acaba en un token que no puede cerrar una expresión (un operador, una coma, una palabra clave como `let`) continúa en la línea siguiente
+input:   "a +\nb", "x =\n1", "a,\nb", "{\na", "a =>\nb" y "let\nb"; y cada uno de 28 signos (`+ - * / % = == != < <= > >= && || |> | ! , ; : . .. => -> # ( [ {`) y de 21 palabras clave (`let var fn if else match for in while with uses pub import type trait impl effect handle spawn lazy select`) seguido de un salto de línea y `b`
+expect:  ningún Newline y ningún diagnóstico en ninguna de las entradas
+why:     con el salto a la vista, `a +` y `b` serían dos sentencias y el error saldría en la `b`, lejos del `+`
+         que se quedó sin segundo operando; la prueba recorre 49 clases que no cierran, los 28 signos y las 21
+         palabras clave que no son `return`, `break`, `continue`, `true` ni `false`, para que ninguna se cuele
+         en la lista de las que sí
+ref:     TestLineRule/no_newline_after_operator
+
+[T05.45] line_rule.pipe_continues_line                     level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    una línea que empieza por `|>`, `&&` o `||` continúa la expresión de la línea anterior; una que empieza por `|` solo, no
+input:   "xs\n  |> sum", "let total = xs\n  |> sum\n", "a\n&& b", "a\n|| b", "xs\n|> f\nys" y "a\n| b"
+expect:  en las cuatro primeras, ningún Newline (la segunda da KwLet, LowerIdent(total), Eq, LowerIdent(xs), Pipe, LowerIdent(sum) y Eof). "xs\n|> f\nys" da un solo Newline, en [7,8), delante de `ys`; "a\n| b" da LowerIdent(a), Newline en [1,2), Bar, LowerIdent(b) y Eof
+why:     si el lexer insertara aquí un Newline, la sentencia terminaría en `xs` y el error saldría una línea
+         más abajo, lejos de su causa. La barra sola es la de los patrones y empieza una sentencia:
+         tratarla como parte de `||` o de `|>` sería mirar solo el primer carácter
+ref:     TestLineRule/pipe_continues_line
+
+[T05.46] line_rule.dot_and_else_continue_line              level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    una línea que empieza por `.` o por `else` continúa la anterior; una que empieza por `..` no
+input:   "}\nelse {", "x\n.f", "if c {\n a\n}\nelse {\n b\n}" y "x\n..y"
+expect:  "}\nelse {" da RBrace, KwElse, LBrace y Eof, y "x\n.f" da LowerIdent(x), Dot, LowerIdent(f) y Eof, sin Newline. El `if` da Newline en [9,10) y [21,22), uno delante de cada `}` de cierre y ninguno entre `}` y `else`. "x\n..y" da Newline en [1,2), delante del DotDot
+why:     `else` en la línea de la `}` del `if` es la forma corriente de escribirlo; un lexer que cortara ahí
+         dejaría el `else` sin su `if`. `..` es otro token, un rango, que sí empieza una sentencia
+ref:     TestLineRule/dot_and_else_continue_line
+
+[T05.47] line_rule.minus_starts_new_statement              level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    una línea que empieza por `-`, `+` o por cualquier token que no está en la lista de continuación empieza una sentencia nueva
+input:   "a\n-b", "a\n+b", "a\n*b", "a\n!b", "a\n==b" y "a\n(b)"
+expect:  LowerIdent(a), Newline en [1,2), el operador y LowerIdent(b) y Eof (en la última, LParen, LowerIdent(b), RParen y Eof), sin diagnósticos
+why:     `a` y `-b` en dos líneas son dos sentencias, la segunda niega `b`. Si el lexer pegara la línea del
+         `-`, el programa restaría, y el significado de un bloque dependería del sitio por donde se parta
+         una línea
+ref:     TestLineRule/minus_starts_new_statement
+
+[T05.48] line_rule.newline_inside_braces_in_parens         level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    manda el delimitador más interno: dentro de `{}` los saltos terminan sentencias aunque haya paréntesis fuera, y al cerrarse una pareja vuelve a mandar la anterior; un cierre que casa con un delimitador exterior cierra también los de dentro, y uno sin pareja se ignora; el final de un string con interpolaciones cierra los delimitadores que sus expresiones abrieron y no cerraron, y solo esos; y en un string que no termina los cierra el salto de línea que lo acabó, una sola vez; en los dos casos, un cierre que llega después y ya no tiene pareja se ignora
+input:   "f({\na\nb\n})"; "{\nf(a\nb)\n}", "([\n{\na\nb\n}\n])" y "{\na\n}\nb"; los cierres que no casan: "({a)\nb", "{(a}\nb", "(}\nb", ")\nb" y "a ]\nb"; con un string cuya interpolación deja delimitadores abiertos, `"${ f(a }"\nb\nc`, `"${ ( [ }"\nb\nc`, `"${ g("${ ( }") }"\nb`, `( "${ ) }"\nb`, `( "${ ) [ }"\nb\nc`, `"${ ( }")\nb`, `"${ [ }"]\nb`, `f("${ ( }"\nb)`, `"${ g("${ x }") ( }"\nb`, `"${ ( "${ x }" }"\nb` y `f("${ g("${ x }b${ y }") }"\nc)`; con un string que no termina, `"${ f(a\nb\nc`, `"${ f(a\n(b\nc)\nd`, `f(a, "${ g(b\nc)\nd`, `f("${ g("${ x\nb)\nc`, `( "${ ) [ x\nb\nc` y `"${ (a\n)\nb`; y `$ (a\nb`
+expect:  el primero da LowerIdent(f), LParen, LBrace, LowerIdent(a), Newline, LowerIdent(b), Newline, RBrace, RParen y Eof, con los Newline en [5,6) y [7,8). "{\nf(a\nb)\n}" da un solo Newline, en [8,9), delante de la `}`; el siguiente, dos, en [6,7) y [8,9); "{\na\n}\nb", dos, en [3,4) y [5,6). "({a)\nb" y "{(a}\nb" dan un Newline en [4,5) (el cierre cierra también lo abierto dentro); "(}\nb" ninguno, porque el paréntesis sigue abierto; ")\nb" y "a ]\nb", uno, en [1,2) y [3,4). Sin diagnósticos. Después de un string cuya interpolación deja delimitadores abiertos: `"${ f(a }"` da Newline delante de la `b` y de la `c`, en [10,11) y [12,13); `"${ ( [ }"`, dos Newline, en [10,11) y [12,13), porque el final del string cierra los dos delimitadores y no solo el último; `"${ g("${ ( }") }"`, uno en [18,19); `( "${ ) }"`, uno en [10,11), porque el `)` de dentro ya había cerrado el `(` de fuera; `( "${ ) [ }"`, dos, en [12,13) y [14,15), porque el `[` que se abre después de ese `)` también se cierra con el string; `"${ ( }")` y `"${ [ }"]`, uno en [9,10) cada una, porque el final del string se llevó el `(` o el `[` y el `)` o el `]` de después no tienen pareja: se ignoran y la `b` empieza línea; `f("${ ( }"\nb)`, ninguno, porque el `(` de `f` sigue abierto; `"${ g("${ x }") ( }"`, uno en [20,21); `"${ ( "${ x }" }"`, uno en [17,18), porque tras acabar el string de dentro el de fuera sigue cerrando el `(` que su expresión abrió; y `f("${ g("${ x }b${ y }") }"\nc)`, ninguno: el `StringMid` no cierra nada y el `(` de `f` sigue abierto hasta el `)` del final. Con un string que no termina (un diagnóstico en cada fila): `"${ f(a\nb\nc` da Error, LowerIdent(f), LParen, LowerIdent(a), Newline en [7,8), LowerIdent(b), Newline en [9,10), LowerIdent(c) y Eof; `"${ f(a\n(b\nc)\nd`, uno en [7,8) y otro en [13,14), y ninguno entre `b` y `c`, porque el `(` de la segunda línea es de verdad; `f(a, "${ g(b\nc)\nd`, uno en [15,16), porque el `(` de `f` sigue abierto hasta su `)`; `f("${ g("${ x\nb)\nc`, uno en [16,17) (dos strings sin terminar dan un solo Error); `( "${ ) [ x\nb\nc`, dos, en [11,12) y [13,14); y `"${ (a\n)\nb`, dos, en [6,7) y [8,9): el salto de línea que acabó el string se llevó el `(`, y el `)` de la línea siguiente no tiene pareja y se ignora. Y `$ (a\nb` da Error, LParen, LowerIdent(a), LowerIdent(b) y Eof, sin Newline y con un diagnóstico: un Error que no es un string no cierra nada
+why:     un bloque dentro de una llamada, `f({ … })`, es la forma de pasar una función de varias líneas: mirar
+         solo el delimitador más externo rompería sus líneas. Con los cierres que no casan, un paréntesis que
+         nadie cierra no apaga todos los saltos de línea del resto del fichero, y uno que sobra no cierra
+         el que no es. Lo mismo vale para el final de un string con interpolaciones, también cuando hay un
+         string dentro de otro: sin eso, un `"${ f(a }"` apagaría los saltos de línea de todo lo que viene
+         después. Y el string cierra lo que su expresión abrió, ni más (el `(` de `f` estaba antes) ni
+         menos (el `[` que se abre tras un `)` de fuera también es suyo). Un string que no termina no
+         tiene final que cierre nada: sin el salto de línea que lo acaba, una sola comilla olvidada con un
+         `(` abierto dentro dejaría pegadas las sentencias de todo el resto del fichero. Y lo que el final
+         del string, o el salto de línea que lo acaba, cierra hay que descontarlo también de los
+         contadores y no solo quitarlo de la pila: si no, el `)` o el `]` que venga detrás buscaría una
+         pareja que ya no está
+ref:     TestLineRule/newline_inside_braces_in_parens
+
+[T05.49] line_rule.crlf_line_endings                       level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    un CRLF es un solo salto de línea, y el Newline que se inserta ocupa sus dos bytes
+input:   "a\r\nb"; "a\r\n\r\nb", "a // c\r\nb", "a\r\r\nb", "a\r \nb", "a\n\r\nb", "a\r\n\nb", "f(a\r\nb)", "xs\r\n|> sum\r\n" y "a\r\n"
+expect:  "a\r\nb" da los mismos tipos que "a\nb", con los spans [0,1) [1,3) [3,4) [4,4). Las filas dan un Newline en [1,3), [6,8), [2,4) (el `\r` suelto antes del CRLF es un espacio), [3,4) (un `\r` y un LF que no están juntos), [1,2) (gana el primer terminador, que aquí es un LF) y [1,3); las tres últimas, ninguno, igual que con LF. Sin diagnósticos
+why:     un fichero guardado en Windows tiene CRLF en cada línea; si el lexer contara el `\r` como un carácter
+         más o insertara dos Newline, el mismo programa daría tokens distintos según el sistema. El span
+         de dos bytes es el que imprime `emit tokens` y el del error «found newline»
+ref:     TestLineRule/crlf_line_endings
+
+[T05.50] line_rule.lone_cr_is_whitespace                   level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    un `\r` que no precede a un `\n` es un espacio: no termina la línea; dentro de un comentario, ni lo termina ni cuenta como un salto de línea
+input:   "a\rb", "a\r\rb", "a\r" y "\ra"; y "a // x\ry\nb" y "a /* x\ry */ b"
+expect:  "a\rb" da LowerIdent(a), LowerIdent(b) y Eof, sin Newline, sin NewlineBefore en ningún token y sin diagnósticos; "a\r\rb" da lo mismo, y "a\r" y "\ra" dan LowerIdent(a) y Eof. "a // x\ry\nb" da LowerIdent(a), Newline, LowerIdent(b) y Eof, con el Newline en [8,9): el comentario sigue tras el `\r`, hasta el salto de línea. "a /* x\ry */ b" da LowerIdent(a), LowerIdent(b) y Eof, sin Newline. Ninguna de las dos da diagnósticos
+why:     el `\r` suelto cuenta como espacio (el renderizador lo dibuja como `␍`); si cortara la línea, `a\rb`
+         serían dos sentencias en un fichero que el editor enseña en una sola línea. Lo mismo dentro de un
+         comentario: si un `\r` acabara un comentario `//`, el resto de su línea (`y`) se leería como código;
+         y si contara como salto de línea en un comentario `/* */`, la `b` empezaría una línea sin ningún
+         salto de línea detrás de la anterior, y el lexer haría un panic (`unreachable: no line feed after the
+         token before a NewlineBefore`) con un fichero que ha escrito el usuario
+ref:     TestLineRule/lone_cr_is_whitespace
+
+[T05.51] line_rule.no_newline_before_eof                   level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    nunca se inserta un Newline delante de Eof
+input:   "a\n", "a\n\n\n", "a\r\n", "a // c\n", "a\n// c\n", "a\n/* c\n */", "(a)\n", "{a}\n", "{a\n}\n", "" y "\n"
+expect:  ningún Newline delante del Eof en ninguna: LowerIdent(a) y Eof; LParen, a, RParen y Eof; LBrace, a, RBrace y Eof; o solo Eof. "{a\n}\n" da LBrace, LowerIdent(a), Newline en [2,3), RBrace y Eof. Sin diagnósticos
+why:     casi todos los ficheros acaban en un salto de línea; un Newline antes del Eof sería una sentencia vacía
+         al final de todos los programas y cada pase tendría que saltarla
+ref:     TestLineRule/no_newline_before_eof
+
+[T05.52] line_rule.error_token_does_not_end_expression     level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_test.go
+case:    un token `Error` nunca cierra una expresión: tras él no se inserta Newline, aunque delante de él sí, si lo anterior puede cerrar una expresión; en un string sin cerrar con interpolación manda el último token de la expresión que se leyó, no el Error
+input:   "a $\nb", "$\nb", "$\n$\nb", `a "abc` y un salto de línea y `b`; `a\n$` y `a\n"abc`; y `"${ y\nx`, `"${ y +\nx`, `"${\nx` y `a\n"${ y\nx`
+expect:  `a $\nb`, `$\nb`, `$\n$\nb` y `a "abc` más `b` en la línea siguiente dan, sin ningún Newline, LowerIdent(a), Error y LowerIdent(b); Error y LowerIdent(b); Error, Error y LowerIdent(b); y LowerIdent(a), Error y LowerIdent(b); con 1, 1, 2 y 1 diagnósticos (todas acaban en Eof). `a\n$` y `a\n"abc` dan LowerIdent(a), Newline en [1,2), Error y Eof, con un diagnóstico. `"${ y\nx` da Error, LowerIdent(y), Newline en [5,6) y LowerIdent(x); `"${ y +\nx`, Error, y, Plus y x, sin Newline; `"${\nx`, Error y x, sin Newline; y `a\n"${ y\nx`, LowerIdent(a), Newline en [1,2), Error, y, Newline en [7,8) y x; los cuatro con un diagnóstico
+why:     un `$` suelto no debe partir en dos la sentencia que lo contiene: el error ya está dado, y un Newline
+         detrás haría que el parser diera otro por la línea siguiente. En una interpolación sin cerrar, el
+         Error va primero y detrás los tokens de la expresión ya leídos; la regla mira el último de ellos,
+         así que `y` cierra la línea con un Newline y un `+` no. Es una decisión, y esta prueba la fija
+ref:     TestLineRule/error_token_does_not_end_expression
+
+[T05.53] kitest.update_rewrites_stdout_block               level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    con `--update`, un `expect-stdout` en bloque que ya no es cierto se reescribe con las líneas reales de la salida, donde está, aunque sea en la primera línea del fichero; sin `--update`, el mismo fichero falla y no cambia
+input:   un fichero con `test`, `run` y un bloque de dos líneas (`old1`, `old2`) cuya salida real es `new1` y `new2`; la misma con 3 líneas de salida, con 3 líneas en el bloque y 2 de salida, con una línea vacía en medio, con una salida que parece cabecera, con `args` antes y `expect-exit` después del bloque, con el bloque al final del fichero, con el bloque en la primera línea, antes de `test` y `run`, con stdout y stderr en bloque y con stderr antes de stdout; sin `Update`; un fichero ya correcto y de solo lectura y otro desfasado y de solo lectura; y uno con la cabecera sin `run`
+expect:  el bloque pasa a ser `// | new1` y `// | new2` y el resto del fichero queda igual, y el informe es `PASS f.ki`; sin `--update`, es `FAIL f.ki` con `- old1` y `+ new1` y el fichero no cambia. Cada fila acaba exactamente con las líneas que se esperan (una línea vacía de la salida es `// |`, y una salida que parece cabecera, como `// | x`, se escribe tal cual tras `// | `; con el bloque en la primera línea, se reescribe en su sitio y la cabecera no gana un segundo `expect-stdout`). Un fichero que ya es correcto se ejecuta una vez y pasa aunque no se pueda escribir; uno desfasado y de solo lectura da `FAIL f.ki` y `- cannot write file: permission denied` (donde el sistema respeta los permisos); y una cabecera mal formada da `FAIL f.ki` y `- malformed header: missing key 'run'`, con el fichero intacto
+why:     `--update` ahorra reescribir a mano la salida cada vez que cambia un mensaje; si dejara líneas viejas
+         cuando la salida nueva es más corta, o se comiera la clave que viene detrás del bloque, el golden
+         quedaría roto de una forma que el diff no deja ver. Y el bloque puede ser lo primero del fichero:
+         una búsqueda de la cabecera que empezara en la segunda línea no lo vería, añadiría otro
+         `expect-stdout` tras `run` y la ejecución fallaría con la clave repetida
+ref:     TestUpdate/rewrites_stdout_block
+
+[T05.54] kitest.update_single_line_form                    level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    una salida de exactamente una línea se escribe en la forma de línea única, `// expect-stdout: 6765`; si la línea está vacía o solo tiene espacios o tabuladores, va en bloque, porque esa forma se leería como un bloque sin líneas; y una salida que acaba en una línea vacía conserva esa línea
+input:   una salida `6765` sobre un bloque de dos líneas, sobre otra línea única y sin clave previa; un stderr `boom`; la salida `a` y `b`; `  x`, `x  `, una línea vacía, `  ` y un tabulador; `a` seguida de una línea vacía y dos líneas vacías; y `6765` sin salto de línea final
+expect:  `// expect-stdout: 6765` en los tres primeros casos y `// expect-stderr: boom` en el cuarto; un bloque para dos líneas; los espacios del principio y del final se conservan en la forma de línea única (`// expect-stdout:   x`, `// expect-stdout: x  `); la línea vacía, la de espacios y la del tabulador van en bloque (`// |`, `// |   ` y `// | ` con el tabulador); `a` y una línea vacía dan un bloque de `// | a` y `// |`, y dos líneas vacías, un bloque de dos `// |`. Todas pasan, salvo la salida sin salto de línea final: se escribe `// expect-stdout: 6765` y el informe es `FAIL f.ki` con `- 6765` y `+ 6765 [no newline at end]`
+why:     la línea única es la que mejor se lee en el diff de un golden. Pero una línea en blanco escrita así
+         la leería el runner como un bloque vacío y el golden fallaría en la siguiente ejecución; y el formato
+         no sabe decir «sin salto final», que no debe aprobarse en silencio. Y solo el último salto de línea
+         es el final de la salida: quitarlos todos haría que `a` y una línea vacía se escribieran como la
+         línea única `a`, y la ejecución fallaría con `- <eof>` y `+ ` (la línea vacía que sobra), así que un
+         programa que imprime una línea vacía al final no podría grabarse nunca
+ref:     TestUpdate/single_line_form
+
+[T05.55] kitest.update_empty_output_removes_key            level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    una salida real vacía quita la clave entera, con su bloque; si no había clave, el fichero no cambia
+input:   un `expect-stderr` en bloque de dos líneas, uno de línea única, un `expect-stdout` en bloque, los dos a la vez, ninguno, y un `expect-stderr` en la última línea sin salto final, con salida vacía en el flujo que corresponde
+expect:  la clave y sus líneas `// |` desaparecen, las demás claves y el código quedan como estaban (con las dos salidas vacías solo quedan `test` y `run`); sin clave, el fichero es idéntico; con la clave en la última línea y sin salto de línea final, queda la cabecera con su salto. Todos pasan
+why:     una clave que quedara con su bloque vacío diría «hay salida y es ninguna»; el runner ya entiende «clave
+         ausente» como «vacío», y esa es la forma limpia. Si el bloque se quitara a medias, las líneas
+         `// |` que quedaran se leerían como un comentario más y el golden parecería correcto
+ref:     TestUpdate/empty_output_removes_key
+
+[T05.56] kitest.update_inserts_missing_key_after_header    level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    una clave que el fichero no tenía se inserta justo después de la última línea de cabecera que sea `test`, `run`, `args` o `expect-exit`; `expect-stdout` va antes de `expect-stderr`
+input:   un fichero con `test`, `run` y `expect-exit: 1` y salida `out`; con solo `test` y `run`; con `args`; con `test`, `args`, `run`, `expect-exit` y una línea libre `args2`; con un comentario libre tras `run`; con salidas en stdout y en stderr; con un bloque de stdout y stderr nuevo; con solo `expect-stderr` y stdout nuevo; con un `expect-stdout` que se queda vacío y stderr nuevo; con una salida de dos líneas; con la cabecera sin salto final; con esa misma cabecera y salida en los dos flujos; con un `expect-stdout` en la última línea, sin salto final, y stderr nuevo; y un programa que imprime cuántas líneas tiene su fichero
+expect:  la clave nueva queda tras `expect-exit` (el caso más simple), tras `run`, tras `args`, tras la última de las cuatro estén en el orden que estén (y antes de la línea libre que venga detrás), y antes de un comentario libre que siga a `run`. Con las dos, stdout y luego stderr; una stderr nueva queda tras el bloque de stdout, una stdout nueva antes de una stderr que ya estaba, y si el stdout que había se quita, stderr ocupa su sitio; una salida de dos líneas entra como bloque; y si la cabecera es todo el fichero y no acaba en salto de línea, su última línea lo recibe, una sola vez aunque entren detrás de ella dos claves, o una que sustituye a esa línea y otra nueva (`// expect-stdout: out` y `// expect-stderr: err`, una a continuación de la otra, sin línea en blanco entre las dos). Todas pasan. En el programa que cuenta las líneas de su fichero, la primera pasada escribe 3 y falla con `- 3` y `+ 4` (el fichero ha crecido una línea) y la segunda lo deja en 4 y pasa
+why:     el orden de la cabecera es una convención que se ve en cada golden: si la clave nueva cayera al
+         final del fichero quedaría en medio del código, y si stderr cayera antes que stdout cada fichero
+         tendría un orden distinto. Y al añadir una línea el código se mueve: un programa que imprime su
+         línea de error se ejecuta de nuevo con el fichero ya escrito, para que `PASS` signifique que el
+         fichero de ahora pasa y no el de antes. Y la última línea, si no acaba en salto de línea, lo recibe
+         una sola vez: si lo recibiera con cada edición que cae detrás de ella, quedaría una línea en blanco
+         entre las dos claves, el bloque de stderr quedaría fuera de la cabecera y la ejecución fallaría con
+         `- <eof>` y `+ err`
+ref:     TestUpdate/inserts_missing_key_after_header
+
+[T05.57] kitest.update_preserves_bom_and_crlf              level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    la reescritura conserva el BOM, deja intactos byte a byte todos los bytes que no toca y escribe las líneas nuevas con el terminador de la primera línea del fichero
+input:   ficheros con BOM y CRLF (un bloque que se sustituye, claves que se insertan y una que se quita); con CRLF sin BOM; con BOM y LF; con LF en la primera línea y CRLF en las demás, y con CRLF en la primera y LF en las demás
+expect:  el BOM sigue al principio; las líneas nuevas acaban en CRLF o en LF según la primera línea del fichero; todas las demás líneas, con su terminador y también la última sin salto final, quedan como estaban. Todas pasan
+why:     el BOM y el CRLF los pone el editor de Windows: un `--update` que los perdiera convertiría cada golden
+         en un diff de todo el fichero, y uno que escribiera siempre LF mezclaría terminadores dentro de
+         una misma cabecera
+ref:     TestUpdate/preserves_bom_and_crlf
+
+[T05.58] kitest.update_never_touches_expect_exit           level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    `--update` no cambia nunca el `expect-exit` ni añade uno: el código de salida esperado lo decide quien escribe el test, y la ejecución sigue fallando si no coincide
+input:   `expect-exit: 7` con salida real 1, `expect-exit: 0` con 3 y sin `expect-exit` con 1; en las tres, un `expect-stdout` desfasado
+expect:  el `expect-stdout` se reescribe y la línea `expect-exit` queda igual (o no aparece). El informe es `FAIL f.ki` con `- exit 7` y `+ exit 1` en el primero, `- exit 0` y `+ exit 3` en el segundo, y `- exit 0` y `+ exit 1` en el tercero
+why:     si `--update` también ajustara el código de salida, un cambio que hace que el programa falle, un panic
+         nuevo, se aprobaría con solo ejecutar `ki test --update`; el código de salida es la parte del
+         golden que dice qué es éxito y qué es fallo
+ref:     TestUpdate/never_touches_expect_exit
+
+[T05.59] kitest.update_keeps_annotations                   level: core
+kind:    unit (go test)      file: internal/kitest/update_test.go
+case:    las anotaciones `// ERROR(…)` no se tocan con `--update`, y en un fichero con anotaciones no se escribe la salida de error, que el runner no compara como texto; una anotación absoluta no se desplaza con la línea que la reescritura inserta encima, y una relativa sí
+input:   `let x = 1  // ERROR(E0101) @9`, cuyo `check` sale con 1, escribe un diagnóstico en stderr y, según la fila, nada o `out` en stdout; con un `expect-stdout` desfasado; con un `expect-stderr` desfasado; con una anotación en la cabecera (`// ERROR(E0101) @3:9`); y con dos anotaciones en una línea. Además, `let x = 1  // ERROR(E0101) @3:9` y la misma con `@9`, cuyo diagnóstico se informa en la línea donde está el código del fichero en ese momento (la 3 antes de la reescritura y la 4 después)
+expect:  la línea de la anotación es la misma después; sin salida de stdout el fichero no cambia; con salida se inserta `// expect-stdout: out` tras `run`, y uno desfasado se reescribe; un `expect-stderr` que ya había se queda como estaba y no se crea ninguno. El primer fichero pasa tras la reescritura (`PASS f.ki`); con la anotación en otra columna (`@1`) el informe es `FAIL f.ki` con `missing E0101 at 3:1` y `unexpected E0101 at 3:9`. Con `@3:9`, la anotación queda igual tras insertar `// expect-stdout: out` y el informe es `FAIL f.ki` con `missing E0101 at 3:9` y `unexpected E0101 at 4:9`; con `@9`, `PASS f.ki`
+why:     las anotaciones son la parte del golden que dice dónde está el error: reescribirlas con lo que el
+         compilador dice hoy convertiría cualquier regresión en un golden nuevo. Y el diagnóstico humano de
+         stderr, que con anotaciones no se compara, no debe ensuciar el fichero. Insertar una clave desplaza
+         el código una línea: la anotación absoluta se queda atrás y la ejecución que sigue lo dice, y la
+         relativa es la que no se rompe al insertar
+ref:     TestUpdate/keeps_annotations
+
+[T05.60] cli.check_reports_E0101_once                      level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    un byte inválido se informa una sola vez: `ki check` y `ki emit tokens` sobre un fichero que acaba en un byte 0xFF
+input:   `let x = ` seguido del byte 0xFF, sin salto de línea final
+expect:  `check` sale con 1, stdout vacío y `error[E0101]` aparece exactamente una vez en stderr. `emit tokens` sale con 1, escribe en stdout exactamente "1:10 Eof\n" (el fichero se rechaza: solo hay un Eof, tras el último byte) y `error[E0101]` aparece una vez en stderr
+why:     `Lex` ejecuta `CheckSource` por su cuenta: un comando que llamara a las dos funciones informaría del
+         mismo byte dos veces. Se cuenta `error[E0101]` y no `E0101` porque la ruta del fichero, que se
+         muestra como se escribió, lleva el nombre de este test
+ref:     TestCLI/check_reports_E0101_once
+
+[T05.61] cli.emit_unknown_target                           level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki emit` con un destino que no existe, con un flag donde va el destino y sin destino es un error de uso; pero `-h`, `-help` y `--help` donde va el destino piden la ayuda, y no lo son; y un `-h` después de `emit tokens` o de `check` también la pide
+input:   `emit bogus x.ki`, `emit --diagnostics=short tokens x.ki` y `emit`; y `emit -h`, `emit -help` y `emit --help`; y `emit tokens -h` y `check -h`
+expect:  en las tres primeras, código de salida 2, stdout vacío y stderr exactamente dos líneas: "ki emit: unknown target `bogus`" (o `` `--diagnostics=short` ``, o "ki emit: missing target") y "usage: ki emit tokens [--diagnostics=human|short|json] FILE". En las otras cinco, código de salida 0, stderr vacío y stdout exactamente la línea de uso del comando: "usage: ki emit tokens [--diagnostics=human|short|json] FILE" en las cuatro de `emit` y "usage: ki check [--diagnostics=human|short|json] FILE" en la de `check`
+why:     el destino va primero y sus flags después, así que un flag antes del destino no es un destino; la línea
+         `usage:` es la que `ki emit` repetirá en cada error de uso, y es la que crece con cada destino nuevo.
+         Pero pedir ayuda no es un error de uso, y `ki emit tokens -h` ya contesta con la línea de uso y el
+         código 0: que `ki emit -h` contestara «unknown target `-h`» con el 2 sería dar dos respuestas a la
+         misma petición según dónde se escriba. Y `check` y `emit tokens` leen sus palabras con la misma
+         función: si devolviera otro código que el 0 ante un `-h`, los dos comandos saldrían con él aunque
+         lo que piden sea una respuesta correcta
+ref:     TestCLI/emit_unknown_target
+
+[T05.62] lexer.fuzz_lex_properties                         level: core
+kind:    prop                file: internal/syntax/lexer_fuzz_test.go
+case:    para cualquier entrada, `Lex` no hace panic, el último token es `Eof`, cada span cumple `Lo <= Hi <= len` del fichero y los `Lo` no decrecen; y, en las entradas de hasta 16 KiB, `DumpTokens` escribe una línea por token, y cada línea empieza por la posición línea:columna que `LineCol` da para el `Lo` del token, seguida de su tipo
+input:   las once semillas: `fn main() {}`, `"a${x}b"`, `/* /* */`, `"\xff"` (con la barra, un escape inválido), el byte 0xFF suelto, tres con saltos de línea, `a\r\nb`, `f(a\n)` y `{\na\n}`, y tres strings que no terminan, con tokens en su interpolación: `"${0`, `"a${x}b${y` seguido de un salto de línea y `z`, y `( "${ ) [ x` seguido de un salto de línea y `b`
+expect:  con `go test`, las once semillas cumplen las cinco propiedades (`go test -json` las lista como `FuzzLex/seed#0` a `FuzzLex/seed#10`); `go test ./internal/syntax -run=^$ -fuzz=FuzzLex -fuzztime=10s` busca entradas que las rompan
+why:     el lexer es lo primero que ve cualquier byte que llegue a Ki. Los strings anidados, la interpolación y la
+         regla de línea mueven y añaden tokens, y un Error mal colocado o un span fuera del fichero harían
+         que el parser leyera fuera de los datos. Es el primer test que busca entradas que nadie escribiría
+         a mano, y que los `Lo` no decrezcan es lo que necesitan los diagnósticos ordenados por posición.
+         Las semillas con saltos de línea son las que llegan hasta la regla de línea: sin ningún salto de
+         línea, `go test` nunca insertaría un Newline. Y las tres últimas llegan hasta el único código que
+         cambia el orden de los tokens, el del string que no termina: si el Error se pusiera detrás de los
+         tokens de su interpolación, `"${0` ya daría un `Lo` que retrocede, y `go test` lo vería sin buscar
+         nada. `DumpTokens` saca la columna de cada token de la del anterior, sin preguntar a `LineCol`; aquí
+         se compara con `LineCol` en cualquier entrada, no solo en las filas que alguien escribió
+ref:     FuzzLex
+
+[T05.63] line_rule.emit_tokens_golden                      level: core
+kind:    golden              file: tests/golden/ch05/line_rule.ki
+case:    `ki emit tokens` sobre `let total = xs` y, en la línea siguiente, `|> sum`
+expect:  sale con 0, stderr vacío y stdout exactamente siete líneas: KwLet, LowerIdent(total), Eq y LowerIdent(xs) en la línea 11, Pipe y LowerIdent(sum) en la 12 y Eof en 13:1; no hay ningún Newline entre `xs` y `|>` ni delante del Eof
+why:     es la regla de línea de punta a punta: el binario completo, el volcado con sus posiciones línea:columna
+         y la continuación de `|>`. Si el lexer insertara un Newline tras `xs`, aquí se vería en el volcado,
+         en la línea 11, justo antes del `Pipe`
+ref:     tests/golden/ch05/line_rule.ki
+
+[T05.64] lexer.dump_tokens                                 level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    `DumpTokens` escribe una línea por token: dónde empieza, como línea:columna, su tipo y, si lleva un valor, el valor entre paréntesis; también cuando todo el fichero es una sola línea de dos millones de tokens, sin que el coste crezca con el cuadrado de su longitud
+input:   "fn fib\n", "a\nb", "a\r\nb", `20 1_000.5 'a' "a\tb"`, `"a${x}b${y}c"`, "$", `'é' '\u{1F600}'`, `1e21 1e-7 3.141592653589793` y "a\n\n// c\n  \"ñ\"\tb\rc"; y un fichero de
+         una sola línea que repite dos millones de veces `"ñ" ` (el string `"ñ"` y un espacio: 5 bytes, 4 code points)
+expect:  "fn fib\n" da `1:1 KwFn`, `1:4 LowerIdent(fib)` y `2:1 Eof`. "a\nb" y "a\r\nb" dan `1:1 LowerIdent(a)`, `1:2 Newline`, `2:1 LowerIdent(b)` y `2:2 Eof`: el Newline de un CRLF empieza en su `\r`. La cuarta da `1:1 Int(20)`, `1:4 Float(1000.5)`, `1:12 Char(U+0061)`, `1:16 String("a\tb")` (el texto con su tabulador, citado como lo cita Go) y `1:22 Eof`. La quinta da `1:1 StringHead("a")`, `1:5 LowerIdent(x)`, `1:6 StringMid("b")`, `1:10 LowerIdent(y)`, `1:11 StringTail("c")` y `1:14 Eof`; "$" da `1:1 Error` y `1:2 Eof`; `'é' '\u{1F600}'` da `1:1 Char(U+00E9)`, `1:5 Char(U+1F600)` y `1:16 Eof` (el código en hexadecimal, con mayúsculas y al menos cuatro cifras); `1e21 1e-7 3.141592653589793` da `1:1 Float(1e+21)`, `1:6 Float(1e-07)`, `1:11 Float(3.141592653589793)` y `1:28 Eof` (el Float, en la forma más corta que vuelve a leerse igual, con todas sus cifras, y con exponente cuando es muy grande o muy pequeño); y "a\n\n// c\n  \"ñ\"\tb\rc" da `1:1 LowerIdent(a)`, `1:2 Newline`, `4:3 String("ñ")`, `4:7 LowerIdent(b)`, `4:9 LowerIdent(c)` y `4:10 Eof`: tras una línea en blanco y un comentario el string está en la línea 4; la `b` queda en la columna 7 porque `"ñ"` mide 3 code points aunque ocupe 4 bytes, y el tabulador ocupa una columna, no cuatro; y la `c` en la 9 porque el `\r` suelto ocupa una columna y no empieza otra línea. Cada línea acaba en un salto de línea. El fichero largo da dos millones de líneas `1:C String("ñ")`, con C = 1, 5, 9… (4 columnas más en cada una: los code points, no los bytes), y después `1:8000001 Eof`, sin nada más. El fichero largo solo se comprueba si todas las filas cortas han pasado. La prueba no mide ningún tiempo
+why:     `ki emit tokens` es lo que se mira para depurar el lexer, y los goldens de los capítulos
+         siguientes se escriben contra este formato: una columna desplazada, un Newline de CRLF que
+         empezara en el `\n`, un texto sin citar que dejara un tabulador de verdad en mitad de la
+         línea, un Char con las cifras en minúscula (`U+00e9`), un Float con veintidós cifras donde
+         debería llevar exponente o uno cortado a seis cifras (`3.14159`) romperían cada uno de
+         ellos. Y pedir a `LineCol` la posición de cada token cuenta los code points desde el
+         principio de la línea cada vez, así que con el fichero en una sola línea el coste crece con
+         el cuadrado de su longitud: en esta máquina 100 000 de esos tokens tardan 16 s y 200 000
+         tardan 63 s, y dos millones serían más de una hora. La prueba no pone un límite de tiempo,
+         que fallaría según la máquina: lo pone el tiempo máximo de `go test`, que la corta con la
+         versión lenta, y la lineal acaba en menos de un segundo en esta máquina, medida sin `-race`
+         (con `-race` tarda unos diez). Los `"ñ"` están para que contar bytes en vez de code points
+         desplace la columna desde el segundo token; la línea en blanco y el comentario de la fila
+         corta, para que la línea se busque y no se cuente de una en una; y su tabulador y su `\r`,
+         para que un tabulador contado como varias columnas, o un `\r` que no contara como ninguna,
+         desplacen la `b` y la `c`. Y el fichero largo no se comprueba si una fila corta ha fallado:
+         con un `DumpTokens` equivocado y además lento, el tiempo máximo de `go test` cortaría la
+         prueba con un pánico y los mensajes de las filas cortas quedarían ocultos
+ref:     TestLexer/dump_tokens
+
+[T05.65] line_rule.unmatched_closers_do_not_rescan         level: core
+kind:    unit (go test)      file: internal/syntax/line_rule_internal_test.go
+case:    la pila de delimitadores de la regla de línea cierra en tiempo lineal: un cierre sin pareja no recorre la pila, y uno con pareja saca de una vez todo lo que hay encima y lo descuenta de los contadores; el final de una interpolación (`leave`) también descuenta de los contadores los delimitadores que saca
+input:   un `[`, el comienzo de una interpolación y dentro `(`, `[` y `{`, y el final de la interpolación; cinco millones de `{` abiertos y otros cinco millones de `]` sin ningún `[`; un `[` con cinco millones de `{` encima y el `]` que lo cierra, seguido de un `}` y un `)` sin pareja; y un fichero de un millón de bytes, medio millón de `{` y medio millón de `]`
+expect:  tras los cuatro delimitadores abiertos, la pila tiene cuatro y los contadores valen 1, 2 y 1 (paréntesis, corchetes y llaves); tras el final de la interpolación queda solo el `[` de antes, y los contadores valen 0, 1 y 0. Tras los `]` sin pareja, la pila sigue con sus cinco millones de llaves y los contadores no cambian (0 paréntesis, 0 corchetes y cinco millones de llaves); tras cerrar el `[`, no queda nada abierto, ni en la pila ni en los contadores, y el `}` y el `)` siguientes no cambian nada; y el fichero da un millón y un tokens (uno por byte y el Eof), ninguno de ellos un Newline. La prueba no mide ningún tiempo
+why:     un cierre que buscara su pareja por toda la pila aunque no la hubiera tardaría un tiempo cuadrático: con
+         estas entradas, más de una hora. La prueba no pone un límite de tiempo, que fallaría según la máquina:
+         lo pone el tiempo máximo de `go test`, que corta la prueba con la versión lenta y deja pasar en
+         milisegundos la lineal. Y los contadores tienen que bajar con cada tipo de delimitador que se saca, no
+         solo con el del cierre, y también cuando los saca el final de una interpolación: si no, el
+         siguiente cierre buscaría una pareja que ya no está
+ref:     TestBracketStack/unmatched_closers_do_not_rescan
+
+[T05.66] kitest.update_ignores_a_run_that_did_not_exit     level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    con `--update`, una ejecución que no llegó a salir (el programa no arrancó o murió por una señal, y la ejecución da -1) no se escribe en el fichero: lo que imprimió no es la salida del programa
+input:   un fichero con `expect-stdout: old` cuya ejecución da -1, con `partial` en stdout y `crash report` en stderr; y el mismo fichero ejecutado con un programa que no existe, `/nonexistent/ki`
+expect:  en la primera, el informe es `FAIL f.ki` con `- exit 0`, `+ exit -1`, `- old`, `+ partial`, `- <eof>` y `+ crash report`; el fichero queda como estaba y el programa se ejecuta una sola vez. En la segunda, el informe empieza por `FAIL f.ki`, `- exit 0` y `+ exit -1`, y el fichero queda como estaba
+why:     sin esta guarda, el motivo por el que ki no pudo arrancar el programa (`ki test: cannot run …`) o el
+         volcado de un fallo acabaría como `expect-stderr` del golden: la ejecución fallaría igual por el código de
+         salida, pero el fichero quedaría con un texto que no es la salida de nadie, y el fallo se vería más tarde
+ref:     TestRunner/update_ignores_a_run_that_did_not_exit
+
+[T05.67] gen.parse_checks_the_list                         level: core
+kind:    unit (go test)      file: internal/syntax/gen/main_test.go
+case:    el generador lee una lista bien formada (hasta con 256 clases, y con el mismo texto, vacío, en clases que no son palabras clave) y rechaza la que tiene una línea sin la forma `Nombre<tab>texto` (también una vacía), un nombre repetido, una palabra clave sin texto o con el texto de otra, o más de 256 clases, dando el motivo y, salvo en el último caso, el número de línea
+input:   `KwFn` con su texto, con y sin salto de línea al final; `KwFn`, `LParen` y `KwLet` en ese orden; `Newline` y `Eof`, sin texto los dos; una lista de 256 clases; la lista vacía, `KwFn fn` (sin tabulador), una línea que empieza por el tabulador, una línea vacía en medio y otra al final; `Eq` dos veces; `KwLet` sin texto; `KwFunc` con el texto `fn`, que ya tiene `KwFn`; y una lista de 257 clases
+expect:  las cinco listas bien formadas dan sus clases en el orden del fichero, cada una con su nombre y su texto (256 en la última). Las otras dan un error, y solo ese: "line 1: want `Name<tab>text`, got" y la línea tal como la escribe `%q`, para las tres primeras (en la línea 1) y para la línea vacía de en medio y la del final (en la 2); "line 2: Eq is defined twice"; "line 2: keyword KwLet has no text"; "line 2: keyword KwFunc has the text \"fn\", which KwFn has already"; y "257 kinds do not fit in a uint8"
+why:     la lista es lo único que lee el generador, y `token_kind.go` se escribe sin que nadie lo revise: la
+         única prueba que lo toca (T05.01) comprueba la lista real, que está bien. Una lista mal escrita tiene
+         que parar el generador con su línea y su motivo, y no escribir un fichero que no compila: dos
+         palabras clave con el mismo texto repetirían una clave del mapa `keywords`, un nombre repetido sería
+         dos constantes iguales, y con más de 256 clases no cabrían en un `uint8`. Las filas piden el mensaje
+         entero, con la línea contada desde 1, y el límite por los dos lados: 256 clases pasan y 257 no. Y la
+         regla de los textos es solo de las palabras clave: `Newline` y `Eof` no tienen texto, y la lista real
+         los tiene a los dos
+ref:     TestGen/parse_checks_the_list

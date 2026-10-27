@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,6 +15,9 @@ import (
 // Lex turns the file id of sm into tokens. It reports lexical errors (E01xx)
 // to sink and always returns a buffer that ends with Eof, so later passes
 // never need to check for the end of the tokens.
+//
+// The tokens include the Newlines that the line rule inserts (see
+// insertSeparators in line_rule.go), so a later pass never looks at lines.
 //
 // A file that CheckSource refuses (invalid UTF-8, a control byte) is not lexed
 // at all: the buffer holds only Eof, and sink holds that one error.
@@ -41,6 +45,7 @@ func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.S
 				lx.unterminated(lx.pos)
 			}
 			lx.emit(Eof, lx.pos, 0)
+			lx.insertSeparators()
 			return lx.tb
 		}
 		lx.next()
@@ -320,10 +325,35 @@ func (lx *lexer) unexpected() {
 // parentheses: LowerIdent(fib), Int(20), Float(2.5), Char(U+0061) and
 // String("a\tb"), where the strings are quoted as Go does. The position is
 // where the token starts. Every line ends with a line feed.
+//
+// Apart from a binary search per line, the time is linear in the size of the
+// file. Asking sm.LineCol for every token would not be: LineCol counts the code
+// points from the start of the line each time, so a file that is one very long
+// line would cost the square of its length. The tokens come in the order of
+// their positions, so DumpTokens keeps the position of the previous one: when
+// no line feed lies between the two, the column grows by the number of code
+// points between them. Only the first token that starts on each line asks
+// sm.LineCol, which costs a binary search over the line starts (a log factor
+// in the number of lines) and the code points before that token on its line;
+// those add up to at most the size of the file.
 func DumpTokens(tb *TokenBuffer, sm *base.SourceManager, in *base.Interner) string {
 	var b strings.Builder
-	for _, tok := range tb.Tokens {
-		lc := sm.LineCol(tok.Span.File, tok.Span.Lo)
+	var (
+		file base.FileID  // the file of the previous token
+		src  []byte       // its contents
+		prev uint32       // where the previous token starts
+		lc   base.LineCol // and its position
+	)
+	for i, tok := range tb.Tokens {
+		lo := tok.Span.Lo
+		if i > 0 && tok.Span.File == file && lo >= prev && bytes.IndexByte(src[prev:lo], '\n') < 0 {
+			lc.Col += uint32(utf8.RuneCount(src[prev:lo]))
+		} else {
+			file = tok.Span.File
+			src = sm.Contents(file)
+			lc = sm.LineCol(file, lo)
+		}
+		prev = lo
 		fmt.Fprintf(&b, "%d:%d %s", lc.Line, lc.Col, tok.Kind)
 		switch tok.Kind {
 		case LowerIdent, UpperIdent:

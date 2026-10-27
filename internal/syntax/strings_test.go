@@ -331,13 +331,13 @@ func TestStrings(t *testing.T) {
 			{"'a", 2, []string{"Eof"}},
 			{"'", 1, []string{"Eof"}},
 			{"'a b", 4, []string{"Eof"}},
-			{"'a\nx", 2, []string{"LowerIdent(x)", "Eof"}},
-			{"'a\r\nx", 2, []string{"LowerIdent(x)", "Eof"}},
+			{"'a\nx", 2, []string{"Newline", "LowerIdent(x)", "Eof"}},
+			{"'a\r\nx", 2, []string{"Newline", "LowerIdent(x)", "Eof"}},
 			// A backslash at the end of the line is not an escape: the character
 			// is unclosed and that is the only mistake.
 			{"'\\", 2, []string{"Eof"}},
-			{"'\\\nx", 2, []string{"LowerIdent(x)", "Eof"}},
-			{"'\\\r\nx", 2, []string{"LowerIdent(x)", "Eof"}},
+			{"'\\\nx", 2, []string{"Newline", "LowerIdent(x)", "Eof"}},
+			{"'\\\r\nx", 2, []string{"Newline", "LowerIdent(x)", "Eof"}},
 			// A carriage return that ends the file is not a line break (no line
 			// feed follows), so it belongs to the contents. With a line feed
 			// right after it, even when the two are the last bytes of the file,
@@ -354,9 +354,10 @@ func TestStrings(t *testing.T) {
 				t.Errorf("%q: Char has span [%d,%d), want [0,%d)", row.src, sp.Lo, sp.Hi, row.hi)
 			}
 		}
-		// The line break after the character is still a line break.
+		// The line break after the character is still a line break, and the
+		// line rule (a Char can end an expression) makes it a Newline.
 		tb, _ := lexAll(t, "'a\nx")
-		wantNewlines(t, "'a\\nx", tb, false, true, false)
+		wantNewlines(t, "'a\\nx", tb, false, false, true, false)
 	})
 	t.Run("plain_string", func(t *testing.T) {
 		src := `"a\tb"`
@@ -492,15 +493,15 @@ func TestStrings(t *testing.T) {
 		src = "a\n  \"abc\nx"
 		tb, sink, id, in = lexFile(t, src)
 		wantUnterminated(t, src, sink.All(), id, 4)
-		wantShape(t, src, tb, in, "LowerIdent(a)", "Error", "LowerIdent(x)", "Eof")
-		wantNewlines(t, src, tb, false, true, true, false)
+		wantShape(t, src, tb, in, "LowerIdent(a)", "Newline", "Error", "LowerIdent(x)", "Eof")
+		wantNewlines(t, src, tb, false, false, true, true, false)
 
 		// The Error token used up that line break: nothing else follows it.
 		src = "a\n\"abc"
 		tb, sink, id, in = lexFile(t, src)
 		wantUnterminated(t, src, sink.All(), id, 2)
-		wantShape(t, src, tb, in, "LowerIdent(a)", "Error", "Eof")
-		wantNewlines(t, src, tb, false, true, false)
+		wantShape(t, src, tb, in, "LowerIdent(a)", "Newline", "Error", "Eof")
+		wantNewlines(t, src, tb, false, false, true, false)
 	})
 	t.Run("backslash_before_crlf_E0110_only", func(t *testing.T) {
 		// A backslash at the end of a line is not an escape, so the only
@@ -626,7 +627,7 @@ func TestStrings(t *testing.T) {
 			hi   uint32 // end of the Error token
 			want []string
 		}{
-			{"\"${ y\nx", 5, []string{"Error", "LowerIdent(y)", "LowerIdent(x)", "Eof"}},
+			{"\"${ y\nx", 5, []string{"Error", "LowerIdent(y)", "Newline", "LowerIdent(x)", "Eof"}},
 			{"\"${\r\nx", 3, []string{"Error", "LowerIdent(x)", "Eof"}},
 			// Several breaks in a row: the Error ends at the first.
 			{"\"${\n\n  \nx", 3, []string{"Error", "LowerIdent(x)", "Eof"}},
@@ -641,16 +642,16 @@ func TestStrings(t *testing.T) {
 			{"\"${ \"a${ \nx", 9, []string{"Error", "LowerIdent(x)", "Eof"}},
 			{"\"${ \"abc\nx", 8, []string{"Error", "LowerIdent(x)", "Eof"}},
 			// The break comes after the interpolation, in the text of the string.
-			{"\"a${x}b\ny", 7, []string{"Error", "LowerIdent(x)", "LowerIdent(y)", "Eof"}},
-			{"\"a${x}b${y}c\nz", 12, []string{"Error", "LowerIdent(x)", "LowerIdent(y)", "LowerIdent(z)", "Eof"}},
+			{"\"a${x}b\ny", 7, []string{"Error", "LowerIdent(x)", "Newline", "LowerIdent(y)", "Eof"}},
+			{"\"a${x}b${y}c\nz", 12, []string{"Error", "LowerIdent(x)", "LowerIdent(y)", "Newline", "LowerIdent(z)", "Eof"}},
 			// A break inside a comment inside the interpolation is a break too;
 			// the Error ends at the first one and lexing goes on after the comment.
 			{"\"${ /* a\nb */ x", 8, []string{"Error", "LowerIdent(x)", "Eof"}},
 			// A string that is complete inside the expression stays as it is.
 			{"\"${ \"a${x}b\" \ny", 13, []string{"Error", `StringHead("a")`, "LowerIdent(x)", `StringTail("b")`,
-				"LowerIdent(y)", "Eof"}},
-			{"\"${ \"a\" \ny", 8, []string{"Error", `String("a")`, "LowerIdent(y)", "Eof"}},
-			{"\"${ x // c\ny", 10, []string{"Error", "LowerIdent(x)", "LowerIdent(y)", "Eof"}},
+				"Newline", "LowerIdent(y)", "Eof"}},
+			{"\"${ \"a\" \ny", 8, []string{"Error", `String("a")`, "Newline", "LowerIdent(y)", "Eof"}},
+			{"\"${ x // c\ny", 10, []string{"Error", "LowerIdent(x)", "Newline", "LowerIdent(y)", "Eof"}},
 		}
 		for _, row := range rows {
 			tb, sink, id, in := lexFile(t, row.src)
@@ -692,8 +693,8 @@ func TestStrings(t *testing.T) {
 		src = "a\n\"${\nx"
 		tb, sink, id, in = lexFile(t, src)
 		wantUnterminated(t, src, sink.All(), id, 2)
-		wantShape(t, src, tb, in, "LowerIdent(a)", "Error", "LowerIdent(x)", "Eof")
-		wantNewlines(t, src, tb, false, true, true, false)
+		wantShape(t, src, tb, in, "LowerIdent(a)", "Newline", "Error", "LowerIdent(x)", "Eof")
+		wantNewlines(t, src, tb, false, false, true, true, false)
 
 		// Nothing of the string is left open afterwards: a `}` on the next line
 		// is a plain brace and not the end of the interpolation. The obvious
