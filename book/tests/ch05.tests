@@ -283,3 +283,165 @@ expect:  sin diagnósticos; Int, Dot, LowerIdent `abs` y Eof, con el valor 1
 why:     un flotante lleva dígitos tras el punto; si `1.` bastara, `1.abs` daría un E0107 o un
          flotante sin fracción en vez de la llamada que se escribió
 ref:     TestNumbers/int_then_method
+
+[T05.27] strings.char_literals                             level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un literal de carácter da un token Char cuyo payload es el code point, con cualquier escape y con caracteres de varios bytes
+input:   `'a' '\n' '\u{1F600}'`; y, uno por uno, `'\n'` `'\t'` `'\r'` `'\\'` `'\''` `'\"'` `'\0'` `'\$'` `'\u{41}'` `'\u{e9}'` `'\u{aBcD}'` `'\u{0}'` `'\u{000041}'` `'\u{10FFFF}'` `'\u{D7FF}'` `'\u{E000}'` `'"'` `'$'` `'é'` `'€'` `'😀'`
+expect:  sin diagnósticos. El primero da Char, Char, Char y Eof, con los payloads 97, 10 y 0x1F600 y los spans [0,3) [4,8) [9,20). Cada uno de los demás da un Char y Eof, con el span del literal entero y el payload 10, 9, 13, 92, 39, 34, 0, 36, 0x41, 0xE9, 0xABCD, 0, 0x41, 0x10FFFF, 0xD7FF, 0xE000, 34, 36, 0xE9, 0x20AC y 0x1F600, en ese orden
+why:     un escape mal resuelto (una `\r` que valga `\n`, un `\0` que dé el carácter `0`) no da error:
+         cambia en silencio el valor del carácter. Contar bytes en vez de code points rompería `'é'`
+         y `'😀'`, que ocupan 2 y 4 bytes. Los extremos de `\u{…}` (1 y 6 dígitos, mayúsculas y
+         minúsculas, el mayor escalar y los dos lados de los sustitutos) fijan el límite exacto de la regla
+ref:     TestStrings/char_literals
+
+[T05.28] strings.invalid_escape_E0106                      level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un escape inválido da un solo E0106 con la nota de los escapes válidos; en un carácter el token sigue siendo un Char, y en un string el escape aporta U+FFFD al texto y el lexer sigue justo después de los dos caracteres que consumió; si uno de ellos no se puede imprimir, el mensaje lo enseña como `<U+XXXX>`
+input:   `'\q'`; y, dentro de un string, `"\q"`, `"\qabc"`, `"a\wb"`, `"\x41"`, `"\é"`, `"a\` seguido de un `\r` suelto y `b"`, y `"\` y un tabulador y `"`; y, al final del fichero, `"\` seguido de un `\r` suelto
+expect:  para `'\q'`: un solo diagnóstico E0106 con mensaje `` invalid escape sequence `\q` ``, sin etiqueta, span [1,3) y exactamente la nota «valid escapes: \n \t \r \\ \' \" \0 \$ \u{…}»; un Char con payload 0xFFFD y span [0,4), y Eof. Para cada string: un solo E0106 igual, con el escape consumido en el mensaje (`\q`, `\q`, `\w`, `\x`, `\é`) y en el span ([1,3) [1,3) [2,4) [1,3) [1,4)); un String y Eof, y el texto con U+FFFD en lugar del escape: U+FFFD, U+FFFD y `abc`, `a` U+FFFD `b`, U+FFFD y `41`, U+FFFD. Para los dos últimos strings, el mensaje es `` invalid escape sequence `\<U+000D>` `` y `` invalid escape sequence `\<U+0009>` ``, con los spans [2,4) y [1,3), y los textos `a` U+FFFD `b` y U+FFFD. Con el `\r` al final del fichero, exactamente dos diagnósticos: el E0106 de `\<U+000D>` en [1,3) y después el E0110 en la comilla, y los tokens Error y Eof
+why:     el escape inválido no debe llevarse el resto del string: si tras `\q` el lexer saltara hasta la
+         comilla, se perderían `abc` y los errores que vinieran después. Y `é` ocupa dos bytes: consumir
+         «dos bytes» partiría el carácter y dejaría UTF-8 inválido en el texto. Un mensaje que llevara
+         el `\r` o el tabulador tal cual enseñaría un carácter que no se ve; y un `\r` que acaba el
+         fichero no es un salto de línea, porque ningún `\n` lo sigue, así que comprobarlo mirando
+         más allá del final haría un panic
+ref:     TestStrings/invalid_escape_E0106
+
+[T05.29] strings.bad_unicode_escape_forms_E0106            level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    las formas malas de `\u` dan un solo E0106 sobre exactamente lo que el lexer consumió, y el string sigue cerrado; si el fichero acaba en medio del escape, además del E0106 sale el error del literal sin cerrar
+input:   `"\u0041"`, `"\u{}"`, `"\u{1234567}"`, `"\u{D800}"`, `"\u{12"`, `"\u{0000041}"`, `"\u{110000}"`, `"\u{DFFF}"`, `"\u{1234567"`, `"\u{12x"`; y, cortados por el final del fichero, `"\u`, `"\u{`, `"\u{12` y `'\u{12`
+expect:  en las diez primeras, un solo E0106 con la nota de los escapes, sin etiqueta, cuyo mensaje y span son el texto consumido: `\u` [1,3), `\u{}` [1,5), `\u{1234567}` [1,12), `\u{D800}` [1,9), `\u{12` [1,6), `\u{0000041}` [1,12), `\u{110000}` [1,11), `\u{DFFF}` [1,9), `\u{1234567` [1,11) y `\u{12` [1,6); un String que abarca todo el literal y Eof; y el texto es U+FFFD, seguido de `0041` en la primera y de `x` en la última. En las cuatro cortadas, exactamente dos diagnósticos: el E0106 sobre `\u` [1,3), `\u{` [1,4), `\u{12` [1,6) y `\u{12` [1,6), y después E0110 en los tres strings (token Error y Eof) o E0108 en el carácter (token Char y Eof)
+why:     la regla es muy concreta: de 1 a 6 dígitos y un escalar válido. Siete dígitos aunque sean
+         ceros, `110000` (el primero tras el último escalar) y `DFFF` (el último sustituto) son los sitios
+         donde un lexer descuidado se equivoca; y que el texto conserve la parte no consumida (`0041`, `x`)
+         comprueba que el lexer continúa justo donde dice, sin tragarse más ni menos. Un `\u` al final
+         del fichero no debe leer más allá de él
+ref:     TestStrings/bad_unicode_escape_forms_E0106
+
+[T05.30] strings.empty_char_E0108                          level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un literal de carácter vacío da E0108 y un token Char
+input:   `''`
+expect:  un solo diagnóstico E0108 con mensaje `invalid character literal`, etiqueta «a character literal holds exactly one character» y span [0,2); un Char con payload 0xFFFD y Eof
+why:     un literal vacío no tiene valor; el token sigue siendo un Char para que el parser vea el literal
+         que se escribió y no añada un error propio encima del del lexer
+ref:     TestStrings/empty_char_E0108
+
+[T05.31] strings.two_chars_E0108                           level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un literal con más de un code point da E0108 y un token Char que llega hasta la comilla de cierre
+input:   `'ab'`, `'aé'`, `'\n\n'`, `'😀😀'` y `'ab' x`
+expect:  en cada uno, un solo E0108 con el mensaje y la etiqueta de siempre y el span del literal entero ([0,4) [0,5) [0,6) [0,10)); un Char con payload 0xFFFD y Eof. En `'ab' x`, un solo diagnóstico y los tokens Char(U+FFFD), LowerIdent(x) y Eof
+why:     el literal acaba en su comilla de cierre y el lexer sigue justo ahí; `'aé'` son tres bytes de
+         contenido (cinco con las comillas) y dos caracteres, y `'\n\n'` dos escapes: contar bytes o
+         mirar solo el primer escape daría un resultado distinto
+ref:     TestStrings/two_chars_E0108
+
+[T05.32] strings.unclosed_char_E0108                       level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un literal de carácter sin cerrar en su línea da E0108 y un token Char que llega hasta el final del contenido de la línea; el lexer sigue en el salto de línea, y un CRLF que son los dos últimos bytes del fichero también acaba la línea
+input:   `'a`, `'`, `'a b`, `'a\nx`, `'a\r\nx`, `'\` al final del fichero, `'\` y un salto de línea y `x`, `'\` y un CRLF y `x`, `'a` seguido de un `\r` suelto que acaba el fichero, y `'a` y `'\` seguidos de un CRLF que acaba el fichero
+expect:  un solo diagnóstico E0108 (ningún E0106, aunque la barra esté al final de la línea) y un Char con payload 0xFFFD y span [0,2) [0,1) [0,4) [0,2) [0,2) [0,2) [0,2) [0,2) [0,3) [0,2) [0,2) (el `\r` suelto del final del fichero es contenido, no un salto de línea, y con el `\n` detrás es el salto de línea y el Char no lo incluye); después, Eof o bien LowerIdent(x) y Eof. En `'a\nx`, la `x` lleva NewlineBefore
+why:     un carácter sin cerrar no puede tragarse el resto del fichero: acaba donde acaba la línea, sin
+         el `\r` de un CRLF. Y una barra al final de la línea no es un escape inválido: el único error
+         es el literal sin cerrar. Un `\r` que acaba el fichero no tiene ningún `\n` detrás, y
+         comprobarlo mirando más allá del final haría un panic. Y si el `\n` sí está, aunque sea el
+         último byte del fichero, el par es un salto de línea: un lexer que lo mirara solo cuando
+         queda otro byte detrás daría el `\r` por contenido, y el Char saldría un byte más largo
+ref:     TestStrings/unclosed_char_E0108
+
+[T05.33] strings.plain_string                              level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un string sin interpolaciones es un solo token String, con los escapes ya resueltos en su texto
+input:   `"a\tb"`; y `"\n\t\r\\\'\"\0\$"`, `"\u{41}\u{e9}\u{1F600}"`, `"é😀"`, `""`, `"a` seguido de un `\r` suelto y `b"`, `"'"`, y `"a" "b" "a"`
+expect:  sin diagnósticos; un String y Eof con el span del literal entero, y el texto "a\tb" (con un tabulador real); en las demás, el texto con el salto de línea, el tabulador, el retorno, la barra, la comilla simple, la doble, el NUL y el `$`; `Aé😀`; `é😀`; vacío; `a`, `\r` y `b`; y `'`. Los tres strings de la última dan tres entradas en `Strings`, «a», «b» y «a», y los payloads 0, 1 y 2
+why:     el payload indexa `Strings` y el texto ya está resuelto: si el lexer guardara el texto tal como
+         está en el fichero, el intérprete imprimiría `\t` en vez de un tabulador. Un `\r` suelto es un
+         carácter más, no el final de la línea
+ref:     TestStrings/plain_string
+
+[T05.34] strings.dollar_escape                             level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    `\$` escribe un `$` literal y no abre una interpolación
+input:   `"\${x}"` y `"\$"`
+expect:  sin diagnósticos; un solo String y Eof, con el texto `${x}` en el primero y `$` en el segundo
+why:     es la única forma de escribir las dos letras `${` dentro de un string; si el lexer mirara el `$`
+         antes que la barra, el programa tendría una interpolación que no se pretendía
+ref:     TestStrings/dollar_escape
+
+[T05.35] strings.lone_dollar_is_literal                    level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un `$` que no va seguido de `{` es un `$` literal
+input:   `"a$b"`, `"$"`, `"a$"`, `"$$"`, `"$ {x}"` y `"$${x}"`
+expect:  sin diagnósticos. Los cinco primeros dan un String y Eof, con los textos `a$b`, `$`, `a$`, `$$` y `$ {x}`. El último da StringHead("$"), LowerIdent(x), StringTail("") y Eof
+why:     solo `${` abre una interpolación. Con `"$${x}"` el primer `$` es un carácter más y el segundo
+         abre la interpolación: un lexer que consumiera dos caracteres al ver un `$` se perdería el `${`
+ref:     TestStrings/lone_dollar_is_literal
+
+[T05.36] strings.unterminated_string_E0110                 level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un string que no se cierra en su línea da un solo E0110 en la comilla de apertura y un token Error desde esa comilla hasta el final del contenido de la línea; el lexer sigue en el salto de línea
+input:   `"abc\nx`, `"abc`, `"`, `"abc\n`, `"abc\r\nx`, `"a\rb\nx`, `"abc` seguido de un `\r` suelto que acaba el fichero, `a\n  "abc\nx`, `a\n"abc` y `"abc\n"def\nx`
+expect:  en `"abc\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof con los spans [0,4) [5,6) [6,6), y solo la `x` con NewlineBefore. En las demás, un solo E0110 en la comilla y un Error que acaba en 4, 1, 4, 4, 4 y 5 (sin el `\r` del CRLF, y con el `\r` suelto dentro, también cuando acaba el fichero); en `a\n  "abc\nx` la comilla está en 4 y el Error y la `x` llevan NewlineBefore; en `a\n"abc` solo el Error lo lleva y Eof no. En `"abc\n"def\nx`, dos diagnósticos E0110 (en 0 y en 5) y los tokens Error, Error, LowerIdent(x), Eof
+why:     el error es de una línea, no del fichero: el lexer vuelve a sincronizar en el salto y el resto del
+         programa se lee con normalidad. Es un token Error y no un String para que la regla de línea
+         no vea aquí el final de una expresión (es una decisión de diseño)
+ref:     TestStrings/unterminated_string_E0110
+
+[T05.37] strings.backslash_before_crlf_E0110_only          level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    una barra invertida al final de la línea no es un escape inválido: el único error es el string sin cerrar
+input:   `"abc\` seguido de CRLF y `x`, de LF y `x`, del final del fichero, y de un CRLF que acaba el fichero
+expect:  en los cuatro, exactamente un diagnóstico, E0110 con la etiqueta en la comilla (span [0,1)); un token Error con span [0,5), que incluye la barra y no el salto de línea, y después LowerIdent(x) y Eof, o solo Eof
+why:     `\` seguida de un salto de línea no tiene ningún carácter que escapar; dar además un E0106 sería
+         dos errores para una sola equivocación, y el segundo apuntaría a un escape que nadie escribió.
+         Y lo mismo cuando el CRLF son los dos últimos bytes del fichero: si el lexer no lo viera como
+         salto de línea, la barra escaparía un `\r` y saldría un E0106 más, además del E0110
+ref:     TestStrings/backslash_before_crlf_E0110_only
+
+[T05.38] strings.interpolation_tokens                      level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un string con `${…}` se parte en StringHead, los tokens de la expresión, StringMid para cada tramo intermedio y StringTail
+input:   `"a${x}b${y + 1}c"`; y `"${x}"`, `"${a}${b}"`, `"é${x}😀"`, `"a\n${x}\t\${"`, `"a${x}" "b"` y `"a${x}" }`
+expect:  sin diagnósticos. El primero da StringHead("a"), LowerIdent(x), StringMid("b"), LowerIdent(y), Plus, Int(1), StringTail("c") y Eof, con los spans [0,4) [4,5) [5,9) [9,10) [11,12) [13,14) [14,17) [17,17): la cabeza llega hasta el `${` incluido, el tramo intermedio va de la `}` al `${` siguiente, y la cola de la `}` a la comilla de cierre. Los demás dan StringHead(""), x y StringTail(""); StringHead(""), a, StringMid(""), b y StringTail(""); StringHead("é"), x y StringTail("😀"); StringHead con salto de línea, x y StringTail con un tabulador y `${`; StringHead("a"), x, StringTail(""), String("b"); y StringHead("a"), x, StringTail("") y RBrace; todos terminan en Eof
+why:     los tramos vacíos y los tramos seguidos son los casos donde un lexer que decide Head, Mid o Tail
+         por el texto, y no por el estado, se equivoca; y la `}` de cierre del último string no debe
+         quedarse como estado: la `}` suelta del final tiene que ser un RBrace
+ref:     TestStrings/interpolation_tokens
+
+[T05.39] strings.interpolation_with_braces                 level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    dentro de una interpolación, las `{` y `}` se emparejan entre sí y solo la `}` que encuentra el centinela cierra la interpolación
+input:   `"${ g({ y }) }"`; y `"${ {} }"`, `"${ {{ }} }"`, `"${ { } }x"`, `{ "${x}" }`, `}`, `} "${x}" }` y, con un paréntesis o un corchete que nadie cierra, `"${ ( }"`, `"${ [ }"` y `"${ f(x }"`
+expect:  sin diagnósticos. El primero da StringHead(""), LowerIdent(g), LParen, LBrace, LowerIdent(y), RBrace, RParen, StringTail("") y Eof. Los demás dan StringHead(""), LBrace, RBrace y StringTail(""); lo mismo con dos pares anidados; StringHead(""), LBrace, RBrace y StringTail("x"); LBrace, StringHead(""), x, StringTail("") y RBrace; solo RBrace; RBrace, StringHead(""), x, StringTail("") y RBrace; StringHead(""), LParen y StringTail(""); lo mismo con LBracket; y StringHead(""), f, LParen, x y StringTail(""); todos terminan en Eof
+why:     si toda `}` cerrara la interpolación, `g({ y })` partiría el string por la mitad; si el lexer no
+         contara las llaves abiertas dentro, la primera `}` lo haría. Y una `}` sin nada abierto no debe
+         hacer un panic al sacar de una pila vacía. Solo cuentan las llaves: si el lexer apuntara
+         también los paréntesis o los corchetes, `"${ ( }"` no se cerraría con su `}` y daría un E0110
+ref:     TestStrings/interpolation_with_braces
+
+[T05.40] strings.string_in_interpolation                   level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    una interpolación puede contener otro string, también con interpolaciones, y cada `}` cierra la interpolación del string más interno que haya en ese punto
+input:   `"${ "in" }"`; `"${ "a${x}b" }c"`; y `"${ "${ "${x}" }" }"`
+expect:  sin diagnósticos. El primero da StringHead(""), String("in"), StringTail("") y Eof. El segundo, StringHead(""), StringHead("a"), LowerIdent(x), StringTail("b"), StringTail("c") y Eof. El tercero, tres StringHead(""), LowerIdent(x), tres StringTail("") y Eof
+why:     el lexer lleva dos pilas, la de modos y la de llaves, que deben subir y bajar a la vez; si la
+         `}` del string interior cerrara también el exterior, la `c` del segundo ejemplo saldría como
+         un identificador y no como el final del texto
+ref:     TestStrings/string_in_interpolation
+
+[T05.41] strings.newline_inside_interpolation_E0110        level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un salto de línea (o el final del fichero) dentro de una interpolación da un solo E0110 en la comilla del string más externo; el string pasa a ser un único token Error, en el sitio de su primer token, y el lexer sigue en el salto
+input:   `"${\nx`; quince filas más, `"${ y\nx`, `"${\r\nx`, `"${\n\n  \nx`, `"${x`, `"${`, `"${x\n`, `"${\r\n`, `"${ "a${ \nx`, `"${ "abc\nx`, `"a${x}b\ny`, `"a${x}b${y}c\nz`, `"${ /* a\nb */ x`, `"${ "a${x}b" \ny`, `"${ "a" \ny` y `"${ x // c\ny`; `"${ x /* c` y `"${ 'a`; y `a\n"${\nx`, `"${\n}x` y `"${\n}"`
+expect:  en `"${\nx`: un solo E0110 con mensaje `unterminated string literal`, etiqueta «string starts here» y span [0,1); los tokens Error, LowerIdent(x) y Eof, con los spans [0,3) [4,5) [5,5), y solo la `x` con NewlineBefore. En cada una de las quince filas: un solo E0110 con la etiqueta en la comilla, en 0, el más externo aunque haya strings dentro de otros; un Error que empieza en 0 y acaba en 5, 3, 3, 4, 3, 4, 3, 9, 8, 7, 12, 8, 13, 8 y 10 (sin el `\r` de un CRLF y en el primer salto de una racha, también si está dentro de un comentario y también si el salto es lo último del fichero); los tokens de la expresión (`y`, `x`, `z`…) y los strings completos que ya estaban dentro se quedan detrás del Error; los StringHead y StringMid de los strings abiertos no están; y los spans nunca retroceden. En `"${ x /* c`: dos diagnósticos, el E0103 de siempre con la etiqueta «comment starts here» en [6,8) y después el E0110 en la comilla, y los tokens Error, LowerIdent(x) y Eof. En `"${ 'a`: dos diagnósticos, el E0108 de siempre en [4,6) y después el E0110 en la comilla, y los tokens Error, Char con payload 0xFFFD y Eof. En `a\n"${\nx`: un E0110 con la comilla en 2, y el Error lleva NewlineBefore. En `"${\n}x`: un E0110 y los tokens Error, RBrace, LowerIdent(x) y Eof. En `"${\n}"`: dos E0110 (en 0 y en 5) y los tokens Error [0,3), RBrace [4,5), Error [5,6) y Eof [6,6)
+why:     si el Error se añadiera al final, tras los tokens de la expresión, los spans irían hacia atrás y
+         el fuzz de la sesión 4 lo vería; si se quedara el StringHead, el parser encontraría un trozo de
+         string sin su final. Y si el lexer no vaciara sus pilas, la `}` de la línea siguiente cerraría
+         una interpolación que ya no existe: la versión primera de este caso, `"${\n}"`, da dos errores
+         porque la comilla de la segunda línea abre otro string. Si el fichero acaba justo después del
+         salto de línea, el Error acaba antes del salto y no incluye ese último byte. Y un comentario o
+         un carácter sin cerrar dentro de la interpolación es un error propio, que no oculta el del string
+ref:     TestStrings/newline_inside_interpolation_E0110

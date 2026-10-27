@@ -19,6 +19,9 @@ import (
 // at all: the buffer holds only Eof, and sink holds that one error.
 //
 // Identifiers are interned in in, and their tokens carry the Symbol.
+//
+// A string or character literal that is not closed on its line is reported
+// and lexing goes on at the line break; see unterminated in strings.go.
 func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.Sink) TokenBuffer {
 	lx := &lexer{src: sm.Contents(id), id: id, in: in, sink: sink}
 	if !CheckSource(sm, id, sink) {
@@ -28,7 +31,15 @@ func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.S
 	}
 	for {
 		lx.skipTrivia()
+		if lx.interp.broken {
+			// A line break inside an interpolation ends the string.
+			lx.unterminated(lx.interp.breakAt)
+		}
 		if lx.pos >= len(lx.src) {
+			if len(lx.interp.modes) > 0 {
+				// The file ended inside an interpolation.
+				lx.unterminated(lx.pos)
+			}
 			lx.emit(Eof, lx.pos, 0)
 			return lx.tb
 		}
@@ -48,6 +59,9 @@ type lexer struct {
 	// newline is set when a line break goes by while skipping spaces and
 	// comments, and cleared by emit once the next token records it.
 	newline bool
+
+	// interp is the state that string literals and their interpolations need.
+	interp interpState
 }
 
 // emit appends a token of the given kind that starts at start and ends at the
@@ -73,12 +87,13 @@ func (lx *lexer) at(i int) byte {
 }
 
 // skipTrivia skips spaces, line breaks and comments, and notes in lx.newline
-// whether it went past a line break, also one inside a block comment.
+// whether it went past a line break, also one inside a block comment. A line
+// break inside an interpolation is also noted for Lex, which ends the string.
 func (lx *lexer) skipTrivia() {
 	for lx.pos < len(lx.src) {
 		switch c := lx.src[lx.pos]; {
 		case c == '\n':
-			lx.newline = true
+			lx.noteBreak()
 			lx.pos++
 		case c == ' ' || c == '\t' || c == '\r':
 			lx.pos++
@@ -115,7 +130,7 @@ func (lx *lexer) skipBlockComment() {
 			}
 		default:
 			if lx.src[lx.pos] == '\n' {
-				lx.newline = true
+				lx.noteBreak()
 			}
 			lx.pos++
 		}
@@ -136,9 +151,22 @@ func (lx *lexer) next() {
 		lx.ident()
 		return
 	}
+	switch c {
+	case '\'':
+		lx.char()
+		return
+	case '"':
+		lx.str()
+		return
+	case '}':
+		if lx.endInterpolation() {
+			return
+		}
+	}
 	if kind, n, ok := punctuation(c, lx.at(1)); ok {
 		start := lx.pos
 		lx.pos += n
+		lx.trackBraces(kind)
 		lx.emit(kind, start, 0)
 		return
 	}
