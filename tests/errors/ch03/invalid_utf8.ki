@@ -1,0 +1,3 @@
+// test: T03.57
+// run: check
+let x = ÿ  // ERROR(E0101) @9

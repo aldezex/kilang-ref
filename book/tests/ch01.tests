@@ -36,7 +36,7 @@ kind:    unit (go test)      file: internal/driver/cli_test.go
 case:    `Main` sin argumentos
 input:   []
 expect:  código de salida 2; stdout vacío; stderr exactamente
-         "usage: ki <command> [args]\ncommands: --version, version\n"
+         "usage: ki <command> [args]\ncommands: --version, version, check, test\n"
 why:     es el único test que fija la lista entera, con su orden y sus separadores; los demás tests de
          uso solo miran el prefijo para no cambiar con cada comando nuevo, así que si `version` faltara
          en la lista o saliera antes que `--version`, solo este lo vería

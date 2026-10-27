@@ -1,0 +1,4 @@
+// test: T03.60
+// run: check
+// Non-ASCII in comments is fine: año, café, 😀
+fn main() {}

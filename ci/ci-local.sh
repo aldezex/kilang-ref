@@ -59,7 +59,12 @@ go build -o build/bin/ki ./cmd/ki
 go test ./...
 go test -race ./...
 
-# 7. ki cross-compiles for windows/amd64 and linux/arm64, so portability
+# 7. The golden files run through the real binary, as a subprocess, so their
+#     exit codes are the ones a shell sees. (go test ./... ran the same files
+#     in-process, in tests/golden_test.go.)
+build/bin/ki test --root . tests
+
+# 8. ki cross-compiles for windows/amd64 and linux/arm64, so portability
 #    problems show up long before the chapters that target those systems.
 GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/ki
 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/ki

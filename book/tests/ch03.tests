@@ -309,3 +309,478 @@ why:     los casos con etiquetas secundarias, notas y ayuda son los de verdad; s
          siempre como `null` o las notas se perdieran, el JSON diría menos que la pantalla. Con dos
          secundarias se ve que el orden es el de aviso y no el de columna ni el inverso
 ref:     TestRenderJSON/notes_help_and_secondary_labels
+
+[T03.28] syntax.check_source_clean_file                      level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar un fichero sin bytes inválidos ni de control, con acentos y un emoji en un comentario
+input:   "fn main() {}\n// año, café, 😀\n"
+expect:  `CheckSource` devuelve `true` y no se informa ningún diagnóstico
+why:     si la comprobación rechazara texto válido que no es ASCII, ningún programa con acentos en un
+         comentario llegaría al lexer; este test fija el lado «sí» de la regla antes de los dos «no»
+ref:     TestCheckSource/clean_file
+
+[T03.29] syntax.check_source_invalid_utf8_E0101              level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar un fichero con un byte que no es UTF-8 válido al final de una línea
+input:   "let x = \xff"
+expect:  `CheckSource` devuelve `false`; exactamente 1 diagnóstico, un error E0101 con el mensaje
+         "invalid UTF-8 byte 0xFF", la primaria sobre el byte [8,9) y su etiqueta "not valid UTF-8"
+why:     el byte inválido se muestra luego como U+FFFD y todas las columnas siguientes dependen de que
+         el error caiga en el byte exacto; un span desplazado o un `0xff` en minúsculas cambiaría lo que
+         ves y lo que el runner compara
+ref:     TestCheckSource/invalid_utf8_E0101
+
+[T03.30] syntax.check_source_control_byte_E0102              level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar un fichero con un byte de control ASCII tras una letra, en cinco casos de una tabla: 0x00, 0x01, 0x0B, 0x0C y 0x1F
+input:   "a\x00", "a\x01", "a\x0b", "a\x0c" y "a\x1f"
+expect:  en cada caso `CheckSource` devuelve `false`; exactamente 1 diagnóstico, un error E0102 con el mensaje
+         "control character U+0000 in source" (con el código del byte, en cuatro cifras hexadecimales
+         mayúsculas), la primaria sobre [1,2) y la etiqueta "not allowed in Ki source; write it as an
+         escape such as `\u{0}`" (con el byte en minúsculas y sin ceros delante)
+why:     un control invisible dentro de un identificador o una cadena es la clase de error que nadie
+         encuentra mirando la pantalla; el mensaje nombra el carácter por su código y la etiqueta dice
+         cómo escribirlo a propósito. Los extremos importan: un `b < 0x1F` dejaría pasar el 0x1F, un
+         `b > 0` dejaría pasar el NUL, el byte de control más común en un binario renombrado a `.ki`,
+         y el tabulador vertical y el salto de página parecen espacio pero son controles
+ref:     TestCheckSource/control_byte_E0102
+
+[T03.31] syntax.check_source_tab_cr_lf_are_fine              level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar un fichero que usa tabulador, retorno de carro y salto de línea
+input:   "a\tb\r\nc"
+expect:  `CheckSource` devuelve `true` y no informa nada
+why:     los tres son bytes menores que 0x20 y un `b < 0x20` ingenuo los rechazaría: el fichero de
+         cualquiera con finales de línea de Windows, o con tabuladores, dejaría de compilar
+ref:     TestCheckSource/tab_cr_lf_are_fine
+
+[T03.32] syntax.check_source_delete_byte_E0102               level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar un fichero con el byte 0x7F (DEL) tras una letra
+input:   "a\x7f"
+expect:  `CheckSource` devuelve `false`; exactamente 1 diagnóstico, un error E0102 con el mensaje
+         "control character U+007F in source", la primaria sobre [1,2) y la etiqueta
+         "not allowed in Ki source; write it as an escape such as `\u{7f}`"
+why:     0x7F es un control que queda por encima de los 0x20 y se escapa a quien solo mira el rango bajo;
+         el renderizador lo dibuja como `␡`, así que el error y la imagen cuentan lo mismo
+ref:     TestCheckSource/delete_byte_E0102
+
+[T03.33] syntax.check_source_reports_first_problem_only      level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    comprobar dos ficheros con un control y un byte inválido, cada uno de los dos primero una vez
+input:   "ab\x01cd\xffef\x02" y "ab\xffcd\x01ef\xfe"
+expect:  con el control antes: exactamente 1 diagnóstico, E0102 en [2,3); con el byte inválido antes:
+         exactamente 1 diagnóstico, E0101 en [2,3); en ambos casos `CheckSource` devuelve `false`
+why:     un fichero que no es texto tiene miles de bytes malos y cien errores iguales no dicen más que
+         el primero; y el primero tiene que serlo de verdad, sea del tipo que sea
+ref:     TestCheckSource/reports_first_problem_only
+
+[T03.34] kitest.parse_header_minimal                         level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una cabecera con solo `test` y `run`
+input:   "// test: T03.01\n// run: check\nfn main() {}\n"
+expect:  `Spec{TestID: "T03.01", Run: ["check"]}` y nada más: sin `Args`, sin expectativas, sin anotaciones, sin BOM ni CRLF
+why:     todo lo que la cabecera no dice tiene que quedar como «sin definir» y no como un valor por
+         defecto escrito en el `Spec`; el runner distingue «salida vacía» de «sin expectativa»
+ref:     TestParseHeader/minimal
+
+[T03.35] kitest.parse_header_single_line_values              level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una cabecera con `run: emit tokens`, `args`, `expect-exit` y `expect-stdout` en una línea
+expect:  `Run` = ["emit", "tokens"]; `Args` = ["--diagnostics=short", "-x"]; `ExpectExit` = 101;
+         `ExpectStdout` = "6765\n"; `ExpectStderr` sin definir
+why:     la forma de una línea es la más usada y tiene que acabar en salto de línea, como lo que imprime
+         `ki`; si `Run` no se partiera por palabras el runner buscaría un comando llamado «emit tokens»
+ref:     TestParseHeader/single_line_stdout
+
+[T03.36] kitest.parse_header_block_stderr                    level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer un `expect-stderr:` en forma de bloque con una línea vacía, una sangrada y otra `// | ` vacía, y un `expect-stdout:` con solo espacios tras los dos puntos
+input:   "// expect-stderr:\n// | a\n// |\n// |   b\n// | \n// note: …"; y "// expect-stdout: \n// | a\n" con uno, tres espacios o un espacio y un tabulador tras los dos puntos
+expect:  `ExpectStderr` = "a\n\n  b\n\n"; el comentario que sigue al bloque lo cierra y no forma parte de él; en las tres formas del segundo, `ExpectStdout` = "a\n" (abre un bloque, no es una línea vacía)
+why:     una línea `// |` sin texto es una línea vacía de la salida, y la sangría de una línea
+         (`// |   b`) es parte del texto: los diagnósticos humanos empiezan con espacios, y recortarlos
+         haría pasar por buena una salida mal alineada. Y un editor que recorta los espacios al
+         final de la línea convertiría una forma de abrir el bloque en la otra
+ref:     TestParseHeader/block_stderr
+
+[T03.37] kitest.parse_header_annotation_same_line            level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una anotación `@9` en la línea 3
+input:   "let x = $  // ERROR(E0101) @9" en la línea 3
+expect:  `Errors` = [{E0101, línea 3, columna 9}]
+why:     la anotación con `@COL` no dice la línea: la toma de la línea donde está escrita, y un error de
+         una unidad (línea 2 por línea 3, cuenta desde 0) haría fallar todos los golden de error a la vez
+ref:     TestParseHeader/annotation_same_line
+
+[T03.38] kitest.parse_header_annotation_absolute             level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una anotación con posición absoluta `@12:32` y un código de warning
+input:   "// ERROR(W0301) @12:32" en la línea 5
+expect:  `Errors` = [{W0301, línea 12, columna 32}]
+why:     un error de varias líneas se anota donde empieza, no donde está el comentario, y los warnings
+         usan la misma forma con la letra `W`
+ref:     TestParseHeader/annotation_absolute
+
+[T03.39] kitest.parse_header_two_annotations_one_line        level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer dos anotaciones en la misma línea y una más en la siguiente
+expect:  `Errors` = [{E0101, 3, 3}, {E0102, 3, 9}, {E0401, 4, 1}], en el orden del fichero
+why:     si el análisis se detuviera en la primera anotación de la línea, un golden con dos errores en
+         una línea pasaría con uno solo comprobado
+ref:     TestParseHeader/two_annotations_one_line
+
+[T03.40] kitest.parse_header_missing_run_is_error            level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer cabeceras a las que les falta una clave obligatoria o con un valor de `run` que no existe
+expect:  los errores son exactamente "malformed header: missing key 'run'", "… missing key 'test'" (también
+         cuando faltan las dos), "… unknown run value 'foo'" y "… unknown run value 'emit bogus'"; una
+         línea `// run:` después de la cabecera no cuenta
+why:     un golden sin `run` ejecutaría nada y pasaría en silencio; el runner tiene que fallar con el
+         motivo exacto, y la cabecera termina en la primera línea que no es un comentario
+ref:     TestParseHeader/missing_run_is_error
+
+[T03.41] kitest.parse_header_known_key_without_space_is_error level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer cabeceras con `expect-stdout:6765`, `run:check`, `test:T1`, `args:-x`, `expect-exit:1` y `run:` sin nada
+expect:  cada una da "malformed header: <clave> needs a space after ':'"
+why:     una clave pegada a su valor es casi seguro una errata, y si se tomara por texto libre el
+         golden perdería su expectativa y pasaría sin comprobar nada
+ref:     TestParseHeader/known_key_without_space_is_error
+
+[T03.42] kitest.parse_header_unknown_word_colon_is_free_text level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una cabecera con comentarios `// note: …`, `// Non-ASCII … fine: año` y `// expect-stdout x: y`
+expect:  el resultado es el mismo `Spec` que el de la cabecera mínima: esas líneas se ignoran
+why:     la cabecera convive con comentarios normales; solo una palabra conocida seguida de `:` es una
+         clave, y una frase que contiene dos puntos no debe romper el golden
+ref:     TestParseHeader/unknown_word_colon_is_free_text
+
+[T03.43] kitest.parse_header_bad_code_is_error               level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer una anotación con el código `E01`, `e0101`, `X0101`, `E01011` y vacío
+expect:  cada una da "malformed header: bad error code '<código>'"
+why:     un código mal escrito nunca coincidiría con ningún diagnóstico y el golden fallaría con un
+         «missing» que no explica la errata; el runner la señala en la cabecera
+ref:     TestParseHeader/bad_code_is_error
+
+[T03.44] kitest.parse_header_detects_bom_and_crlf            level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer cabeceras con BOM, con CRLF, con las dos cosas, con ninguna y con CRLF solo a partir de la segunda línea; y una cabecera completa con finales CRLF, con y sin BOM; y un texto cuyo primer byte (tras el BOM) es el salto de línea
+input:   la cabecera completa: `test`, `run`, `expect-exit: 3`, `expect-stdout: ok`, un `expect-stderr:` con bloque (`// | a`, `// |`, `// | b`) y la línea "x  // ERROR(E0101) @9", todas terminadas en "\r\n"; y los textos "\n// test: T1\n" y el mismo con BOM
+expect:  `BOM` y `CRLF` valen lo esperado en cada caso (CRLF lo decide el final de la primera línea) y los valores no
+         llevan ni `\r` ni los bytes del BOM (`TestID` = "T1", `Run` = ["check"]); la cabecera completa da
+         exactamente `ExpectExit` 3, `ExpectStdout` "ok\n", `ExpectStderr` "a\n\nb\n" y la anotación {E0101, línea 9, columna 9};
+         los textos que empiezan por el salto de línea no tienen cabecera y dan el error `malformed header: missing key
+         'test'`, no un pánico por mirar el byte anterior al `\n`
+why:     `--update` reescribe el fichero y tiene que devolverlo tal como estaba; si el BOM o el `\r`
+         se colaran en `test` o en `run`, el runner buscaría un comando que no existe. Esos dos valores
+         los limpiaría `TrimSpace` aunque el `\r` no se quitara de la línea, así que el resto de la
+         cabecera es lo que lo prueba: con el `\r` puesto, `@9` no sería una posición y el bloque
+         devolvería "a\r\n"
+ref:     TestParseHeader/detects_bom_and_crlf
+
+[T03.45] kitest.runner_pass_and_fail_lines                   level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un directorio con `b.ki`, `a.ki` y un `notes.txt`, con un `Exec` falso
+expect:  la salida es exactamente "PASS a.ki\nFAIL b.ki\n- 1\n+ 2\nki test: 1 passed, 1 failed\n"; `RunPaths` devuelve (1, 1); el
+         `Exec` recibe `check --diagnostics=short a.ki` y después `check b.ki`; `notes.txt` no se ejecuta
+why:     es la forma de lo que lees al lanzar `ki test`: el orden alfabético, las líneas y el resumen;
+         los flags de `args:` van entre el comando y el fichero, que es donde `ki` los espera
+ref:     TestRunner/pass_and_fail_lines
+
+[T03.46] kitest.runner_exit_code_diff_first                  level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    comparar con un `Exec` falso: código de salida, stdout, stderr y fin de salida, en diez casos de una tabla
+expect:  el informe empieza por `- exit` y `+ exit`, sigue con la primera línea de stdout que difiere y después la de
+         stderr; `<eof>` ocupa el lado de la salida que se acaba antes; una última línea sin salto de línea lo
+         dice (` [no newline at end]`); si todo coincide, "PASS c.ki\n"
+why:     el código de salida es lo primero que cuenta: si un programa muere con 101 su salida es
+         secundaria; y de la salida solo la primera diferencia, porque las siguientes suelen ser eco
+         de la misma
+ref:     TestRunner/exit_code_diff_first
+
+[T03.47] kitest.runner_header_error_is_fail                  level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un fichero cuya cabecera tiene `test` pero no `run`
+expect:  la salida es "FAIL d.ki\n- malformed header: missing key 'run'\nki test: 0 passed, 1 failed\n"; cuenta como fallo y
+         el `Exec` no se llama
+why:     un golden con la cabecera rota no se puede ejecutar y no debe contarse como bueno; el motivo
+         sale en el informe, no en un pánico del runner
+ref:     TestRunner/header_error_is_fail
+
+[T03.48] kitest.runner_annotations_compare_positions         level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar ficheros con anotaciones, con un `Exec` falso que imprime JSON en la segunda pasada
+expect:  con el error en 3:9 pasa y el `Exec` recibe `check e.ki` y `check --diagnostics=json e.ki`; con E0101 en 4:1 da
+         "FAIL e.ki\nmissing E0101 at 3:9\nunexpected E0101 at 4:1\n" (las líneas de anotaciones van sin prefijo); dos anotaciones iguales con un solo
+         diagnóstico dan un `missing`; el texto de stderr de la primera pasada no se compara.
+         Sin `expect-exit`, el código esperado es 1 si alguna anotación es un error (`E…`) y 0 si todas son avisos (`W…`):
+         `ERROR(W0702)` con salida 0 pasa y con salida 1 da "FAIL w.ki\n- exit 0\n+ exit 1\n"; `ERROR(E0101)` con salida 0 da
+         "FAIL e.ki\n- exit 1\n+ exit 0\n"; un aviso seguido de un error espera 1.
+         De stderr solo cuentan las líneas que empiezan por `{`: la nota "too many errors" o una línea en blanco no
+         estorban; "{not json}" da "FAIL e.ki\n+ unreadable diagnostic: {not json}\nmissing E0101 at 3:9\n"
+why:     lo que identifica a un error es el código y la posición, no su texto: así reformular un
+         mensaje no rompe los golden; y es un multiconjunto, porque dos errores iguales en el mismo
+         sitio son dos errores. Un golden que solo espera un aviso termina con 0: si el runner esperara 1
+         para cualquier anotación, el primer golden de avisos fallaría por un código de salida que nadie
+         escribió. Y la nota que `ki` añade tras cien errores no es un diagnóstico: no debe romper la
+         lectura, ni un `{` roto pasar por bueno
+ref:     TestRunner/annotations_compare_positions
+
+[T03.49] kitest.runner_restores_cwd                          level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un fichero con `Root` en un directorio temporal y comparar el directorio de trabajo antes y después
+expect:  durante la ejecución el comando corre en la raíz; al volver de `RunPaths` el directorio de trabajo es el mismo que antes
+why:     el runner entra en la raíz para que las rutas salgan relativas; si no volviera, el siguiente
+         test del mismo proceso abriría sus ficheros desde otro sitio y fallaría lejos de la causa
+ref:     TestRunner/restores_cwd
+
+[T03.50] kitest.runner_flushes_after_each_line               level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un fichero que pasa y otro que falla con un `Out` que cuenta los `Flush`; y ejecutar con una raíz que no existe
+expect:  `Flush` se llama exactamente 3 veces; en la primera, lo escrito es "PASS a.ki\n"; en la segunda,
+         "PASS a.ki\nFAIL b.ki\n" (antes de las diferencias); en la tercera, todo, incluido el resumen
+         "ki test: 1 passed, 1 failed\n". Con la raíz inexistente hay un solo `Flush`, que ya ve el resumen
+why:     si un caso cuelga o mata el proceso, las líneas anteriores tienen que haberse visto ya; con
+         una salida con buffer, sin el flush por línea no verías nada de lo que pasó antes. Y el
+         resumen es la línea que dice si todo pasó: sin un último flush, una salida con buffer cuyo
+         dueño no la vacía la perdería
+ref:     TestRunner/flushes_after_each_line
+
+[T03.51] kitest.runner_subprocess_exec_reports_exit_code     level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar `/bin/sh -c "echo out; echo err >&2; exit 7"` con `ExecSubprocess`
+expect:  devuelve 7; el writer de stdout recibe "out\n" y el de stderr "err\n"
+why:     `ki test` prueba el binario de verdad y lo que cuenta es el código de salida del proceso; con
+         `go run` quedaría escondido, y con las salidas cruzadas un mensaje de error parecería salida normal
+ref:     TestRunner/subprocess_exec_reports_exit_code
+
+[T03.52] driver.report_all_sorted_by_position                level: core
+kind:    unit (go test)      file: internal/driver/session_test.go
+case:    informar dos diagnósticos, el del byte 10 antes que el del 2, y escribirlos con `ReportAll` en formato humano y corto
+input:   "let a = 1\nlet b = 2\n"; errores en [10,13) y en [2,3)
+expect:  en el formato humano salen en el orden del fichero (2, 10), separados por exactamente una línea en blanco y sin
+         línea en blanco al final; en el corto, una línea cada uno, en ese orden y sin líneas en blanco
+why:     los pases informan en el orden en que descubren los errores, no en el del fichero; sin ordenar,
+         el error de la línea 40 saldría antes que el de la 3 y leerías los efectos antes de la causa
+ref:     TestReportAll/sorted_by_position
+
+[T03.53] driver.report_all_truncation_note                   level: core
+kind:    unit (go test)      file: internal/driver/session_test.go
+case:    informar 101 errores y 100 errores, y escribirlos con `ReportAll`
+expect:  con 101 se muestran 100 y stderr termina, tras una línea en blanco (formato humano) o justo después de la
+         última línea (formato corto), con "note: too many errors; the first 100 are shown\n", una sola vez; con
+         exactamente 100 no hay nota
+why:     sin la nota, un fichero con 500 errores parecería tener 100 y corregirlos descubriría otros
+         nuevos sin explicación; con exactamente 100 errores la nota mentiría
+ref:     TestReportAll/truncation_note
+
+[T03.54] cli.check_missing_file                              level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `check /nonexistent/x.ki`
+input:   ["check", "/nonexistent/x.ki"]
+expect:  código de salida 1; stdout vacío; stderr de una sola línea que empieza por
+         "error: cannot read file `/nonexistent/x.ki`: "
+why:     un fichero que no se puede leer no es un error de uso (2) sino del programa que le diste a `ki`
+         (1); el mensaje lleva la ruta tal como la escribiste
+ref:     TestCLI/check_missing_file
+
+[T03.55] cli.check_bad_diagnostics_flag                      level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `check --diagnostics=xml x.ki`
+input:   ["check", "--diagnostics=xml", "x.ki"]
+expect:  código de salida 2; stdout vacío; stderr exactamente
+         "ki check: invalid --diagnostics value \"xml\" (want human, short or json)\nusage: ki check [--diagnostics=human|short|json] FILE\n"
+why:     un formato desconocido es un error de uso y se dice antes de leer el fichero; el mensaje lista
+         los tres valores válidos para que no tengas que buscarlos
+ref:     TestCLI/check_bad_diagnostics_flag
+
+[T03.56] cli.test_without_path_is_usage_error                level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `test` y sin ninguna ruta
+input:   ["test"]
+expect:  código de salida 2; stdout vacío; stderr exactamente
+         "ki test: missing PATH\nusage: ki test [--root DIR] PATH...\n"
+why:     sin ninguna ruta `ki test` no ejecutaría nada y saldría con 0: un script con una variable vacía
+         creería que los tests pasan
+ref:     TestCLI/test_without_path_is_usage_error
+
+[T03.57] check.invalid_utf8                                 level: core
+kind:    diag                file: tests/errors/ch03/invalid_utf8.ki
+case:    `ki check` sobre un fichero con un byte 0xFF tras `let x = `
+expect:  sale con 1 y el único error es E0101 en la línea 3, columna 9 (anotación en el propio fichero)
+why:     el golden pasa por el binario completo: la carga, la comprobación, el informe y el código
+         de salida; el unitario de `CheckSource` no ve nada de eso
+ref:     tests/errors/ch03/invalid_utf8.ki
+
+[T03.58] check.invalid_utf8_render                          level: core
+kind:    diag                file: tests/errors/ch03/invalid_utf8_render.ki
+case:    `ki check` sobre un fichero con un byte 0xFF en la línea 10
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 5 líneas: el byte se dibuja como U+FFFD
+         y el signo `^` queda bajo él con la etiqueta "not valid UTF-8"
+why:     es la única prueba de punta a punta de cómo se ve este error en una terminal: ruta relativa a
+         la raíz, número de línea de dos cifras que ensancha la columna y ninguna línea en blanco al final
+ref:     tests/errors/ch03/invalid_utf8_render.ki
+
+[T03.59] check.control_char                                 level: core
+kind:    diag                file: tests/errors/ch03/control_char.ki
+case:    `ki check` sobre un fichero con un byte 0x01 tras `let x = 1`
+expect:  sale con 1 y el único error es E0102 en la línea 3, columna 10
+why:     el control no se ve en el editor; el golden lo escribe con `printf` y comprueba que el error
+         cae en la columna del byte y no en la del carácter visible anterior
+ref:     tests/errors/ch03/control_char.ki
+
+[T03.60] check.valid_file                                   level: core
+kind:    diag                file: tests/errors/ch03/valid_file.ki
+case:    `ki check` sobre un fichero válido con acentos y un emoji en un comentario
+expect:  sale con 0 y no imprime nada, ni en stdout ni en stderr
+why:     es el caso «sí» de punta a punta: un fichero correcto no produce ni una palabra; sin él, un
+         `check` que siempre falla pasaría todos los golden de error
+ref:     tests/errors/ch03/valid_file.ki
+
+[T03.61] kitest.parse_header_block_text_is_not_annotated         level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer un `expect-stderr:` en bloque cuya primera línea contiene un `// ERROR(`, seguido de una línea `// |y` (sin espacio tras la barra) con otro
+input:   "// test: T1\n// run: check\n// expect-stderr:\n// | x // ERROR(E0101) @1\n// |y // ERROR(E0102) @4\nlet a = 1\n"
+expect:  `ExpectStderr` = "x // ERROR(E0101) @1\n" (texto de la salida, no una anotación) y una sola anotación,
+         E0102 en la línea 5, columna 4: la de la línea `// |y`, que no pertenece al bloque
+why:     una anotación dentro de un bloque es texto esperado de la salida; una línea que solo se parece a
+         una del bloque no lo es, y la anotación que lleve tiene que contar, porque ignorarla haría
+         pasar por bueno un golden al que le falta un error
+ref:     TestParseHeader/block_text_is_not_annotated
+
+[T03.62] kitest.parse_header_duplicate_key_is_error              level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    repetir una clave de la cabecera, una a una las seis, y usar claves distintas
+input:   la cabecera mínima y después un segundo `// test:`, un segundo `// run:`, dos `// args:`, dos `// expect-exit:`, dos `// expect-stdout:` y un `// expect-stderr:` en bloque seguido de otro; y una cabecera con `expect-stdout` y `expect-stderr`, y un `// run:` después del código
+expect:  cada repetición da "malformed header: duplicate key '<clave>'"; `expect-stdout` y `expect-stderr` juntos se aceptan, y un `// run:` que aparece después de la cabecera no cuenta como clave
+why:     la cabecera es estricta: con dos `// run:` ganaría el último sin avisar, y un `expect-stdout`
+         repetido borraría la expectativa del primero, así que el golden dejaría de comprobar lo que
+         parece
+ref:     TestParseHeader/duplicate_key_is_error
+
+[T03.63] kitest.runner_path_without_golden_files_fails           level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un directorio vacío y otro que solo tiene ficheros que no son `.ki`, con un `Exec` falso
+input:   `RunPaths(["empty", "a.ki"])` con `empty` vacío; y `RunPaths(["."])` con `only.txt` y `empty` en el directorio
+expect:  la primera llamada escribe "FAIL empty\n- no .ki file found below this directory\nPASS a.ki\nki test: 1 passed, 1 failed\n" y devuelve (1, 1); la segunda, "FAIL .\n- no .ki file found below this directory\nki test: 0 passed, 1 failed\n" y (0, 1)
+why:     es la razón de `missing PATH`: un script con una variable vacía, o un directorio vaciado por error,
+         creería que los tests pasan; «ningún fichero» tiene que ser un fallo y no un «0 de 0»
+ref:     TestRunner/path_without_golden_files_fails
+
+[T03.64] kitest.runner_unreadable_directory_fails                level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un directorio con un fichero y un subdirectorio sin permisos de lectura, con un `Exec` falso
+input:   `a.ki` en la raíz y `locked/b.ki` con `locked` en modo 0; `RunPaths(["."])`. El test se omite si el sistema deja leer ese directorio (Windows, o root)
+expect:  "PASS a.ki\nFAIL locked\n- cannot read directory: permission denied\nki test: 1 passed, 1 failed\n" y (1, 1); el fichero que sí se pudo leer se ejecuta
+why:     un directorio que no se puede leer esconde golden: si se ignorara, `ki test` diría que todo pasa
+         sin haber ejecutado los de dentro
+ref:     TestRunner/unreadable_directory_fails
+
+[T03.65] driver.report_all_unknown_format_panics                 level: core
+kind:    unit (go test)      file: internal/driver/session_test.go
+case:    pedir a `ReportAll` que escriba con un formato que no existe
+input:   una `Session` con `Format = DiagFormat(9)` y un error en el `Sink`
+expect:  `ReportAll` hace panic con "driver: unknown diagnostic format 9"
+why:     los tres formatos son los únicos; un valor fuera de ellos es un fallo de quien llama, y tiene que
+         hacer ruido en vez de escribir nada o caer en un formato por omisión que el usuario tomaría
+         por la salida buena
+ref:     TestReportAll/unknown_format_panics
+
+[T03.66] cli.test_exit_code_and_summary                          level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki test --root` sobre un golden que pasa y otro que falla, con una o con dos rutas, en los dos órdenes
+input:   `test --root DIR pass.ki`, `… fail.ki`, `… pass.ki fail.ki` y `… fail.ki pass.ki`, con el `Exec` en proceso (`Main`), porque bajo `go test` el ejecutable es el binario de test
+expect:  el código de salida es 0 solo cuando pasa el único fichero y 1 en los otros tres; stdout es exactamente los informes en el orden de las rutas y el resumen ("ki test: 1 passed, 1 failed\n", por ejemplo); stderr, vacío
+why:     el paso `ki test --root . tests` de `ci-local.sh` solo puede fallar si el código de salida lo dice;
+         si fuera siempre 0, si ignorara `--root` o si ejecutara solo la primera o la última ruta, la CI
+         daría por buenos unos golden rotos
+ref:     TestCLI/test_exit_code_and_summary
+
+[T03.67] cli.test_reports_write_error                            level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki test` sobre un golden que pasa cuando stdout no se puede escribir
+input:   `test --root DIR pass.ki` con un stdout cuyo `Write` falla siempre con "disk full"
+expect:  código de salida 1 y stderr exactamente "ki test: cannot write to stdout: disk full\n"
+why:     igual que `ki --version`: si el informe se pierde en un disco lleno, un script no debe tomar el 0 por
+         un «todo pasa»; el fichero pasaba, así que solo la escritura puede dar el 1
+ref:     TestCLI/test_reports_write_error
+
+[T03.68] kitest.parse_header_bad_position_is_error               level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer anotaciones `ERROR(E0101)` cuya posición no es una posición, en trece casos de una tabla
+input:   `@0`, `@0:1`, `@1:0`, `@x`, `@3x`, `@1:2:3`, `@` solo, `@-1`, `@4294967296`, ni `@` ni número, un número sin `@`, una segunda anotación con `@0` y `ERROR(E0101 @3` sin `)`
+expect:  el error es exactamente "malformed header: bad position for ERROR(E0101): want '@COL' or '@LINE:COL'" (con E0102 en el caso de la segunda anotación) y, sin el `)`, "malformed header: bad error code 'E0101 @3'"; la columna 4294967295 sí es una posición
+why:     las líneas y las columnas cuentan desde 1: un `@0` aceptado dejaría un golden que nunca puede
+         coincidir con un diagnóstico real y el fallo saldría como un `missing` sin explicación. Un error
+         de escritura en la anotación hay que decirlo donde está
+ref:     TestParseHeader/bad_position_is_error
+
+[T03.69] kitest.parse_header_bad_expect_exit_is_error            level: core
+kind:    unit (go test)      file: internal/kitest/header_test.go
+case:    leer `expect-exit:` con un valor que no es un entero, en cinco casos de una tabla, y con -1
+input:   `abc`, vacío, `1.5`, `0x1`, `1 2`; y `-1`
+expect:  el error es exactamente "malformed header: bad expect-exit '<valor>'"; `-1` es un entero válido y queda como `ExpectExit`
+why:     un `expect-exit: abc` aceptado como 0 daría por bueno un programa que acaba bien cuando el
+         golden quería otra cosa; y `-1` es lo que `ExecSubprocess` devuelve si el proceso muere por una señal,
+         así que un golden puede esperarlo
+ref:     TestParseHeader/bad_expect_exit_is_error
+
+[T03.70] kitest.runner_files_run_in_path_order                   level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar un directorio con `a/y.ki` y `a-b/x.ki`, con un `Exec` falso
+input:   `RunPaths(["."])`
+expect:  la salida es exactamente "PASS a-b/x.ki\nPASS a/y.ki\nki test: 2 passed, 0 failed\n" y devuelve (2, 0)
+why:     `WalkDir` visita `a` antes que `a-b`, pero como rutas `a-b/x.ki` va antes que `a/y.ki` (el `-` es
+         menor que el `/`); el orden de las rutas no depende del sistema de ficheros, así que el informe
+         es el mismo en cualquier máquina
+ref:     TestRunner/files_run_in_path_order
+
+[T03.71] kitest.runner_subprocess_exec_reports_start_failure     level: core
+kind:    unit (go test)      file: internal/kitest/runner_test.go
+case:    ejecutar con `ExecSubprocess` un programa que no existe y otro que muere por una señal
+input:   `/nonexistent/ki` con los argumentos `check x.ki`; y `/bin/sh -c "kill -9 $$"` (este caso no corre en Windows)
+expect:  el primero devuelve -1, no escribe nada en stdout y escribe en stderr una sola línea que empieza por "ki test: cannot run /nonexistent/ki: " y sigue con el motivo (el texto del sistema operativo no se fija); el segundo devuelve -1 sin escribir nada
+why:     un `ki` que no se puede arrancar no tiene código de salida: con un 0 el golden pasaría sin haber
+         corrido, y con un número real se confundiría con el de un programa que sí corrió; el motivo
+         tiene que salir para que sepas qué falla
+ref:     TestRunner/subprocess_exec_reports_start_failure
+
+[T03.72] kitest.walk_errors_unreadable_directory_report          level: core
+kind:    unit (go test)      file: internal/kitest/runner_internal_test.go
+case:    dar a `unreadableDirectory` el error de un directorio sin permisos, uno que envuelve un `*fs.PathError` y uno que no lo es
+input:   un `*fs.PathError{Err: fs.ErrPermission}` sobre `locked`, ese mismo envuelto con `fmt.Errorf("%w")` y `errors.New("boom")` sobre `locked/deeper`
+expect:  "FAIL locked\n- cannot read directory: permission denied\n" para los dos primeros y "FAIL locked/deeper\n- cannot read directory: boom\n" para el último; la ruta es relativa a la raíz y el motivo no repite la ruta
+why:     `unreadable_directory_fails` prueba lo mismo de punta a punta, pero se omite si el usuario es root
+         (como en el contenedor de la CI) porque root lee cualquier directorio; este test no necesita
+         permisos y corre en todas partes
+ref:     TestWalkErrors/unreadable_directory_report
+
+[T03.73] cli.check_usage_errors                                  level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `check` sin fichero y con más de uno, en cuatro casos de una tabla
+input:   ["check"], ["check", "--diagnostics=short"], ["check", "a.ki", "b.ki"] y ["check", "a.ki", "b.ki", "c.ki"]
+expect:  código de salida 2; stdout vacío; stderr exactamente "ki check: missing FILE\nusage: ki check [--diagnostics=human|short|json] FILE\n" para los dos primeros y "ki check: unexpected argument \"b.ki\"\n" y la misma línea de uso para los otros dos
+why:     sin fichero `ki check` no tendría nada que mirar y saldría con 0, y con dos solo miraría uno sin
+         avisar: en los dos casos un script creería que todo está bien. Es un error de uso (2), no del
+         fichero (1)
+ref:     TestCLI/check_usage_errors
+
+[T03.74] cli.check_short_format                                  level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `Main` con `check --diagnostics=short` sobre un fichero con un byte de control
+input:   un fichero temporal con "let x = 1\x01\n"
+expect:  código de salida 1; stdout vacío; stderr exactamente "<ruta>:1:10: error[E0102]: control character U+0001 in source\n", con la ruta tal como se escribió
+why:     es la salida que leen los editores y `grep`; el formato corto y el JSON comparten flag y sin esta
+         prueba de punta a punta podrían cambiarse sin que fallara nada
+ref:     TestCLI/check_short_format
+
+[T03.75] cli.test_reports_flush_error                            level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki test` sobre un golden que pasa cuando el `Flush` de stdout falla
+input:   `test --root DIR pass.ki` con un stdout cuyo `Write` funciona y cuyo `Flush` falla siempre con "cannot flush"
+expect:  código de salida 1 y stderr exactamente "ki test: cannot write to stdout: cannot flush\n"
+why:     el runner vacía el buffer tras cada línea y no mira el error; si `ki test` tampoco lo recordara,
+         un informe perdido en el último flush se tomaría por un «todo pasa»
+ref:     TestCLI/test_reports_flush_error

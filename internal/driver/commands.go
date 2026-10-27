@@ -21,40 +21,60 @@ type command struct {
 var commands = []command{
 	versionCommand("--version", "ki --version"),
 	versionCommand("version", "ki version"),
+	newCommand("check", "ki check [--diagnostics=human|short|json] FILE", runCheck),
+	newCommand("test", "ki test [--root DIR] PATH...", runTest),
+}
+
+// newCommand returns a command, called name, whose Run calls run with the
+// command itself. run needs its own command to report a usage error with the
+// right name and usage line, but it cannot look itself up in commands:
+// commands is initialized from Run, and Go rejects a package variable whose
+// initializer refers back to it ("initialization cycle"). So Run is a closure
+// that captures a pointer to its command. The table holds a copy of that
+// command, with the same Name, Usage and Run.
+func newCommand(name, usageLine string, run func(s *Session, c *command, args []string) int) command {
+	c := &command{Name: name, Usage: usageLine}
+	c.Run = func(s *Session, args []string) int { return run(s, c, args) }
+	return *c
 }
 
 // versionCommand returns a command, called name, that prints ki's version:
 // "ki version" does the same as "ki --version".
-//
-// Run needs its own command to report a usage error with the right name and
-// usage line, but it cannot look itself up in commands: commands is
-// initialized from Run, and Go rejects a package variable whose initializer
-// refers back to it ("initialization cycle"). So Run is a closure that
-// captures a pointer to its command. The table holds a copy of that command,
-// with the same Name, Usage and Run.
 func versionCommand(name, usageLine string) command {
-	c := &command{Name: name, Usage: usageLine}
-	c.Run = func(s *Session, args []string) int { return runVersion(s, c, args) }
-	return *c
+	return newCommand(name, usageLine, runVersion)
+}
+
+// newFlagSet returns an empty FlagSet for c. ContinueOnError makes Parse return
+// the error instead of ending the process, and io.Discard drops the help text
+// that flag would print on its own: parseFlags reports the error in ki's format.
+func newFlagSet(c *command) *flag.FlagSet {
+	fs := flag.NewFlagSet(c.Name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+// parseFlags parses args with fs. When the command line is already answered it
+// returns that answer's exit code and done == true, and the command must
+// return it. A request for help (-h, -help or --help) is not a mistake in the
+// command line, so ki answers it with the usage line on stdout and exit code 0;
+// any other error is a usage error.
+func parseFlags(s *Session, c *command, fs *flag.FlagSet, args []string) (code int, done bool) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return printOut(s, c, "usage: "+c.Usage+"\n"), true
+		}
+		return usageError(s, c, err), true
+	}
+	return 0, false
 }
 
 // runVersion prints ki's version and, in parentheses, the version of Go that
 // built it. It accepts no flags and no arguments; it still parses args with a
 // flag.FlagSet, so a stray flag gets the same message as in any other command.
-// The one exception is a request for help (-h, -help or --help): that is not a
-// mistake in the command line, so ki answers it with the usage line on stdout
-// and exit code 0.
 func runVersion(s *Session, c *command, args []string) int {
-	fs := flag.NewFlagSet(c.Name, flag.ContinueOnError)
-	// ContinueOnError makes Parse return the error instead of ending the
-	// process, and io.Discard drops the help text that flag would print on its
-	// own: usageError reports the error in ki's format instead.
-	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return printOut(s, c, "usage: "+c.Usage+"\n")
-		}
-		return usageError(s, c, err)
+	fs := newFlagSet(c)
+	if code, done := parseFlags(s, c, fs, args); done {
+		return code
 	}
 	if fs.NArg() > 0 {
 		return usageError(s, c, fmt.Errorf("unexpected argument %q", fs.Arg(0)))
@@ -69,12 +89,19 @@ func runVersion(s *Session, c *command, args []string) int {
 // ends the process with SIGPIPE (status 141 in a shell) before Write returns.
 func printOut(s *Session, c *command, text string) int {
 	if _, err := io.WriteString(s.Stdout, text); err != nil {
-		// stderr is the last place left to report the failure, and if it fails
-		// too there is nowhere else to say so.
-		_, _ = fmt.Fprintf(s.Stderr, "ki %s: cannot write to stdout: %v\n", c.Name, err)
-		return 1
+		return writeError(s, c, err)
 	}
 	return 0
+}
+
+// writeError reports that c could not write its answer to stdout and returns
+// exit code 1. printOut calls it for an answer written in one piece, and
+// runTest for a report that it writes a line at a time.
+func writeError(s *Session, c *command, err error) int {
+	// stderr is the last place left to report the failure, and if it fails
+	// too there is nowhere else to say so.
+	_, _ = fmt.Fprintf(s.Stderr, "ki %s: cannot write to stdout: %v\n", c.Name, err)
+	return 1
 }
 
 // usageError reports a command line that c cannot accept. It writes

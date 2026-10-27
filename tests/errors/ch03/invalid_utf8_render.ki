@@ -1,0 +1,10 @@
+// test: T03.58
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0101]: invalid UTF-8 byte 0xFF
+// |   --> tests/errors/ch03/invalid_utf8_render.ki:10:9
+// |    |
+// | 10 | let x = ï¿½
+// |    |         ^ not valid UTF-8
+let x = ÿ
