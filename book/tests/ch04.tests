@@ -138,3 +138,162 @@ why:     es la rama de la arena con más casos límite. Sin el cambio de slab la
          petición que cabe justa abriera slab, se perdería espacio. Y una petición exactamente del tamaño
          del slab es pequeña, así que debe llenar un slab que pasa a ser el actual en vez de quedar aparte
 ref:     TestArena/small_that_does_not_fit_opens_new_slab
+
+[T04.12] base.interner_same_text_same_symbol               level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    el mismo texto da el mismo símbolo, venga de `Intern` o de `InternString`
+input:   `in.Intern([]byte("alpha"))` e `in.InternString("alpha")` en el mismo interner
+expect:  los dos símbolos son iguales y `Len()` vale 1
+why:     todo el compilador compara nombres como enteros; si el mismo nombre recibiera dos símbolos,
+         `fib` y `fib` serían nombres distintos y cada búsqueda en un ámbito fallaría sin razón aparente
+ref:     TestInterner/same_text_same_symbol
+
+[T04.13] base.interner_different_text_different_symbol     level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    textos distintos reciben símbolos distintos, también los que solo difieren en longitud u orden
+input:   `""`, `"a"`, `"ab"`, `"ba"` y `"b"` internados en ese orden
+expect:  cinco símbolos distintos y `Len()` vale 5
+why:     si dos nombres distintos compartieran símbolo, el compilador los confundiría en silencio: una
+         variable `ab` resolvería a `ba`, y el error aparecería lejos de su causa
+ref:     TestInterner/different_text_different_symbol
+
+[T04.14] base.interner_first_symbol_is_one                 level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    el primer texto internado recibe el símbolo 1
+input:   un interner nuevo; se internan `"x"` y `"y"`
+expect:  `Len()` vale 0 antes de internar, y los símbolos de `"x"` e `"y"` son 1 y 2
+why:     el valor cero de un campo `Symbol` tiene que significar «todavía no hay símbolo»; si el primer
+         texto recibiera el 0, un nombre real y la ausencia de nombre serían indistinguibles
+ref:     TestInterner/first_symbol_is_one
+
+[T04.15] base.interner_bytes_round_trip                    level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    `Bytes` y `String` devuelven el texto internado (`Bytes`, una vista que no es `nil` ni para el texto vacío), y el interner guarda su propia copia
+input:   `""`, `"a"`, `"fib"`, `"año"`, `"\x00\xff\xfe"` y `"with space\n"`; después `buf := []byte("abc")`,
+         `sym := in.Intern(buf)` y `buf[0] = 'X'`
+expect:  para cada texto, `string(in.Bytes(sym))` y `in.String(sym)` lo devuelven idéntico y `in.Bytes(sym)`
+         no es `nil`; tras cambiar `buf`, `in.String(sym)` sigue siendo `"abc"`
+why:     un interner que guardara el slice de quien llama dejaría que el texto cambiara por debajo;
+         el buffer del lexer se reutiliza, así que el nombre de una función cambiaría solo; y `Bytes`
+         promete en su comentario una vista que nunca es `nil` para un símbolo que `Intern` entregó,
+         también para el del texto vacío: quien guardara `""` con el `Copy` de la arena la rompería,
+         porque ese `Copy` devuelve `nil` para un texto vacío
+ref:     TestInterner/bytes_round_trip
+
+[T04.16] base.interner_lookup_does_not_insert              level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    `Lookup` consulta sin insertar
+input:   `Lookup([]byte("ghost"))` en un interner vacío; después `InternString("other")`,
+         `InternString("ghost")` y `Lookup` de `"ghost"`
+expect:  el primer `Lookup` da `(NoSymbol, false)` y `Len()` sigue en 0; `"other"` recibe el símbolo 1;
+         el último `Lookup` da `(símbolo de "ghost", true)`
+why:     el resolvedor pregunta por nombres que quizá no existan; si preguntar los creara, cada nombre
+         mal escrito se volvería un nombre válido y el error E0301 no saldría nunca
+ref:     TestInterner/lookup_does_not_insert
+
+[T04.17] base.interner_bytes_view_cannot_grow_into_neighbor level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    `Intern` guarda los textos nuevos en la arena, y la vista que devuelve `Bytes` tiene `cap == len`, así que añadir a ella no pisa al vecino, y es el texto guardado, no una copia
+input:   `s1 := in.Intern([]byte("ab"))` y `s2 := in.Intern([]byte("cd"))`; se leen los bytes usados de la arena
+         (`used`) y su `Slabs()`; después, dos llamadas a `in.Bytes(s1)` y `_ = append(in.Bytes(s1), 'X')`
+expect:  tras los dos `Intern`, la arena ha usado 4 bytes (`used` vale 4) en 1 slab (`Slabs()` vale 1); `len` y
+         `cap` de `in.Bytes(s1)` valen 2 y 2, las dos llamadas devuelven vistas que empiezan en la misma
+         dirección, y `in.String(s2)` sigue siendo `"cd"`
+why:     los dos textos viven pegados en el mismo slab; con capacidad de sobra, un `append` sobre la
+         vista de uno escribiría en el otro y corrompería un nombre sin ningún aviso. Que viven en la
+         arena lo dice su contador: un `Intern` que los copiara con `make` también daría `cap == len`, y
+         nada más lo notaría. Y `Bytes` existe para no copiar: una versión que copiara en cada llamada
+         daría el mismo texto y pasaría todo lo demás, pero perdería la razón de existir frente a `String`
+ref:     TestInterner/bytes_view_cannot_grow_into_neighbor
+
+[T04.18] base.interner_colliding_hashes_are_distinguished  level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    textos con el mismo hash se distinguen comparando los bytes, a cualquier profundidad de la cadena, también cuando uno es parte de otro o se diferencian en un solo byte o en la mayúscula de una letra; e internar otra vez el texto vacío da el símbolo de siempre
+input:   `in.hash = func([]byte) uint64 { return 42 }`; se internan `"one"`, `"two"` y `"three"`; en otro
+         interner con el mismo hash, `""`, `"ab"`, `"abc"`, `"ac"`, `"aa"`, `"ba"`, `"axc"`, `"xbc"` y `"abx"` por
+         ese orden, después `Lookup` de `"a"`, `"c"` y `"abcd"`, y el texto vacío otra vez con
+         `InternString("")` y con `Intern(nil)`; y en un tercero, con el mismo hash, `"abcdefgh"` y a
+         continuación ocho copias suyas, cada una con la letra de una posición en mayúscula (`"Abcdefgh"`,
+         `"aBcdefgh"`… `"abcdefgH"`)
+expect:  tres símbolos distintos; internar de nuevo cada texto, o buscarlo con `Lookup`, da su símbolo,
+         y `String` lo devuelve; `Lookup` de `"four"` (mismo hash, no internado) da `false`; `Len()` vale 3;
+         en el segundo interner los nueve textos reciben los símbolos 1 a 9 en ese orden, `Len()` vale 9, los
+         tres `Lookup` (textos no internados) dan `false`, el `Lookup` de cada uno de los nueve da su símbolo e
+         internar otra vez `""` o `nil` da el símbolo de `""` (el 1); en el tercero, cada una de las ocho
+         copias recibe un símbolo nuevo, del 2 al 9 en el orden de las posiciones
+why:     los hashes de 64 bits colisionan muy rara vez, y por eso un fallo de este camino se esconde
+         años; forzar la colisión es la única forma de saber que la cadena `next` funciona. Los textos
+         que se solapan (uno prefijo, sufijo o extensión de otro, de la misma longitud con el mismo
+         primer o último byte, o de tres bytes que difieren de otro de tres en uno solo: el del medio, el
+         primero o el último) delatan una igualdad que se queda corta: la que mira solo el primer byte o
+         los dos primeros, o el último o los dos últimos, solo lo que miran `HasPrefix` y `HasSuffix`, solo
+         una mitad del texto, solo la longitud con el primer y el último byte, o todo el texto menos un
+         byte cualquiera cuando mide tres. Como miden tres bytes o menos, no delatan la que, entre textos
+         de la misma longitud, mira solo los primeros 3 a 7 bytes o los últimos 3 a 7; las ocho copias de
+         `"abcdefgh"` con una sola letra en mayúscula sí, y también la que pasa por alto un byte cualquiera
+         de un texto de ocho y la que no distingue mayúsculas de minúsculas (`bytes.EqualFold`). Y el
+         texto vacío tiene su propia rama en `Intern`: uno que no lo buscara daría a cada `""` de un
+         programa un símbolo distinto, y «mismo texto, mismo símbolo» dejaría de ser verdad para él
+ref:     TestInterner/colliding_hashes_are_distinguished
+
+[T04.19] base.interner_default_hash_spreads_texts           level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    el hash por defecto reparte los textos en casillas casi todas distintas
+input:   dos familias de 300 textos, cada una internada en un interner nuevo: `identifier_0` a `identifier_299`
+         (varía el final) y `0_identifier` a `299_identifier` (varía el principio)
+expect:  en cada interner, los símbolos son 1 a 300 en orden, `Len()` vale 300 y la tabla `index` tiene al
+         menos 270 entradas
+why:     los demás tests dejan el interner correcto aunque su hash fuera una constante: todo caería en una
+         sola cadena y cada búsqueda recorrería todos los textos; este test es el que se entera de que el
+         interner se volvió lento sin dar un resultado equivocado. Los textos de la primera familia
+         comparten un prefijo largo, como los identificadores reales, para que un hash que solo mirara
+         los primeros bytes (o la primera mitad) los junte todos en una cadena; los de la segunda
+         comparten el final y cambian al principio, para que le pase lo mismo a un hash que solo mirara
+         los últimos bytes (o la segunda mitad)
+ref:     TestInterner/default_hash_spreads_texts
+
+[T04.20] base.interner_intern_existing_does_not_allocate   level: core
+kind:    unit (go test)      file: internal/base/interner_test.go
+case:    internar un texto ya conocido, de más de 32 bytes, no reserva memoria, ni de Go ni de la arena
+input:   `b := []byte("already_known_and_longer_than_32_bytes")` (38 bytes) internado una vez; se anotan los
+         bytes usados de la arena (`used`) y su `Slabs()`, y `testing.AllocsPerRun(100, …)` llama a `Intern(b)`
+expect:  `AllocsPerRun` devuelve 0, cada llamada devuelve el símbolo original, y `used` y `Slabs()` de la
+         arena valen lo mismo que antes
+why:     el lexer internará cada identificador que lea y casi todos ya existen; si cada uno costara una
+         reserva, el interner sería más lento que comparar cadenas; y `AllocsPerRun` solo cuenta las
+         reservas de Go, no los bytes que se tallan de un slab que la arena ya tiene: un `Intern` que
+         copiara el texto a la arena antes de buscarlo y tirara la copia al encontrarlo pasaría esa
+         cuenta, y aun así guardaría otra copia de cada identificador cada vez que el lexer lo lee. El
+         texto mide más de 32 bytes a propósito: en Go 1.27, la conversión `string(b)` de un texto de
+         hasta 32 bytes se queda en la pila cuando el resultado no escapa, así que un hash escrito como
+         `maphash.String(seed, string(b))` no reservaría nada con un texto corto y el test no lo vería;
+         con 33 bytes o más sí reserva en el montón, y el test falla
+ref:     TestInterner/intern_existing_does_not_allocate
+
+[T04.21] base.interner_example                             level: core
+kind:    example             file: internal/base/example_interner_test.go
+case:    el uso básico del interner, con salida comprobada
+input:   se internan `"fib"`, `"main"` y otra vez `"fib"`; `Lookup` de `"nope"`
+expect:  símbolos `1 2 1`; `true false` al comparar `fib == again` y `fib == main`; `main 2` para el texto
+         del segundo símbolo y `Len()`; `false 2` para el `Lookup` fallido y `Len()`
+why:     es el ejemplo de uso del interner; como lleva `// Output:`, si la API cambiara de
+         comportamiento el texto del libro dejaría de ser verdad y `go test` lo diría
+ref:     ExampleInterner
+
+[T04.22] base.interner_bench_intern                        level: stretch
+kind:    bench               file: internal/base/interner_test.go
+case:    coste de `Intern` sobre 1000 textos ya conocidos, con `-benchmem`
+input:   `go test ./internal/base -bench Intern -benchmem -run xxx`
+expect:  el capítulo cita ns/op y allocs/op medidos; no hay umbral que `go test` compruebe
+why:     la afirmación «Intern no reserva» y la comparación con `unique.Make` solo valen con números
+         medidos en esta máquina, y un benchmark es la forma de volver a medirlos
+ref:     BenchmarkIntern
+
+[T04.23] base.interner_bench_unique_make                   level: stretch
+kind:    bench               file: internal/base/interner_test.go
+case:    coste de `unique.Make(string(b))` sobre los mismos 1000 textos, como punto de comparación
+input:   `go test ./internal/base -bench UniqueMake -benchmem -run xxx`
+expect:  el capítulo cita ns/op y allocs/op medidos junto a los de `Intern`; no hay umbral que `go test` compruebe
+why:     la biblioteca estándar ya trae un interner; sin esta medida no sabrías si escribir el tuyo
+         compensa, y la respuesta depende de la máquina y de la versión de Go
+ref:     BenchmarkUniqueMake
