@@ -1,0 +1,102 @@
+[T03.01] diag.code_formats_four_digits                     level: core
+kind:    unit (go test)      file: internal/diag/diagnostic_test.go
+case:    el texto de un código de error y de uno de warning, también al imprimirlo con `%v`
+input:   `E(101)` y `W(702)`
+expect:  `String` devuelve "E0101" y "W0702"; `fmt.Sprintf("%v", E(101))` devuelve "E0101"
+why:     el código es lo que el usuario busca en la documentación y lo que comparan los golden; si
+         saliera "E101" o "E 101", los renderizadores escribirían un código que nadie reconoce, y
+         si `%v` imprimiera la estructura (`{69 101}`) los mensajes que usan `%v` serían ilegibles
+ref:     TestCode/formats_four_digits
+
+[T03.02] diag.severity_strings                             level: core
+kind:    unit (go test)      file: internal/diag/diagnostic_test.go
+case:    el texto de cada gravedad y el de un valor fuera de rango
+input:   `Error`, `Warning`, `Note` y `Severity(3)`
+expect:  "error", "warning", "note" y "Severity(3)"
+why:     el renderizador corto escribe `file:line:col: error[E0401]: msg` con este texto; si dos
+         gravedades compartieran cadena, un warning se leería como un error, y un valor inventado
+         por un fallo debe verse como tal en vez de pasar por uno válido
+ref:     TestSeverity/strings
+
+[T03.03] diag.with_methods_return_copies                   level: core
+kind:    unit (go test)      file: internal/diag/diagnostic_test.go
+case:    añadir una nota, una etiqueta secundaria y una ayuda a un diagnóstico, llamar dos veces a `WithHelp`, y
+         derivar dos copias de uno cuyas listas tienen capacidad de sobra
+input:   `NewError(E(401), "mismatched types", primary)`; `WithNote`, `WithSecondary` y `WithHelp`; `WithHelp("h")`
+         y después `WithHelp("h2")` sobre su resultado; y dos copias de un diagnóstico con una lista de una nota
+         y otra de una etiqueta, ambas con capacidad 4
+expect:  `NewError` crea un `Error` con el código, el mensaje y la etiqueta dados; cada copia lleva lo
+         añadido y el original no cambia (`len(d.Notes) == 0`, `len(d.Secondary) == 0`, `Help == ""`);
+         la segunda ayuda sustituye a la primera (`Help == "h2"`) y la copia anterior sigue con "h";
+         las dos copias del diagnóstico con capacidad de sobra conservan cada una su propia nota y su
+         propia etiqueta
+why:     un diagnóstico se construye en un sitio y otro pase le añade una nota; si `WithNote` escribiera
+         en el array del original, dos pases que añadieran notas al mismo diagnóstico se pisarían
+         entre sí y el usuario vería la nota equivocada, un fallo que solo aparece con listas con
+         capacidad de sobra
+ref:     TestDiagnostic/with_methods_return_copies
+
+[T03.04] diag.sink_counts_errors_only                      level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    un `Sink` vacío, con solo un warning y con un warning y un error
+input:   `Report` de un warning `W(702)` y después de un error `E(101)`
+expect:  vacío y con solo el warning: `HasErrors()` es falso y `ErrorCount()` es 0; con los dos:
+         `HasErrors()` es verdadero, `ErrorCount()` es 1 y `All()` tiene 2 diagnósticos
+why:     `ki check` sale con código 1 solo si hay errores; si un warning contara como error, un
+         programa correcto con un aviso dejaría de compilar
+ref:     TestSink/counts_errors_only
+
+[T03.05] diag.sink_count_by_code                           level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    contar los diagnósticos de un código, también cuando otro código tiene el mismo número con
+         otra letra
+input:   dos `E(101)`, un `E(102)` y un `W(702)`; `Count` de `E(101)`, `E(102)`, `W(702)`, `E(702)` y `E(999)`
+expect:  2, 1, 1, 0 y 0
+why:     los tests de diagnóstico comprueban "exactamente un E0401"; si `Count` mirara solo el número,
+         un warning W0702 se contaría como el error E0702 y un test daría por bueno el código
+         equivocado
+ref:     TestSink/count_by_code
+
+[T03.06] diag.sink_sort_by_position_is_stable              level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    ordenar por posición diagnósticos con el mismo offset, con offsets distintos y de dos ficheros
+input:   cinco diagnósticos (offsets 9, 5, 2, 5, 5); 90 diagnósticos en tres offsets repartidos en
+         orden inverso; y uno en el fichero 1 (offset 0) antes que uno en el fichero 0 (offset 7)
+expect:  tras `SortByPosition`, el de offset 2 va primero, los tres del offset 5 conservan su orden de
+         aviso y el de offset 9 va el último; los 90 quedan por offset y, dentro de cada uno, en orden
+         de aviso; el del fichero 0 va delante del del fichero 1
+why:     `ki check` ordena los diagnósticos antes de pintarlos y su salida tiene que ser idéntica en
+         cada ejecución; con una ordenación no estable, dos errores en la misma posición saldrían a
+         veces en un orden y a veces en otro. Con pocos elementos la ordenación de Go es estable por
+         casualidad, por eso el test usa 90
+ref:     TestSink/sort_by_position_is_stable
+
+[T03.07] diag.sink_stops_after_max_errors                  level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    informar de un error más que el máximo
+input:   101 errores `E(101)` con mensajes "e1" … "e101"
+expect:  `ErrorCount()` es 100, `Truncated()` es verdadero y `All()` tiene 100 diagnósticos, del "e1" al "e100"
+why:     el front end se detiene tras 100 errores para que un fichero roto no inunde la terminal; lo
+         que se descarta tiene que ser el error 101 y no uno de los primeros, que son los que tienen
+         la causa
+ref:     TestSink/stops_after_max_errors
+
+[T03.08] diag.sink_exactly_max_errors_not_truncated        level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    informar de exactamente el máximo de errores y de un warning después
+input:   100 errores `E(101)`, y luego un warning `W(702)`
+expect:  con los 100 errores, `ErrorCount()` es 100 y `Truncated()` es falso; tras el warning, `All()`
+         tiene 101 diagnósticos y `Truncated()` sigue siendo falso
+why:     el límite es "más de 100", no "100": un `>=` en lugar de un `>` avisaría de que faltan
+         errores cuando no falta ninguno, y borraría los warnings de un fichero que tiene justo 100
+ref:     TestSink/exactly_max_errors_not_truncated
+
+[T03.09] diag.sink_drops_warnings_after_truncation         level: core
+kind:    unit (go test)      file: internal/diag/sink_test.go
+case:    informar de un warning cuando el `Sink` ya se truncó
+input:   101 errores `E(101)` y después un warning `W(702)`
+expect:  `All()` tiene 100 diagnósticos, `Count(W(702))` es 0 y `ErrorCount()` sigue en 100
+why:     tras el error 101 la salida ya es demasiado larga para leerla; si un warning se colara
+         después, el último diagnóstico mostrado no sería el error 100 y el recuento no cuadraría
+         con el mensaje de truncado
+ref:     TestSink/drops_warnings_after_truncation
