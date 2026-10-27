@@ -426,7 +426,7 @@ Primero generaliza el ayudante de la sesión 2: `readGoMod(t)` pasa a ser `readR
 
 {{diff ch01-s2..ch01-s3 internal/toolchain/toolchain_test.go}}
 
-El `return ""` tras `t.Fatalf` es para el compilador: una función con resultado debe acabar en `return` (si no, `missing return`), y Go no sabe que `Fatalf` nunca vuelve, lo que Rust diría con `-> !`.
+El `return ""` tras `t.Fatalf` es para el compilador: una función con resultado debe acabar en una sentencia terminal, como `return` o `panic` (si no, `missing return`), y Go no sabe que `Fatalf` nunca vuelve, lo que Rust diría con `-> !`.
 
 Después escribe `internal/toolchain/ci_test.go`. YAML anida por sangría, y una línea solo significa algo bajo su padre: `GOTOOLCHAIN: auto` es correcto en «Set up Go» y un error en el job. `readCIWorkflow(t) []ciLine` salta líneas en blanco y comentarios (un `# GOTOOLCHAIN: local` no cuenta) y guarda de cada línea su sangría y su texto sin los espacios iniciales. `under(t, lines, path...)` sigue una ruta de cabeceras, como `"jobs:", "check:", "env:"`, cada una entre los hijos directos de la anterior, y devuelve el texto de lo que cuelga de la última (o para el test si falta alguna). Para comparar, el paquete `slices`: `slices.Equal` exige exactamente esas líneas, y `slices.Contains`, que una esté entre ellas (T01.18).
 
@@ -485,7 +485,7 @@ Los tests de `driver` llaman a `Main` dentro del proceso, y ninguno ejecuta `mai
 
 {{file ch01-s3 cmd/ki/main_test.go}}
 
-`package main` no se importa, y `main` termina con `os.Exit`, así que el test relanza su propio binario. Ahí entra `TestMain`: si un paquete de test la define, `go test` la llama en lugar de ejecutar los tests, y `m.Run()` los ejecuta y devuelve el código para `os.Exit`. `runKi` lanza `os.Executable()`, el binario de test, con el entorno del padre (`os.Environ()`) más `KI_TEST_RUN_MAIN=1`; en el hijo, `os.Getenv` ve la variable y `TestMain` llama a `main`. El código de salida se obtiene con `errors.As`, como en `runGo`.
+`package main` no se importa, y `main` termina con `os.Exit`, así que el test relanza su propio binario. Ahí entra `TestMain`: si un paquete de test la define, `go test` la llama en lugar de ejecutar los tests, y `m.Run()` los ejecuta y devuelve el código para `os.Exit`. `runKi` lanza `os.Executable()`, el binario de test, con el entorno del padre (`os.Environ()`) más `KI_TEST_RUN_MAIN=1`; en el hijo, `os.Getenv` ve la variable y `TestMain` llama a `main`. El código de salida se obtiene con `errors.As`, como en `race_requires_cgo`.
 
 El rojo, al revés: cambia un momento `os.Args[1:]` por `os.Args` en `main.go`.
 
