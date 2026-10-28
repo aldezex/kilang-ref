@@ -1035,8 +1035,8 @@ ref:     TestErrorDocs/documents_have_the_fixed_shape
 [T07.87] errordocs.erroneous_examples_report_their_code     level: core
 kind:    unit (go test)      file: tests/errors_docs_test.go
 case:    cada ejemplo erróneo, ejecutado con `ki check --diagnostics=json`, da al menos un diagnóstico con el código de su fichero, y ningún otro código que no esté en la lista `also=` de su valla; y cada código de esa lista aparece de verdad. La excepción es el ejemplo con `pending=`: se ejecuta igual, pero no se le exige su código ni se miran los demás, y falla si ya lo da
-input:   los ejemplos erróneos de los ficheros de `docs/errors`
-expect:  todos los ejemplos erróneos (con `escaped` decodificados con `strconv.Unquote`); los de E0106, E0108 y E0109 declaran `also=E0201`, y los de E0401 y E0405 llevan `pending=T36`
+input:   los ejemplos erróneos de los ficheros de `docs/errors`, ninguno ya con `pending=`: los de E0401 y E0405 la perdieron cuando el comprobador de tipos entró en `ki check`
+expect:  todos los ejemplos erróneos (con `escaped` decodificados con `strconv.Unquote`); los de E0106, E0108 y E0109 declaran `also=E0201`
 why:     un ejemplo que no falla con su código enseña un error que no es: se prueba en cada CI. La palabra `also`
          existe porque hoy una cadena, un carácter o un flotante no pueden estar en una expresión y `ki check` añade
          un E0201 al literal; como cada código de la lista tiene que aparecer, la palabra se borra sola, a la fuerza,

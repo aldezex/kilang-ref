@@ -30,7 +30,10 @@ const (
 	// parameter. Because is the parameter.
 	ReasonArgument
 	// ReasonIfBranches is the `else` branch of an `if`, checked against the
-	// type of the `then` branch. Because is the tail of the `then` branch.
+	// type of the `then` branch. Because is the tail of the `then` branch (the
+	// block, if it has no tail). It is also the `then` branch of an `if` with no
+	// `else` that nothing expects a type of, checked against `()`, which is the
+	// type of the branch that is missing: Because is then the `if` keyword.
 	ReasonIfBranches
 	// ReasonIfCondition is the condition of an `if`, which must be Bool. It has
 	// no secondary label, so Because is not read.
@@ -47,7 +50,10 @@ type Reason struct {
 	Kind ReasonKind
 	// Because is the place in the source that explains the expectation: the
 	// secondary label of the error goes there. ReasonIfCondition does not read
-	// it.
+	// it. If it is the zero Span (there is no such place) or lies in another
+	// file than the found type (as the parameter of a prelude function does),
+	// the error has no secondary label, because one in another file could not be
+	// drawn under the primary one.
 	Because base.Span
 	// Index is the number of operands of the operator, 1 or 2. Only
 	// ReasonOperand reads it, and then only when a mismatch is reported: any

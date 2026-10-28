@@ -189,7 +189,7 @@ func (p *parser) pratt(minBP int) ExprID {
 				lhs = p.errorExpr(start)
 				continue
 			}
-			lhs = p.m.Exprs.Push(Expr{Kind: ExprCall, Span: p.spanFrom(start), Callee: lhs, Args: args})
+			lhs = p.m.Exprs.Push(Expr{Kind: ExprCall, Span: p.spanFrom(start), OpSpan: p.spanFrom(t.Span), Callee: lhs, Args: args})
 			continue
 		}
 		op, bp, ok := binaryOp(t.Kind)

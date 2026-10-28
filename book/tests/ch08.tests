@@ -246,13 +246,16 @@ ref:     TestUnify/error_type_unifies_silently
 
 [T08.17] unify.mismatch_has_reason_label                    level: core
 kind:    unit (go test)      file: internal/sema/unify_internal_test.go
-case:    la etiqueta secundaria del E0401 está en el span de la razón y su texto depende de la clase de razón: «expected because of this annotation», «expected because of the return type», «the parameter is declared here» o «the other branch has type `E`»
-input:   `Int` esperado y `Bool` hallado con las seis clases de razón (anotación, anotación de `let`, tipo de retorno, cola de bloque, argumento y ramas de un `if`); y, con la razón de las ramas, una variable ligada a `Int` esperada y `Bool` hallado, `(Int) -> Int` esperado y `Bool` hallado, y `(a, b) -> Int` esperado contra `(b) -> Bool` hallado, con `a` y `b` variables distintas
-expect:  cada una da `false` y exactamente un E0401, igual campo por campo: la primaria en el span hallado con «expected `Int`, found `Bool`» (en las siete primeras filas; «expected `(Int) -> Int`, found `Bool`» y «expected `(a, b) -> Int`, found `(b) -> Bool`» en las dos últimas), la secundaria en el span de la razón y ninguna nota, ayuda ni fix-it; el texto de la secundaria es «expected because of this annotation» para la anotación y la anotación de `let`, «expected because of the return type» para el tipo de retorno y la cola de bloque, «the parameter is declared here» para el argumento y «the other branch has type `E`» para las ramas, donde `E` es el tipo esperado resuelto (`Int`, `Int`, `(Int) -> Int` y `(a, b) -> Int`, con los mismos nombres de variable que la primaria)
+case:    la etiqueta secundaria del E0401 está en el span de la razón y su texto depende de la clase de razón: «expected because of this annotation», «expected because of the return type», «the parameter is declared here» o «the other branch has type `E`»; una razón sin sitio (el span cero) o con el sitio en otro fichero que el tipo hallado no lleva secundaria
+input:   `Int` esperado y `Bool` hallado con las seis clases de razón (anotación, anotación de `let`, tipo de retorno, cola de bloque, argumento y ramas de un `if`); y, con la razón de las ramas, una variable ligada a `Int` esperada y `Bool` hallado, `(Int) -> Int` esperado y `Bool` hallado, y `(a, b) -> Int` esperado contra `(b) -> Bool` hallado, con `a` y `b` variables distintas; y, con el span cero y con un span del fichero siguiente, las seis clases, un operador de un operando y otro de dos, y la cola de bloque, con `CanReturn`, con `()` esperado e `Int` hallado; y, con el tipo hallado en el fichero 0, la razón de argumento sin sitio y con un sitio del fichero 0
+expect:  cada una de las primeras da `false` y exactamente un E0401, igual campo por campo: la primaria en el span hallado con «expected `Int`, found `Bool`» (en las siete primeras filas; «expected `(Int) -> Int`, found `Bool`» y «expected `(a, b) -> Int`, found `(b) -> Bool`» en las dos últimas), la secundaria en el span de la razón y ninguna nota, ayuda ni fix-it; el texto de la secundaria es «expected because of this annotation» para la anotación y la anotación de `let`, «expected because of the return type» para el tipo de retorno y la cola de bloque, «the parameter is declared here» para el argumento y «the other branch has type `E`» para las ramas, donde `E` es el tipo esperado resuelto (`Int`, `Int`, `(Int) -> Int` y `(a, b) -> Int`, con los mismos nombres de variable que la primaria); las de razón sin sitio o en otro fichero dan el mismo E0401 con la misma primaria y ninguna secundaria, y la cola de bloque conserva su ayuda; con el tipo hallado en el fichero 0, la razón sin sitio no da secundaria y la que tiene sitio en el fichero 0 da la de «the parameter is declared here»
 why:     la secundaria es lo que convierte «tipos distintos» en «tipos distintos, y esto es lo que lo explica»:
          si cayera en el span hallado, la primaria y la secundaria señalarían el mismo sitio; si el texto no
          dependiera de la razón, un argumento diría «annotation». El texto de las ramas usa el tipo
-         esperado ya resuelto, y no el id: una variable ligada a `Int` se escribe `Int`
+         esperado ya resuelto, y no el id: una variable ligada a `Int` se escribe `Int`. Y una etiqueta en
+         otro fichero no se puede dibujar bajo la primaria (el dibujo se detiene con un panic): el parámetro
+         de `print` está en `std/prelude.ki`. El span cero es «ningún sitio» y no «el principio del fichero
+         0», que es el preludio, y por eso la última fila tiene el tipo hallado allí
 ref:     TestUnify/mismatch_has_reason_label
 
 [T08.18] unify.if_condition_has_note                        level: core
@@ -287,9 +290,244 @@ kind:    unit (go test)      file: tests/errors_docs_test.go
 case:    la valla de un ejemplo erróneo puede llevar `pending=<quién>` cuando `ki check` todavía no puede dar el código de su fichero: el ejemplo se ejecuta, no se le exige nada salvo no dar ese código, y el test falla el día que lo da
 input:   ficheros y ejemplos escritos en el propio test, con el código E0301: un ejemplo erróneo con `pending=T36` que ya da E0301, uno que no lo da, uno que da E0201, uno con `escaped` que no es una cadena de Go y uno corregido con `pending=T36` que sigue dando E0301; y tres vallas con `pending` sin valor, con `pending=` vacío y sobre un ejemplo corregido
 expect:  el que ya da su código falla con «now reports E0301: remove `pending`»; el que no lo da y el que da otro código pasan sin problemas; el `escaped` falla con «not a Go string literal», porque la palabra no impide ejecutarlo; el corregido falla con «still reports E0301», porque se comprueba como cualquier otro; `pending` sin valor y `pending=` vacío son «unknown word», y sobre un ejemplo corregido es un problema de forma («which only an erroneous example may carry»); un ejemplo erróneo con `pending=T36` no tiene ningún problema de forma
-why:     E0401 y E0405 nacen con su entrada en el catálogo antes de que nada llame a `Unify`, y un ejemplo
-         erróneo que no puede dar su código haría fallar el test del catálogo. La palabra deja que la entrada
-         exista hoy, y se borra sola: si te olvidas de quitarla cuando el comprobador de tipos funcione, el test
-         falla con el código que ya sale. Por eso se exige el valor (quién hará alcanzable el código) y por
-         eso solo un ejemplo erróneo puede llevarla: uno corregido es un programa limpio y pasa hoy
+why:     la palabra existe para que un código nazca con su entrada en el catálogo antes de que el
+         comprobador pueda darlo: un ejemplo erróneo que no puede dar su código haría fallar el test del
+         catálogo, y con `pending=<quién>` la entrada existe hoy y la palabra se borra sola, porque el test
+         falla con el código que ya sale. Por eso se exige el valor (quién hará alcanzable el código) y
+         por eso solo un ejemplo erróneo puede llevarla: uno corregido es un programa limpio y pasa hoy.
+         En este capítulo la usaron E0401 y E0405 hasta que `ki check` empezó a comprobar tipos, y hoy
+         ninguna entrada del catálogo la lleva. Estas filas se quedan porque la palabra sigue siendo la
+         forma de dar de alta un código antes de que `ki check` pueda darlo, y son las únicas que la
+         prueban (las del catálogo malo, en T07.89, no la usan)
 ref:     TestErrorDocs/pending_word
+
+[T08.21] check.fib_types                                    level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    cada función, cada expresión y cada variable del programa tiene su tipo y el comprobador lo guarda donde los demás pases lo buscan: `DefTypes` para las funciones, `ExprTypes` para las expresiones y `LocalTypes` para los parámetros y los `let`; las firmas salen de las anotaciones, y una expresión que ningún ítem alcanza conserva el tipo de error, y ninguna otra expresión de los programas correctos se queda con él
+input:   `fib` con su recursión y su `if`/`else`, y un `main` con `print(fib(20))`; un `main` con cinco `let` (`1`, `true`, `()`, uno con `: Int` y la función `fib`); cuatro funciones con firmas escritas (`(Int, Bool) -> Bool`, sin parámetros ni retorno, con un parámetro `()` y con `-> Int`); y `fn main() { print(1 }`, de la que el parser descarta el `1`
+expect:  el programa de `fib` no da ningún diagnóstico; `fib` es `(Int) -> Int` y `main` es `() -> ()`; `n < 2` es `Bool`; el `if` entero, `fib(n - 1)`, la suma, el `n` de la cola, el `1` y el `20` son `Int`; la función llamada `fib` es `(Int) -> Int`, `print` es `(Int) -> ()` y `print(fib(20))` es `()`; el parámetro `n` es `Int` y hay exactamente un tipo por cada variable del programa; los cinco `let` son `Int`, `Bool`, `()`, `Int` y `(Int) -> Int`; las cuatro firmas son `(Int, Bool) -> Bool`, `() -> ()`, `(()) -> ()` y `() -> Int`; ninguna expresión de esos tres programas (el de `fib`, el de los `let` y el de las firmas), sea un bloque, un `if`, una llamada o una hoja, tiene el tipo `{error}`; el programa roto da un solo E0201 y su `1` descartado tiene el tipo `{error}`
+why:     las tres tablas son lo único que el comprobador deja a los pases que vienen detrás, y cada una se
+         mira por separado: una `ExprTypes` que no se rellena, una `LocalTypes` que se queda en el tipo de
+         error o una firma que ignora una anotación no hacen fallar ningún programa correcto hasta que algo
+         lee el tipo. La fila de lo descartado fija el valor de partida: el tipo de error, y no el id 0, que
+         es `Int`. Y el test recorre todas las expresiones de los programas correctos, no solo las de las
+         filas de la tabla: ninguna de ellas es un bloque, y un comprobador que no guardara el tipo de los
+         bloques dejaría `{error}` en el cuerpo de cada función sin que nada lo notara
+ref:     TestCheck/fib_types
+
+[T08.22] check.unannotated_param_inferred                   level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un parámetro sin anotación recibe una variable que el cuerpo, un `let`, una condición o una llamada ligan, y todas las funciones son un solo grupo sin generalizar: lo que se aprende de un parámetro lo ve cada uso de la función; un parámetro al que se llama se vuelve una función de los tipos de los argumentos; y cuarenta parámetros, cada uno llamado con el anterior dos veces, dan un tipo que se contiene a sí mismo por muchos caminos y el programa se comprueba igualmente, también cuando un error tiene que escribir ese tipo: el texto sale cortado (T08.03). Las variables que el comprobador crea dicen dónde nacieron: la de un parámetro sin anotación, el parámetro, y la del resultado de llamar a un parámetro, la llamada
+input:   quince programas: `fn double(x) -> Int { x * 2 }`; `id(x) -> Int { x }`; `both(a, b) -> Bool { a && b }`; `pick(c) -> Int` con `if c`; `unused(x) {}`; `two(x, y) {}`; `k(x) {}` con un `main` que llama a `k(true)`; `later(x) {}` definida después del `main` que la llama y `earlier(x) {}` definida antes; `m(x) { let y: Bool = x }`; `apply(g, x: Int) -> Int { g(x) }`; `app(g) -> Int { g(1, true) }`; `pick(g) -> Bool { g(1) }` y `run(g) { g() }`; y, el decimoquinto, un programa válido de 41 parámetros, `fn f(p0, …, p40)`, con las cuarenta llamadas `p1(p0, p0)`, `p2(p1, p1)`… `p40(p39, p39)`; ese programa con un `let z: Int = p40` al final y, aparte, con un `fn main() { f(1) }`; y `fn unused(x) {}` con `fn apply(g) { g(1) }`
+expect:  ninguno da diagnósticos y las funciones tienen los tipos `(Int) -> Int`, `(Int) -> Int`, `(Bool, Bool) -> Bool`, `(Bool) -> Int`, `(a) -> ()`, `(a, b) -> ()`, `(Bool) -> ()`, `(Int) -> ()`, `(Int) -> ()`, `(Bool) -> ()`, `((Int) -> Int, Int) -> Int`, `((Int, Bool) -> Int) -> Int`, `((Int) -> Bool) -> Bool` y `(() -> ()) -> ()`; en `double`, el parámetro `x` y su uso son `Int`; y el de 41 parámetros no da ningún diagnóstico y se comprueba antes de 10 segundos (pasado el plazo el test falla con un mensaje); con el `let z: Int = p40`, exactamente un E0401, «expected `Int`, found `<T>`» sobre `p40` con la secundaria de la anotación, donde `<T>` es lo que escribe `Show` del tipo de `p40`, que acaba en `…` y mide como mucho 256 bytes más la marca; con el `f(1)`, exactamente un E0402 cuya nota empieza «`f` takes `(a, (a, a) -> b, ((a, a) -> b, (a, a) -> b) -> c, », acaba en «)`» y tiene al menos 30 tipos cortados y no más de 41 tipos de 256 bytes, cada uno con su marca y su separador; el origen de la variable de `x` es el span de la `x` con la nota «parameter `x`», y el de la variable del resultado de `g(1)`, el span de la llamada con «result of this call»
+why:     el libro no generaliza hasta el capítulo 13: una función y sus llamadas son un solo grupo, y la
+         primera que usa un parámetro es la que dice qué es. Si las firmas no se crearan todas antes de mirar
+         los cuerpos, la llamada a `later` no sabría qué es `later`; y si un parámetro al que se llama diera
+         un E0403, se rechazaría un programa correcto: todavía no se sabe qué es, y llamarlo es lo que lo
+         dice. Los nombres `a` y `b` salen de `Show`, por orden de aparición. Y llamar a cada parámetro con el
+         anterior dos veces hace un tipo que contiene al de debajo dos veces: son 40 nodos y 2^40 caminos de
+         arriba abajo, y un occurs check que los bajara todos no acabaría con un programa válido de cuarenta
+         líneas. Escribir ese tipo sí tendría 2^40 partes, y un error lo escribe: una equivocación de una
+         línea en un programa válido no puede costar un error de gigas, y por eso hay dos filas con un error
+         que lo escribe, una con la etiqueta y otra con la nota de los 41 parámetros, cada uno cortado por su
+         cuenta. El test corta la espera a los 10 segundos y falla con un mensaje, en vez de dejar los diez
+         minutos de `go test`; no cuenta los pasos. Y los orígenes porque nadie más los lee todavía: son lo que
+         dará las notas «porque…» de los capítulos siguientes, y sin una aserción cambiarlos por `Origin{}` no
+         haría fallar nada
+ref:     TestCheck/unannotated_param_inferred
+
+[T08.23] check.fn_without_arrow_returns_unit                level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    la cola del cuerpo se comprueba contra el retorno con la razón de la cola del bloque, y una función sin `->` devuelve `()`: el valor que sobra da un E0401 con la secundaria «expected because of the return type» sobre el nombre de la función, o sobre el tipo de retorno si está escrito, y la ayuda de que el valor no se usa solo cuando lo esperado es `()`; esa ayuda propone algo que funciona: el test aplica el consejo al programa y lo vuelve a comprobar
+input:   `fn f() { 1 }`; `fn f() -> Int { true }`; `fn f() -> () { 1 }`; `fn f() -> Int { }`; `fn f() { 1` y, en la línea siguiente, `2 }`; y tres funciones que cuadran: `fn f() { }`, `fn g() -> () { }` y `fn h() { () }`; y, para la ayuda, seis programas: `fn f() { 1 }`, `fn f() -> () { 1 }`, `fib(10)` como cola de una función sin `->`, `fn f() { { 1 } }`, un `if` con `else` como cola y `fn f() { if true { 1 } }`
+expect:  la primera da exactamente un E0401 con «expected `()`, found `Int`» sobre el `1`, la secundaria sobre el nombre `f` y la ayuda «this value is unused: bind it with `let name = …`, or return it from the function»; la segunda, «expected `Int`, found `Bool`» sobre el `true` y la secundaria sobre el `Int` de `-> Int`, sin ayuda; la tercera, igual que la primera pero con la secundaria sobre el `()` escrito; la cuarta, «expected `Int`, found `()`» sobre el bloque `{ }` y la secundaria sobre el `Int`, sin ayuda; la quinta, el mismo error de la primera sobre el `2`, porque el `1` no se compara con nada; las tres últimas no dan nada; en los seis programas de la ayuda, exactamente un E0401 sin fix-it y con la ayuda «this value is unused: bind it with `let name = …`, or return it from the function», salvo en el `if` sin `else`, donde es solo «this value is unused: bind it with `let name = …`»; escribir `let name = ` delante del valor que señala la primaria deja un programa sin diagnósticos, y en los cinco en que la ayuda lo ofrece, devolver el valor (`-> Int` en la función) también
+why:     es el error más fácil de cometer al escribir una función corta: olvidar la flecha y que el valor de
+         la última línea sobre. La secundaria sobre el nombre dice de dónde sale el `()`, que no está escrito
+         en ningún sitio, y la ayuda, que solo es cierta cuando lo esperado es `()`, dice qué hacer con el
+         valor. Un cuerpo vacío es `()`, y el sitio donde se halla es el bloque.
+         La ayuda es un consejo y tiene que funcionar: la primera versión decía `let _ = …`, que el parser
+         rechaza (una variable tiene nombre), y por eso el test no se queda en comparar el texto: aplica el
+         consejo y vuelve a comprobar el resultado. Devolver el valor desde un `if` sin `else` no arregla la
+         función, porque lo que acaba la rama no es lo que ella devuelve, y la ayuda no lo ofrece ahí. El
+         test escribe a mano el programa que devuelve el valor: fija que el consejo funciona, no que el
+         comprobador lo derive
+ref:     TestCheck/fn_without_arrow_returns_unit
+
+[T08.24] check.call_arity_E0402                             level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    una llamada con otro número de argumentos que de parámetros da un E0402 con «supplied here» sobre la lista de argumentos, del `(` al `)`, la secundaria «`f` is declared here» sobre el nombre de la función en su definición cuando es del fichero, la nota con los tipos de los parámetros y ni ayuda ni edición; los argumentos no se comparan con los parámetros pero se comprueban cada uno por su cuenta, y la llamada tiene el tipo de retorno de la función
+input:   `f(a: Int)` llamada con `f(1, 2)`, con `f (1, 2)` y con `(f)(1, 2)`; `g(a: Int, b: Bool)` llamada con `g(1)`; `print(1, 2)`; `f(true, 2 + false)`; `let x: Bool = f(1, 2)` con `f` que devuelve `Int`; un `let g = f` seguido de `g(1, 2)`; `(if true { f } else { f })(1, 2)`; `f(x, y) {}` llamada con `f(1)`; `h(g)` con `g(1)` y `g(1, 2)` en líneas distintas; `h(f)` en un `main` que va antes de `h(g) { g(1, 2) }`, con `f(a: Int) {}`; y `f(1)`, que cuadra
+expect:  cada llamada mala da exactamente el E0402 «this function takes <n> argument(s) but <m> were supplied», igual campo por campo, con la primaria «supplied here» sobre la lista exacta (`(1, 2)` sin el espacio que la precede y sin el `)` de una función llamada entre paréntesis); para una función del fichero lleva la secundaria «`f` is declared here» sobre el nombre en la definición y la nota «`f` takes `(Int)`» (o «`g` takes `(Int, Bool)`», o «`f` takes `(a, b)`», con las dos variables de nombres distintos); para `print`, que está en el preludio, y para el local `g`, solo la nota; para una llamada en que lo que se llama no es un nombre, ni nota ni secundaria; en el `g(1, 2)` de las dos con `h(g)`, el E0402 «this function takes 1 argument(s) but 2 were supplied» sobre `(1, 2)` con la nota «`g` takes `(Int)`» y sin secundaria, y ningún E0401; `f(true, 2 + false)` da además un E0401 «expected `Int`, found `Bool`» sobre el `false` con «`+` expects `Int` operands» sobre el `+`, y nada sobre el `true`; `let x: Bool = f(1, 2)` da además un E0401 «expected `Bool`, found `Int`» sobre la llamada entera con la secundaria de la anotación; `f(1)` no da nada
+why:     qué argumento sobra o falta no es algo que el compilador pueda decidir, así que no hay ayuda ni
+         edición, pero sí hay un sitio donde mirar (la definición) y los tipos que la función espera. La
+         etiqueta tiene que empezar en el `(` aunque haya un espacio antes, o el caret se corre una columna.
+         Y el preludio es otro fichero: una secundaria allí no se podría dibujar bajo la primaria. Un parámetro
+         sin anotación que ya se llamó, o al que una llamada de su función ya dio un tipo, es una función, y
+         la llamada siguiente cuenta sus argumentos: si se mirara la variable sin resolverla, saldría un E0401
+         entre dos tipos función, y el mensaje dependería del orden en que se escriben las funciones
+ref:     TestCheck/call_arity_E0402
+
+[T08.25] check.call_arity_zero_args_E0402                   level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    la etiqueta de la lista de argumentos tiene ancho aunque no haya ningún argumento, porque cubre los paréntesis: una llamada sin argumentos a una función con parámetros da su E0402 sobre `()`
+input:   `f(a: Int) {}` llamada con `f()`, con `f( )` y con `f ()`; y `f() {}` llamada con `f(1)`
+expect:  cada una da exactamente un E0402, igual campo por campo: «this function takes 1 argument(s) but 0 were supplied» con la primaria sobre `()`, `( )` y `()` (sin el espacio que precede a los paréntesis en el tercer caso), la secundaria «`f` is declared here» sobre el nombre en la definición y la nota «`f` takes `(Int)`»; la última, «this function takes 0 argument(s) but 1 were supplied» sobre `(1)` con la nota «`f` takes `()`»
+why:     una etiqueta sin ancho no se dibuja, y «supplied here» sin nada debajo no dice nada: la lista con
+         sus paréntesis es el sitio donde se ve que falta algo. Por eso el parser guarda el span de la lista
+         y no se calcula como «el final de la función llamada más uno»
+ref:     TestCheck/call_arity_zero_args_E0402
+
+[T08.26] check.call_non_function_E0403                      level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    llamar a un valor que no es una función da un E0403 con «not a function» sobre lo que se llama, la secundaria «`x` is bound here» sobre donde se liga cuando es una variable y ni nota ni ayuda; la llamada tiene el tipo de error, los argumentos se comprueban cada uno por su cuenta, y ni lo que se llama si ya dio error ni un parámetro sin anotación dan E0403
+input:   `let x = 1` seguido de `x(2)`; el parámetro `x: Bool` llamado como `x()`; `1(2)`, `()(1)` y `f()(2)` con `f` que devuelve `Int`; `1(2 + true)`; `let y: Bool = x(2)` con `x` un `Int`; `nope(2 + true)` y `let b: Bool = nope(1)`; y `g(h) { h(1) }` junto a una llamada que cuadra
+expect:  los E0403 son exactamente «cannot call a value of type `Int`» (o `Bool`, o `()`) con la primaria «not a function» sobre lo que se llama, y para `x` del `let` y para el parámetro `x`, la secundaria «`x` is bound here» sobre el nombre donde se liga; `1(2)`, `()(1)` y `f()(2)` no tienen secundaria; `1(2 + true)` da el E0403 y un E0401 «expected `Int`, found `Bool`» sobre el `true` con «`+` expects `Int` operands» sobre el `+`; `let y: Bool = x(2)` da solo el E0403; `nope(2 + true)` da un E0301 y un E0401 (el test mira los códigos, no los sitios), y `let b: Bool = nope(1)` solo un E0301; el último programa no da nada
+why:     el tipo de error de la llamada es lo que evita la cascada: sin él, `let y: Bool = x(2)` daría un
+         segundo error por una llamada que ya se dijo que no se puede hacer. Y un parámetro sin anotación
+         no es un valor que no se pueda llamar, sino uno del que todavía no se sabe nada
+ref:     TestCheck/call_non_function_E0403
+
+[T08.27] check.if_condition_must_be_bool                    level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    la condición de un `if` se comprueba como `Bool` con la razón de la condición: un E0401 sobre la condición, con la nota «an `if` condition must be `Bool`» y sin secundaria
+input:   `if 1 { }`; `if f { }` con `f` una función; `if true { } else if 1 { }`; `if { 1 } { }`, con un bloque de condición; dos `if` que no están en la cola de un bloque ni son una rama `else`, `let x = if 1 { 2 } else { 3 }` y `if 1 { }` seguido de `print(1)`; y tres condiciones que cuadran: `1 < 2`, `b && !b` y un parámetro `x` sin anotación
+expect:  las seis primeras dan exactamente un E0401 igual campo por campo: «expected `Bool`, found `Int`» sobre el `1` (cinco veces, y en la del bloque sobre el `1` de dentro de las llaves, no sobre el bloque) o «expected `Bool`, found `() -> ()`» sobre el `f`, con la nota y ninguna secundaria ni ayuda; las otras no dan nada, y `x` queda con el tipo `Bool`
+why:     una condición que no es `Bool` no tiene otro sitio del programa que la explique: lo que ayuda es la
+         regla, no una secundaria. Que `x` sea `Bool` por usarse de condición es lo que hace que el
+         comprobador no pida anotaciones donde se pueden deducir. Y una condición que es un bloque pasa lo
+         que se espera de ella a su cola, como cualquier otro sitio: el error cae en el `1`, no en las llaves.
+         Los dos últimos `if` con error no están donde el comprobador espera algo de ellos: ahí el `if` se
+         infiere en vez de comprobarse, que es otro camino hasta la condición, y quitar de él la comprobación
+         no hacía fallar ninguna de las otras filas
+ref:     TestCheck/if_condition_must_be_bool
+
+[T08.28] check.if_without_else_is_unit                      level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un `if` sin `else` tiene el tipo `()`: primero se compara `()` con lo esperado sobre el `if` entero, con la razón del sitio, y si falla, ese es el error del `if` y la rama `then` solo se infiere, para los errores que tenga por dentro; si no falla, la rama se comprueba contra `()` con esa misma razón; donde no se espera nada, la rama se comprueba contra `()` con el `if` como razón
+input:   `let x: Int = if true { 1 }`; `let x: () = if true { 1 }`; `fn main() { if true { 1 } }`; `fn f() -> Int { if true { 1 } }`; un `if true { 1 }` como sentencia, antes de `print(1)`; `let x = if true { 1 }`; `let x: Int = if true { 1 + true }`; y tres programas que cuadran (`if true { print(1) }`, `let x: () = if true { }` e `if true { }`)
+expect:  la primera da exactamente un E0401: «expected `Int`, found `()`» sobre el `if` entero, con la secundaria «expected because of this annotation» sobre `Int` y ningún error sobre el `1`; la segunda, «expected `()`, found `Int`» sobre el `1` y la misma secundaria sobre el `()` escrito; la tercera, el mismo error sobre el `1` con la secundaria «expected because of the return type» sobre `main` y la ayuda de que el valor no se usa, solo con la mitad de ligarlo («this value is unused: bind it with `let name = …`»): lo que acaba la rama no es lo que devuelve la función; la cuarta, «expected `Int`, found `()`» sobre el `if` entero con la secundaria sobre `-> Int`, sin ayuda; la quinta y la sexta, «expected `()`, found `Int`» sobre el `1` con la secundaria «the other branch has type `()`» sobre la palabra `if`; la séptima, el error de la primera sobre el `if` entero y un segundo E0401, «expected `Int`, found `Bool`», sobre el `true` de `1 + true` con «`+` expects `Int` operands» sobre el `+`, y el `1` tiene el tipo `Int`; los tres últimos no dan nada
+why:     un error por equivocación: `let x: Int = if true { 1 }` no tiene dos errores, tiene uno, que es el
+         `else` que falta, y el `1` está bien en una rama que el programa no usa como valor. Donde nada
+         espera un tipo, la rama que falta es el otro lado de la comparación, y la secundaria sobre el `if`
+         lo dice con las palabras de las ramas. Que la rama no se compare con nada no es que no se mire: se
+         infiere igual, y un error dentro de ella (`1 + true`) es otra equivocación, que no se pierde ni deja
+         las expresiones de la rama con el tipo de error
+ref:     TestCheck/if_without_else_is_unit
+
+[T08.29] check.operand_type_mismatch                        level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    cada operador comprueba sus operandos contra el tipo que quiere y da el tipo de su resultado: un operando malo da un E0401 sobre el operando con la secundaria «`op` expects `T` operands» sobre el operador; el resultado del operador es el que le toca, y un operando de tipo error vuelve de tipo error el resultado
+input:   `true && 1`; para cada uno de `+ - * / %`, `< <= > >=` y `&& ||`: el operando derecho malo, el izquierdo malo, el resultado contra una anotación de otro tipo y operandos y resultado que cuadran; `true + false`; `1 + 2 * true`; `-true`; `!1`; `-1` contra `Bool` y `!true` contra `Int`; `!b && -a < 0`; `1 == true` y `true != 1`; y catorce programas con un operando de tipo error (diez con un nombre desconocido y cuatro con un operando que el parser no leyó) contra una anotación que el resultado normal no cumpliría
+expect:  cada fila mala da los E0401 igual campo por campo: «expected `Int`, found `Bool`» (o `Bool` e `Int` en `&& ||`) sobre el operando malo y «`op` expects `Int` operands» (o `Bool`) sobre el operador; `true + false` da dos, uno por operando, con la misma secundaria; `1 + 2 * true`, uno solo sobre el `true` con la secundaria sobre el `*`; `-true`, «`-` expects an `Int` operand»; `!1`, uno sobre el `1` con la secundaria «`!` expects a `Bool` operand» sobre el `!`; el resultado de los aritméticos es `Int`, el de las comparaciones y los lógicos `Bool`, y `-1`, `!true` y sus anotaciones dan «expected `Bool`, found `Int`» y «expected `Int`, found `Bool`» sobre toda la expresión con la secundaria de la anotación; `1 == true` da «expected `Int`, found `Bool`» sobre el `true` con «`==` expects `Int` operands» y `true != 1` el de `Bool`; las filas que cuadran no dan nada; y los catorce programas dan un solo diagnóstico, el E0301 del nombre o el E0201 del parser
+why:     una tabla de operadores tiene once filas y un descuido en una (un `%` que da `Bool`, un `<=` que
+         quiere `Bool`) no lo ve ningún programa corriente: cada operador se prueba con su propio error.
+         El operando de tipo error es lo que evita que `nope + 1` dé un E0401 más detrás del E0301. De `!`
+         se fija el texto de la secundaria con la fila `!1`: lo escribe `Unify` con un artículo que sale del
+         nombre del tipo, y con un «an» fijo `!1` diría «`!` expects an `Bool` operand»
+ref:     TestCheck/operand_type_mismatch
+
+[T08.30] check.equality_on_bools_ok                         level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    `==` y `!=` aceptan dos `Int` o dos `Bool`, dan `Bool`, comprueban el operando derecho contra el izquierdo y ligan lo que el otro lado sabe; un operando de tipo error vuelve de tipo error el resultado; y un parámetro sin anotación que nada fija no es un error, ni lo es el que una llamada de otra función fija a `Int` o a `Bool`, esté esa función antes o después
+input:   trece programas: `a == b` con dos `Bool`, `x != 3`, `1 == 2`, `let b: Bool = true != false`, `1 == x` y `x == true` con `x` sin anotación, `(1 == 2) == (3 < 4)`, `!a == false` y un `if x == 1`; `same(x, y) -> Bool { x == y }` sola, con un `main` que llama a `same(1, 2)` detrás y con ese `main` delante, y `x != y` con `same(true, false)`; y `let b: Int = nope == nope`
+expect:  los trece no dan ningún diagnóstico y las funciones tienen los tipos `(Bool, Bool) -> Bool`, `(Int) -> Bool`, `() -> Bool`, `() -> ()`, `(Int) -> Bool`, `(Bool) -> Bool`, `() -> Bool`, `(Bool) -> Bool`, `(Int) -> Int`, `(a, a) -> Bool`, `(Int, Int) -> Bool`, `(Int, Int) -> Bool` y `(Bool, Bool) -> Bool`; el último da solo dos E0301, uno por cada `nope`
+why:     la regla de igualdad es distinta de la de los demás operadores (el tipo de los operandos no está
+         fijado de antemano) y por eso tiene su propio camino: si el lado derecho no se comprobara contra
+         el izquierdo, `x == 1` dejaría `x` sin ligar; si el resultado fuera `Int`, `-> Bool` fallaría. Y los parámetros que
+         nada fija no se rechazan: lo que se sabe de un parámetro depende de qué llamadas se han mirado ya, y
+         `same` no puede ser buena con el `main` detrás y mala con el `main` delante (T08.31)
+ref:     TestCheck/equality_on_bools_ok
+
+[T08.31] check.equality_on_functions_E0401                  level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    `==` y `!=` sobre un tipo que no es `Int` ni `Bool` dan un E0401 que no pasa por `Unify`: la primaria sobre el operando izquierdo con «expected `Int` or `Bool`, found `<F>`», la nota «`op` works on `Int` and `Bool` here» y ni secundaria ni ayuda; ese es el único error de la comparación, porque el operando derecho no se compara con el izquierdo (un error dentro de un operando es de ese operando), y el resultado es `Bool`. Un operando izquierdo que es un parámetro sin anotación se juzga cuando ya se han comprobado todos los cuerpos, y el programa da lo mismo con las funciones en cualquier orden
+input:   `f == f` y `f != f` con `f` una función sin parámetros; `() == ()`; `h == h` con `h: (Int) -> Int`; `f() == f()` con `f` que devuelve `()`; `f == 1`; `() == 1`; `f == h` con dos funciones distintas; `x == f` con `x` un parámetro sin anotación; `f == 1 + true`; `1 == f`; `nope == 1`; `f == f` como cola de un cuerpo `-> Int`; `same(x, y) -> Bool { x == y }` con un `main` que llama a `same(f, f)`, escrito detrás y delante de `same`; y dos funciones `same` y `other`, una con `==` y otra con `!=`, llamadas las dos con `f`
+expect:  las nueve primeras dan cada una exactamente un E0401 igual campo por campo, con «expected `Int` or `Bool`, found `<F>`» (con `<F>` igual a `() -> ()`, `()` o `(Int) -> Int`) sobre el operando izquierdo y la nota con el operador que toca (`==` o `!=`), y nada más: el operando derecho, sea del tipo que sea, no da otro error por no ser lo que pide el izquierdo (`f == 1` ya no da el «expected `() -> ()`, found `Int`» ni su «`==` expects `() -> ()` operands»); `f == 1 + true` da dos E0401, el de la nota sobre el `f` y «expected `Int`, found `Bool`» sobre el `true` con la secundaria «`+` expects `Int` operands» sobre el `+`, porque el operando derecho no se compara con el izquierdo pero se infiere, y un error dentro de él es suyo; `1 == f` da «expected `Int`, found `() -> ()`» sobre la `f` con la secundaria «`==` expects `Int` operands» sobre el operador; `nope == 1` da solo el E0301; `f == f` en `g() -> Int` da dos E0401, el de la nota sobre el `f` de la izquierda y «expected `Int`, found `Bool`» sobre `f == f` entera, con la secundaria «expected because of the return type» sobre el `Int` de `-> Int`, porque el resultado de la comparación rechazada sigue siendo `Bool`; el programa de `same(f, f)` da, tanto con `same` delante como detrás del `main`, exactamente un E0401 sobre la `x` de `same` con «expected `Int` or `Bool`, found `() -> ()`» y la nota de `==`, y ninguno sobre la `y` ni sobre la llamada; y `same` y `other` dan uno cada una, el de la primera con la nota de `==` y el de la segunda con la de `!=`
+why:     una función no se puede comparar y `()` tampoco, pero la causa no está en ningún otro sitio del
+         programa: no hay secundaria, hay una nota con la regla. Que solo se comparen `Int` y `Bool` es la
+         regla de este capítulo; si resulta estrecha, es una regla que cambiar, y este test es el que dice
+         dónde. Es un solo error porque la equivocación es una: «`==` expects `() -> ()` operands» diría que
+         `==` espera funciones, que es lo contrario de lo que dice la nota. Y un parámetro sin anotación
+         no se juzga al verlo: lo que se sabe de él depende de qué llamadas se han mirado ya, y el mismo
+         programa con las funciones en otro orden daría un error o ninguno. Por eso se anota la comparación
+         y se juzga al final, cuando las llamadas ya han dicho lo que es el parámetro; el mensaje dice
+         `() -> ()`, y no `a`, un nombre que tú no escribiste. Las dos filas del orden matan las dos
+         maneras de hacerlo mal: rechazar al verlo el parámetro que aún no tiene tipo daría `a` con `same`
+         delante y `() -> ()` con `same` detrás (y rechazaría también `same(1, 2)`, que es correcta, como
+         muestra T08.30), y no juzgar nunca callaría el error con `same` delante. Si al final el
+         parámetro sigue sin tipo, nada dice que no se pueda comparar, y no se rechaza. Y el operando
+         derecho de una comparación rechazada se infiere aunque no se compare: sin eso, `f == 1 + true`
+         daría solo el primer error, y todo el árbol de la derecha se quedaría con el tipo de error
+ref:     TestCheck/equality_on_functions_E0401
+
+[T08.32] check.let_annotation_mismatch                      level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    el inicializador de un `let` con anotación se comprueba contra ella con la razón de la anotación de `let`: un E0401 sobre el inicializador, con la secundaria «expected because of this annotation» sobre la anotación; con anotación, la variable tiene el tipo anotado aunque el inicializador no lo tenga, y sus usos no dan un segundo error; sin anotación, la variable toma el tipo del inicializador y lo conserva en sus usos
+input:   `let x: Bool = 1`; `let x: () = 1`; `let x: Bool = 1` seguido de `let y: Bool = x`; `let x = 1` seguido de `let y: Bool = x`; `let x = 1`, `let x = true` y `let y: Bool = x`; `let x: Bool = { 1 }`; `let x: Int = f` con `f` una función; `let x: Int = nope`; y tres `let` que cuadran
+expect:  los seis programas con error dan exactamente un E0401 igual campo por campo, con la secundaria sobre la anotación y sin ayuda: «expected `Bool`, found `Int`» sobre el `1`, «expected `()`, found `Int`» sobre el `1`, «expected `Bool`, found `Int`» sobre el `1` del primer `let` (y nada sobre el `x` de después), «expected `Bool`, found `Int`» sobre el segundo `x`, el mismo sobre el `1` de dentro del bloque y «expected `Int`, found `() -> ()`» sobre `f`; el sombreado no da nada, porque la segunda `x` es otra variable con su tipo; `let x: Int = nope` da solo el E0301; los `let` que cuadran, nada
+why:     la anotación llega a la cola del bloque, que es donde está el error, y no al bloque entero. La
+         ayuda de «valor sin usar» sería falsa aquí aunque lo esperado sea `()`: solo vale para la cola de
+         un cuerpo, y la fila de `()` lo comprueba. La variable de un `let` con anotación es del tipo que
+         escribiste, y no del que tuvo el inicializador: si no, el `1` equivocado de `let x: Bool = 1`
+         daría otro error cada vez que se use la `x`
+ref:     TestCheck/let_annotation_mismatch
+
+[T08.33] check.extern_print_type                            level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    la función externa del preludio, que no tiene cuerpo, tiene el tipo de su firma; y una función del fichero con el mismo nombre la tapa
+input:   `fn main() { print(1) }`; y `fn print(x: Bool) {}` con `fn main() { print(true) }`
+expect:  la primera no da diagnósticos y el tipo de `print` es `(Int) -> ()`; la segunda tampoco, y el tipo que se encuentra para `print` es `(Bool) -> ()`
+why:     `print` es la primera función con la que se prueba todo programa, y su cuerpo no existe: el
+         comprobador tiene que dar su tipo sin buscarlo. Que la del fichero tape a la del preludio es la
+         regla de nombres del resolvedor, y `DefType` la sigue
+ref:     TestCheck/extern_print_type
+
+[T08.34] check.call_argument_mismatch                       level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    cada argumento se comprueba contra su parámetro con la razón de argumento, y el E0401 lleva la secundaria «the parameter is declared here» sobre el parámetro cuando la función llamada es del fichero; si el parámetro está en el preludio o lo que se llama no es una definición, no hay secundaria
+input:   `f(a: Int, b: Bool)` llamada con `f(1, 2)`, con `f(true, true)` y con `f(true, 2)`; `g(x) {}` llamada con `g(1)` y luego con `g(true)`; `print(true)`; `let g = f` seguido de `g(true)` con `f(a: Int)`; `let g = f` seguido de `g(1, 2)` con `f(a: Int, b: Bool)`; `f({ true }, true)`; y dos llamadas que cuadran
+expect:  cada error es un E0401 igual campo por campo, con «expected `T`, found `U`» sobre el argumento y la secundaria sobre `a: Int` o `b: Bool` (el parámetro entero, con su anotación) o sobre el `x` de `g`; `f(true, 2)` da dos; `g(true)` da «expected `Int`, found `Bool`» porque `g(1)` ya ligó el parámetro; `print(true)` y `g(true)` con el local dan el E0401 sin secundaria, y `g(1, 2)` con el local de dos parámetros da «expected `Bool`, found `Int`» sobre el `2`, también sin secundaria; el diagnóstico de `print(true)` se dibuja con `RenderHuman` sin fallar, apuntando a `test.ki:1:19`; con `{ true }` el error está en el `true` de dentro del bloque
+why:     `print(true)` es el error que más se va a cometer y el parámetro está en `std/prelude.ki`, otro
+         fichero: una secundaria allí haría que el dibujo se detuviera con un panic en vez de mostrar el
+         error. Por eso la prueba lo dibuja. El argumento que es un bloque se comprueba y no solo se infiere,
+         para que el error caiga en la cola. Y la fila de `g(1, 2)` existe porque, sin una definición a la
+         que mirar, buscar el parámetro con el número del argumento lee el de otra función: con el primer
+         argumento da un parámetro cualquiera sin que nadie lo note, y con el segundo se sale de la lista y
+         el compilador hace un panic
+ref:     TestCheck/call_argument_mismatch
+
+[T08.35] check.if_branches_must_agree                       level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    con `else`, la rama `then` se infiere y la `else` se comprueba contra ella con la razón de las ramas, cuya secundaria «the other branch has type `T`» está en la cola de `then` (o en el bloque, si no tiene cola); si las ramas no cuadran, la rama `then` de un `else if` sin `else` falla o ese `if` sin `else`, que es `()`, no cuadra con la otra rama, el `if` no tiene tipo y el error no se repite donde se usa; si cuadran, el tipo del `if` se compara con lo esperado sobre el `if` entero
+input:   `let x = if true { 1 } else { false }`; el mismo con `: Int` y con `: Bool`; `let x: Bool = if true { 1 } else { 2 }`; `fn f() { if true { 1 } else { 2 } }`; `else if` con un `true` al final; `if true { } else { 1 }`; una rama `then` con `let y = 1` y la cola `y`; `let x: Int = if a { () } else if b { 1 }`; `let x: Bool = if a { 1 } else if b { 2 }`; `let y: Bool = x` con `x` un `if` de `Int`; y `1 + if c { 2 } else if !c { 3 } else { 4 }`
+expect:  los de ramas distintas dan exactamente un E0401: «expected `Int`, found `Bool`» sobre el `false` con la secundaria «the other branch has type `Int`» sobre el `1`, también con las dos anotaciones, sin un segundo error sobre el `if`; `let x: Bool = if true { 1 } else { 2 }` da «expected `Bool`, found `Int`» sobre el `if` entero con la secundaria de la anotación; `fn f() { if true { 1 } else { 2 } }` da «expected `()`, found `Int`» sobre el `if` con «expected because of the return type» sobre `f` y la ayuda del valor sin usar; el `else if` da el error sobre el `true` con la secundaria sobre el `2`; la rama vacía da «expected `()`, found `Int`» sobre el `1` con la secundaria sobre el bloque `{ }`; con sentencias, la secundaria está en la `y` de la cola; `let x: Int = if a { () } else if b { 1 }` da un solo E0401, «expected `()`, found `Int`» sobre el `1` con la secundaria «the other branch has type `()`» sobre el `()` de la rama `then` del `if` de fuera, y ningún error sobre el `if` ni sobre la anotación; `let x: Bool = if a { 1 } else if b { 2 }` da un solo E0401, «expected `Int`, found `()`» sobre el `if b { 2 }` entero con la secundaria «the other branch has type `Int`» sobre el `1`, y ningún error sobre la anotación; `let y: Bool = x` da «expected `Bool`, found `Int`»; el último programa no da nada
+why:     «un error por equivocación»: si el `else` no cuadra con el `then`, el `if` no tiene tipo con el que
+         compararse con la anotación, y se informa de lo que está mal entre las ramas, no de que el
+         resultado no sea el esperado. La secundaria en la cola de `then` es la expresión que da el tipo,
+         no el bloque entero. Lo mismo vale cuando el `else` es un `if` sin `else` y lo que falla es su
+         rama, o cuando es ese `if`, que es `()`, el que no cuadra con la otra rama: ese `if` no tiene tipo, y
+         el de fuera no da un segundo error contra la anotación. Si se le diera el tipo de la rama `then`,
+         el de fuera tendría el tipo `Int` y la anotación `Bool` daría un segundo error por una sola
+         equivocación
+ref:     TestCheck/if_branches_must_agree
+
+[T08.36] check.infinite_type_E0405                          level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un tipo que tendría que contenerse a sí mismo da un E0405 con «this type would contain itself» sobre la expresión y la nota con la variable y el tipo que tendría que ser, con los mismos nombres en los dos; vale para pasar una función donde se espera su propio parámetro y para llamar a un parámetro con él mismo
+input:   `fn f(x) { f(f) }` y `fn g(x) { x(x) }`
+expect:  la primera da exactamente un E0405 sobre el argumento `f` con la nota «`a` would have to be `(a) -> ()`, which has no finite size»; la segunda, uno sobre la `x` que se llama con «`a` would have to be `(a) -> b`, which has no finite size»; ninguna lleva secundaria, ayuda ni edición
+why:     es el ejemplo de `docs/errors/E0405.md`, que ahora se puede alcanzar con `ki check`, y el segundo
+         camino del mismo error: llamar a una variable sin ligar la liga a una función, y esa función
+         contendría a la variable. Sin la comprobación de ocurrencia, la variable quedaría ligada a un tipo que
+         se contiene y `Show` no terminaría
+ref:     TestCheck/infinite_type_E0405
+
+[T08.37] syntax.call_arg_list_span                          level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el `OpSpan` de una llamada es su lista de argumentos, del `(` al `)`, y no el final de la función llamada más uno
+input:   `f(1, 2)`, `f()`, `f( )`, `f(1,)`, `f(` y el `1)` en la línea siguiente, `f (1)`, `f  ()`, `(f)(1)` y `( f ) (1)`; `f(1)(2)`; y `f(g(1), 2)`
+expect:  los spans de las listas son [1,7), [1,3), [1,4), [1,5), [1,5), [2,5), [3,5), [3,6) y [6,9); en `f(1)(2)` la lista de fuera es [4,7) y la de dentro [1,4); en `f(g(1), 2)` la de fuera es [1,10) y la de `g(1)` [3,6)
+why:     el comprobador dibuja E0402 sobre esta lista, y entre la función llamada y el `(` puede haber
+         espacios (`f (x)`) o el `)` de una función llamada entre paréntesis (`(f)(x)`): el final de la
+         función llamada más uno apuntaría a un blanco o a un paréntesis que no es el de la lista
+ref:     TestParseExpr/call_arg_list_span

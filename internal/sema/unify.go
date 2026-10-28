@@ -22,9 +22,11 @@ type Unifier struct {
 // When it cannot, it reports one error to the sink and returns false. The
 // error is E0401 (mismatched types) with its primary label on foundAt, where
 // the found type comes from, and a secondary label, or a note, that r chooses:
-// it says why the other type is the expected one. If making them equal would
-// give a variable a type that contains the variable, the error is E0405
-// instead (an infinite type), which is the same whatever r is.
+// it says why the other type is the expected one. The secondary label is left
+// out when r.Because is the zero Span or lies in another file than foundAt. If
+// making them equal would give a variable a type that contains the variable,
+// the error is E0405 instead (an infinite type), which is the same whatever r
+// is.
 //
 // Function types are unified part by part, the parameters from the first and
 // then the result, and the first part that does not match is the mistake: it
@@ -143,6 +145,13 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 	d := diag.NewError(diag.E(401), "mismatched types",
 		diag.Label{Span: foundAt, Message: "expected `" + shown[0] + "`, found `" + shown[1] + "`"})
 	because := func(text string) {
+		// A label in another file cannot be drawn under the primary one
+		// (RenderHuman refuses it), and the zero Span is no place at all: the
+		// parameter of a function of the prelude is the first, a variable that
+		// holds a function the second. Without a place there is no label.
+		if r.Because == (base.Span{}) || r.Because.File != foundAt.File {
+			return
+		}
 		d = d.WithSecondary(diag.Label{Span: r.Because, Message: text})
 	}
 	switch r.Kind {

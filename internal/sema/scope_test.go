@@ -264,7 +264,7 @@ fn third(a: Int) -> Int {
 		// each one owns its own variables: the owner is the definition being
 		// walked, not the one that its name stands for, which is the first.
 		const twice = "fn f(a: Int) { a }\nfn f(b: Int) { b }\n"
-		p = testsupport.Analyze(t, twice)
+		p = testsupport.Resolve(t, twice)
 		wantCodes(t, p, "E0302")
 		var fs []sema.DefID
 		for id, d := range p.Frontend.Resolved.Defs.All() {
@@ -337,7 +337,7 @@ fn third(a: Int) -> Int {
 		// With a parameter called x the initializer reads the parameter, and the
 		// `x` that follows reads the new variable.
 		const withParam = "fn g(x: Int) {\n  let x = x\n  x\n}\n"
-		p = testsupport.Analyze(t, withParam)
+		p = testsupport.Resolve(t, withParam)
 		wantCodes(t, p)
 		gID, _ := fnNamed(t, p, "g")
 		wantLocal(t, p, "x in the initializer", useAt(t, p, "x", 0), paramLocal(t, p, "g", 0), "x", spanIn(t, p, withParam, "g(x:", "x"), gID)
@@ -454,7 +454,7 @@ fn k() {
   print
 }
 `
-		p = testsupport.Analyze(t, global)
+		p = testsupport.Resolve(t, global)
 		wantCodes(t, p)
 		hID, _ := fnNamed(t, p, "h")
 		if res, want := useAt(t, p, "h", 0), (sema.Res{Kind: sema.ResDef, Def: hID}); res != want {
@@ -563,7 +563,7 @@ fn k() {
 }
 fn d(n: Int) {}
 `
-		p = testsupport.Analyze(t, src)
+		p = testsupport.Resolve(t, src)
 		wantCodes(t, p)
 		cID, _ := fnNamed(t, p, "c")
 		dID, _ := fnNamed(t, p, "d")
