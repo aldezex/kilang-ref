@@ -9,10 +9,10 @@ import (
 // of Lex: a buffer whose last token is the only Eof.
 //
 // The parser is recursive descent. Parse reads the top-level functions:
-// attributes, `pub`, the name, the parameters, the return type and a body that
-// is either absent or a block. The expressions are read by parser_expr.go, the
-// blocks, `let` and `if` by parser_stmt.go, and recover.go says what the parser
-// does when the tokens stop making sense.
+// attributes, `pub`, the name, the parameters, the return type and a body, which
+// is a block, or is absent in a function marked `#[extern]`. The expressions are
+// read by parser_expr.go, the blocks, `let` and `if` by parser_stmt.go, and
+// recover.go says what the parser does when the tokens stop making sense.
 //
 // Where they do, Parse reports E0201 to sink, at the token it found instead of
 // the one it needed (see expected), and goes on: the place becomes an error node
@@ -74,11 +74,19 @@ type parser struct {
 	reported     bool
 	lastReported int
 
-	// in is not used: the parser reads the Symbols the lexer interned and never
-	// the text of a name. sink receives the diagnostics: E0201 to E0205.
+	// in is only read, to tell the attribute `extern` from the others (see
+	// hasExtern): the parser takes the names of everything else as the Symbols
+	// the lexer interned. sink receives the diagnostics: E0201 to E0205.
 	in   *base.Interner
 	sink *diag.Sink
 }
+
+// ExternAttr is the name of the attribute that marks a function whose code is
+// not written in Ki, as in `#[extern("ki_print_int")]`. Such a function is
+// declared without a body. The parser accepts a function without a body only if
+// it has this attribute, and name resolution allows the attribute only in the
+// standard library.
+const ExternAttr = "extern"
 
 // newParser returns a parser that is about to read the first token of tb.
 func newParser(tb *TokenBuffer, file base.FileID, in *base.Interner, sink *diag.Sink) *parser {
@@ -141,7 +149,9 @@ func (p *parser) found() string {
 // words that the message uses: `expression`, `identifier`, `type`, `item`,
 // `newline` and `string`, or a piece of punctuation between backquotes, such as
 // the `(` after the name of a function or the `[` of an attribute.
-// TestParseStmt/e0201_sites has a row for each word.
+// TestParseStmt/e0201_sites has a row for each word. The word `{` is asked for
+// by the branches of an if and by a function that has no body and no
+// `#[extern]`.
 //
 // It reports nothing in three cases. The token found may be an Error token: the
 // lexer has reported that character or string already, and a second diagnostic
@@ -222,9 +232,13 @@ func (p *parser) errorItem(start base.Span) ItemID {
 //	       [ '->' type ] [ block ]
 //
 // A function has a body exactly when a `{` follows its signature on the same
-// line; the line rule puts a Newline in front of a `{` on the next one. A
-// token that cannot start an item, or a signature that stops making sense, is
-// an ItemError and E0201: the tokens read so far are consumed, and module skips
+// line; the line rule puts a Newline in front of a `{` on the next one. Only a
+// function with an `#[extern]` attribute may have none (see hasExtern). Any
+// other is E0201 `{` at the token that follows the signature, and it stays an
+// ItemFn without a body, with its name and its signature: the mistake is the
+// missing body, so the rest of the file can still call the function. A token
+// that cannot start an item, or a signature that stops making sense, is an
+// ItemError and E0201: the tokens read so far are consumed, and module skips
 // the rest of the item.
 func (p *parser) item() ItemID {
 	start := p.tok().Span
@@ -262,9 +276,23 @@ func (p *parser) item() ItemID {
 	}
 	if p.at(LBrace) {
 		it.Body, it.HasBody = p.block(), true
+	} else if !p.hasExtern(it.Attrs) {
+		p.expected("`{`")
 	}
 	it.Span = p.spanFrom(start)
 	return p.m.ItemNodes.Push(it)
+}
+
+// hasExtern reports whether one of the attributes in r, a range over AttrPool,
+// is called extern. Only the name counts: whether the arguments are the ones an
+// extern function needs is for name resolution to say.
+func (p *parser) hasExtern(r base.ListRange) bool {
+	for _, a := range p.m.Attrs(r) {
+		if string(p.in.Bytes(a.Name)) == ExternAttr {
+			return true
+		}
+	}
+	return false
 }
 
 // attrs reads the attributes in front of an item, which may be none, and adds

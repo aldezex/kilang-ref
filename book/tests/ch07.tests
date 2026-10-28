@@ -1,0 +1,198 @@
+[T07.01] embed.prelude_is_embedded                          level: core
+kind:    unit (go test)      file: embed_test.go
+case:    el preludio, `stdlib/prelude.ki`, viaja dentro del binario: se puede leer de `Stdlib`, el `embed.FS` de la raíz del módulo
+input:   `fs.ReadFile(Stdlib, "stdlib/prelude.ki")`
+expect:  la lectura no falla y el texto contiene `ki_print_int`
+why:     `ki` tiene que encontrar su preludio dondequiera que lo ejecutes, y no solo con el repositorio al lado. Si
+         alguien cambiara el patrón de `//go:embed` o moviera el fichero, el binario compilaría igual y el
+         fallo saldría en cada programa a la vez, sin pista de la causa: este test lo dice con su nombre. Y que
+         el texto declare `ki_print_int` comprueba que es el preludio y no un fichero cualquiera
+ref:     TestEmbed/prelude_is_embedded
+
+[T07.02] parser.bodyless_fn_needs_extern_E0201              level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    una función sin cuerpo solo se admite si lleva el atributo `extern`; si no, es un E0201 `expected `{`, found <token>` en el token que sigue a la firma, y la función queda en el árbol, sin cuerpo, para que la siguiente se lea como siempre
+input:   diez fuentes: `fn f()\nfn g() {}`; con tipo de retorno (`fn f() -> Int\nfn g() {}`); con `pub` y un parámetro; sin cuerpo al final del fichero (`fn g() {}\nfn f()`); con un token en vez del cuerpo (`fn f() 1\nfn g() {}`); con un atributo que no es `extern` (`#[inline]\nfn f()\nfn g() {}`); y cuatro con `extern`: con un argumento, sin argumentos, tras otro atributo (`#[inline] #[extern("x")] pub fn f()\nfn g() {}`) y antes de otro (`#[extern("x")] #[inline] pub fn f()\nfn g() {}`)
+expect:  las seis primeras dan exactamente un diagnóstico, un E0201 con ese mensaje y la etiqueta primaria sin texto sobre los bytes del token hallado (sin etiqueta secundaria, nota ni ayuda): «expected `{`, found newline» sobre el salto de línea (en la primera, los bytes 6 a 7), «found end of file» sobre el final del fichero y «found `1`» sobre el `1`. Las cuatro con `extern` no dan ninguno. En las diez, `PrintModule` escribe, en el orden del fichero, la función sin cuerpo con `none` y la otra con su `(block)` (en la del `1`, con un `(error)` entre las dos)
+why:     una función sin cuerpo es una declaración cuyo código vive fuera de Ki, y solo `#[extern]` lo dice. Sin
+         este test, un `{` que se te olvide dejaría pasar la función en silencio y el error aparecería mucho
+         después, al ejecutarla. Cada fila mata un parser distinto: el que no avisa nunca, el que acepta
+         cualquier atributo, el que mira solo el primero (la de `extern` tras `inline`), el que mira solo el
+         último (la de `extern` antes de `inline`), el que avisa un token tarde o en la `)`, el que tira la
+         función y con ella la siguiente. Y que la función se quede en el árbol evita que su nombre deje de
+         existir y que cada llamada a ella dé otro error
+ref:     TestParser/bodyless_fn_needs_extern_E0201
+
+[T07.03] resolve.collects_top_level_fns                     level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    la resolución recoge una `Def` por cada función del fichero, en orden de aparición, con su módulo, su item, el span de su nombre, su `pub` y su clase; y las del preludio van antes
+input:   "fn a() {}\npub fn b(x: Int) {}\n"
+expect:  ningún diagnóstico y tres `Def` en el programa: la 0 es el `print` del preludio y las del fichero son la 1, `a`, y la 2, `b`. Las dos tienen `Module == 1`, `Kind == DefFn`, el `Item` de su función en el árbol y el `Span` de su nombre (los bytes 3 a 4 y 17 a 18), `Pub` falso en `a` y verdadero en `b`, y `ExternName` vacío
+why:     todo lo que viene después (los nombres de los cuerpos, los tipos, la elaboración a Core) se apoya en estas
+         tablas: un `Module` mal puesto confundiría las funciones del fichero con las del preludio, un `Span` que
+         cubriera la función entera subrayaría de más en cada error de nombre, y una función que se perdiera
+         aquí no existiría para nadie. El `print` del preludio cuenta como definición: por eso las del fichero
+         empiezan en la 1 y el test no puede limitarse a contar dos
+ref:     TestResolve/collects_top_level_fns
+
+[T07.04] resolve.prelude_names_visible                      level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    un nombre del fichero que el fichero no define encuentra las definiciones `pub` del preludio y no las privadas; y una función `extern` toma su nombre del primer argumento de su primer atributo, o ninguno si el atributo no tiene argumentos
+input:   `fn main() { print(1) }`; un preludio escrito a mano con `fn secret() {}` y `pub fn open() {}` y un fichero que nombra `secret` y `open`; un preludio con `#[extern("first", "second")]` y `#[extern("other")]` sobre `pub fn g()`; y un preludio con `#[extern]`, sin argumentos, sobre `pub fn h()`
+expect:  el `print` se resuelve (`ResDef`) a una `Def` de clase `DefExternFn`, del módulo 0, `Pub`, de nombre `print` y con `ExternName == "ki_print_int"`, y no hay diagnósticos; `open` se resuelve a la `Def` del preludio y `secret` no se resuelve a ninguna definición; la `Def` de `g` es `DefExternFn` con `ExternName == "first"`; y la de `h` es `DefExternFn` con `ExternName` vacío y sin ningún diagnóstico
+why:     `print` no está en el fichero y aun así se puede llamar: es lo que significa que el preludio sea implícito.
+         Si la resolución solo mirara el módulo del fichero, ningún programa podría imprimir; si mirara todo lo
+         del preludio, lo privado de la biblioteca se colaría en los programas. Y el `ExternName` es lo que el
+         intérprete buscará para ejecutar la función: el primero de los argumentos, y el primer atributo, si
+         hubiera dos. Un `#[extern]` sin argumentos no tiene un primero que leer: el `ExternName` queda vacío
+         y la resolución sigue, en vez de salirse de una lista vacía y detener el compilador con un panic
+ref:     TestResolve/prelude_names_visible
+
+[T07.05] resolve.duplicate_definition_E0302                 level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    una función definida dos veces en el mismo módulo es un E0302 en la segunda, con la primera como etiqueta secundaria; cada definición de más es otro error que apunta a la primera; y un uso del nombre sigue encontrando la primera
+input:   "fn f() {}\nfn f() {}\nfn main() { f() }\n"; "fn f() {}\nfn f() {}\nfn f() {}\n"; y "#[inline]\nfn f() {}\nfn f() {}\n"
+expect:  con `fn f() {}` dos veces y `fn main() { f() }`: exactamente un E0302 «`f` is defined more than once», con la primaria «redefined here» sobre el nombre de la segunda (bytes 13 a 14), una sola secundaria «first defined here» sobre el de la primera (bytes 3 a 4) y ninguna nota ni ayuda; las tres `Def` del fichero; y el `f` de `main` se resuelve a la primera. Con tres `fn f() {}`: dos E0302, con primarias en los bytes 13 a 14 y 23 a 24 y la misma secundaria, la de la primera, en los dos. Con `#[inline]` sobre la primera de dos: los códigos salen en el orden E0305, E0302
+why:     el error está en la segunda definición, pero quien lo lee necesita ver la primera para decidir cuál de las
+         dos sobra: por eso lleva las dos etiquetas. Si el nombre pasara a ser la última definición, un tercer
+         `f` apuntaría a la segunda en vez de a la primera, y el programa se ejecutaría con una función distinta
+         de la que el primer error señala. Y que las dos definiciones existan aunque una sobre deja al resto del
+         pipeline sin agujeros que tapar
+ref:     TestResolve/duplicate_definition_E0302
+
+[T07.06] resolve.extern_only_in_std_E0304                   level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    `#[extern]` en el fichero del usuario es un E0304 sobre el atributo, también en una función con cuerpo, y la función sigue existiendo como una función corriente, sin nombre `extern`; y el del preludio, que también lo lleva, no da error
+input:   "#[extern(\"ki_x\")]\nfn f()\n" y "#[extern(\"ki_x\")] fn g() {}\nfn main() { g() }\n"
+expect:  con `#[extern("ki_x")]` sobre `fn f()`: exactamente un E0304 «`#[extern]` is only allowed in the standard library», con la primaria «remove the attribute» sobre el atributo (bytes 0 a 17) y sin secundaria, nota ni ayuda, y la única `Def` del fichero es `DefFn` y sin `ExternName`; con el atributo sobre `fn g() {}` y un `g()` en `main`: un E0304, el `g` de `main` se resuelve a una definición y esa `Def` es `DefFn` y sin `ExternName`
+why:     las funciones `extern` son la puerta por la que un programa llega a código que no es Ki; si cualquier
+         fichero pudiera declarar una, un programa podría nombrar una función de Go que no existe y el fallo
+         saldría al ejecutar. Cada prueba de este capítulo carga el preludio, que sí usa el atributo, así que
+         ellas también matan a un E0304 que se diera en todos los módulos. La función se queda: marcar el
+         atributo no debe hacer que `g()` sea además un nombre desconocido. Y se queda como `DefFn`: si el
+         atributo rechazado la dejara en `DefExternFn`, quien ejecute el programa buscaría el código de una
+         función de Go que el usuario se ha inventado
+ref:     TestResolve/extern_only_in_std_E0304
+
+[T07.07] resolve.unknown_attribute_E0305                    level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    cualquier atributo que no sea `extern`, en cualquier módulo, es un E0305 sobre el atributo, uno por atributo
+input:   "#[inline] fn f() {}\n"; "#[a] #[b] fn f() {}\n"; y un preludio `#[inline] pub fn g() {}` con un fichero `fn main() {}`
+expect:  con `#[inline] fn f() {}`: exactamente un E0305 «unknown attribute `inline`», con la primaria «the only attribute in Part I is `#[extern]`» sobre el atributo (bytes 0 a 9) y sin secundaria, nota ni ayuda; con `#[a] #[b] fn f() {}`: dos E0305 sobre `a` (bytes 0 a 4) y sobre `b` (bytes 5 a 9); y con un preludio escrito a mano que tiene `#[inline] pub fn g() {}`: exactamente un diagnóstico, un E0305
+why:     un atributo que nadie entiende es casi siempre una errata (`#[inlne]`) y se perdería sin avisar: el
+         compilador lo ignoraría y el programa haría otra cosa de la que el texto promete. La regla vale para la
+         biblioteca estándar igual que para ti, y por eso el tercer caso: una que solo vigilara el fichero del
+         usuario dejaría al preludio escribir cualquier cosa
+ref:     TestResolve/unknown_attribute_E0305
+
+[T07.08] resolve.user_print_shadows_prelude                 level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    una función del fichero con el nombre de una del preludio no es un E0302: los módulos tienen espacios de nombres distintos, y dentro del fichero el nombre se resuelve primero a la del fichero
+input:   "fn print(x: Int) {}\nfn main() { print(1) }\n"
+expect:  ningún diagnóstico; el `print` de `main` se resuelve a una `Def` del módulo 1, de clase `DefFn` y sin `ExternName`; y el módulo 0 sigue teniendo su `print`, de clase `DefExternFn`
+why:     el preludio es implícito y se puede sombrear (spec 7): un programa no debería romperse porque la
+         biblioteca estándar añada un nombre que él ya usaba. Si el fichero y el preludio compartieran un solo
+         espacio de nombres, definir `print` sería un error por una función que ni escribiste ni ves; y si el
+         preludio ganara, tu `print` nunca se llamaría
+ref:     TestResolve/user_print_shadows_prelude
+
+[T07.09] resolve.main_found                                 level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    `HasMain` y `Main` dicen cuál es la función `main` del programa, que es la del fichero del usuario y no la de otro módulo
+input:   "fn other() {}\nfn main() {}\n"; un preludio `pub fn main() {}` con el fichero `fn f() {}`; y el mismo preludio con el fichero `fn main() {}`
+expect:  con `fn other() {}` y `fn main() {}`: ningún diagnóstico, `HasMain` verdadero y `Main` es una `Def` de nombre `main` y del módulo 1; con un preludio que solo tiene `pub fn main() {}` y un fichero sin ella, `HasMain` es falso; y con una en cada uno, `Main` es la del módulo 1
+why:     `ki run` empieza por `main`, y esto es lo que le dice por dónde. `main` no es la primera definición ni del
+         fichero ni del programa, para que un `Main` que fuera siempre la `Def` 0, o la primera del fichero, no
+         pase por casualidad. Y un `main` del preludio no puede ser el del programa ni taparlo
+ref:     TestResolve/main_found
+
+[T07.10] resolve.missing_main_is_not_a_resolve_error        level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    un fichero sin `main`, o vacío, no es un error de la resolución de nombres
+input:   "fn f() {}\n" y "" (el fichero vacío)
+expect:  `HasMain` es falso y no hay ningún diagnóstico, en los dos casos
+why:     que falte `main` solo importa a quien ejecuta el programa: `ki run` lo avisa con E0303 (capítulo 10), y
+         `ki check` de una biblioteca, o de un fichero a medio escribir, no tiene por qué quejarse. El fichero
+         vacío es el caso extremo: sin ninguna definición, la búsqueda de `main` no debe fallar
+ref:     TestResolve/missing_main_is_not_a_resolve_error
+
+[T07.11] resolve.names_resolve_in_every_expression          level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    los nombres se resuelven en cualquier sitio donde una expresión pueda tener hijos, en el cuerpo de cualquier función, y también los que se definen más abajo y la propia función
+input:   tres funciones (`helper`, `main` y `later`, esta última tras `main`) con un nombre en cada hueco de cada clase de expresión: `let a = print`, `let b: Int = print`, `print(print)`, `-print`, `!print`, `print + print`, `print && print`, `if print { print } else if print { print } else { print }`, `{ print }`, y `later`, `main` y `helper` como sentencias
+expect:  no hay diagnósticos; el fichero tiene exactamente 21 nombres, y cada uno se resuelve a una definición: los `print` a la del módulo 0 y los demás (`helper`, `later`, `main`) a la del mismo nombre del módulo 1; y después de `Resolve`, cada módulo imprime exactamente lo mismo que un segundo análisis sintáctico del mismo texto, que ningún pase ha tocado
+why:     los dos pases existen para esto: `later` se usa antes de definirse y `main` se llama a sí misma, y los dos
+         tienen que funcionar. Y el recorrido es una función con un `case` por clase de expresión: el que olvide
+         una rama deja sin resolver los nombres que cuelgan de ella sin que ningún otro test lo note. Hay un
+         `print` en un `let`, en un `let` con tipo, en la llamada y en su argumento, tras `-`, tras `!`, a cada
+         lado de `+` y de `&&`, en la condición y en las tres ramas de un `if` con `else if`, y en un bloque
+         suelto; y los cuerpos de `helper` y de `later` tienen cada uno su propio nombre. Y la resolución lee los árboles sin
+         tocarlos (spec 7.2): una que reordenara los items para ser determinista, o reescribiera un nombre ya
+         resuelto, dejaría a los pases siguientes con un árbol distinto del que enseña `ki emit ast`
+ref:     TestResolve/names_resolve_in_every_expression
+
+[T07.12] resolve.tables_are_indexed_by_id                   level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    la resolución deja, para cada módulo, una tabla de expresiones, una de sentencias y una de items con una fila por cada nodo del árbol, también en el preludio
+input:   "fn f(x: Int) -> Int {\n  let y = x\n  y\n}\n#[extern(\"a\")] fn g()\n"
+expect:  dos módulos resueltos; en cada uno `ExprRes` tiene tantas filas como expresiones, `LetLocal` como sentencias y `ParamLocals` como items; y el fichero tiene expresiones, sentencias y exactamente dos items, para que la comprobación diga algo
+why:     los pases de después indexan estas tablas con el id de un nodo sin mirar el largo: una tabla corta es un
+         `index out of range` en el peor sitio, lejos de su causa. `LetLocal` y `ParamLocals` aún no las rellena
+         nadie (las rellenan los ámbitos de la sesión siguiente), pero su tamaño ya es el de su contrato, y este
+         test lo fija
+ref:     TestResolve/tables_are_indexed_by_id
+
+[T07.13] pipeline.parse_source_puts_prelude_first           level: core
+kind:    unit (go test)      file: internal/driver/pipeline_test.go
+case:    `ParseSource` lee el preludio incrustado y el fichero, y los deja como módulo 0 y módulo 1
+input:   `ParseSource("a.ki", "fn main() {}\n")` en una `Session` nueva
+expect:  dos módulos y `User == 1`; `Resolved` es nulo hasta `Analyze`; el módulo 0 es el fichero `std/prelude.ki`, con texto que contiene `ki_print_int`, un item y un atributo; el módulo 1 es `a.ki`, con su texto, un item (`main`) y ningún atributo; ni diagnósticos ni salida por stderr
+why:     `sema.Resolve` da por hecho que el módulo 0 es el preludio, y todo el que construya un `Frontend` tiene que
+         respetarlo. El nombre `std/prelude.ki` es el que verás en un error del preludio, si algún día lo hay, y
+         nadie más lo observa. Y que cada módulo sea el árbol de su fichero, y no el del otro, lo decide aquí el
+         orden en que se leen
+ref:     TestPipeline/parse_source_puts_prelude_first
+
+[T07.14] pipeline.unreadable_file                           level: core
+kind:    unit (go test)      file: internal/driver/pipeline_test.go
+case:    un fichero que no se puede leer no llega a ningún pase: `LoadAndParse` lo dice por stderr y devuelve `nil, false`, y `ki emit tokens` y `ki emit ast` salen con 1
+input:   la ruta `/nonexistent/x.ki`, con `LoadAndParse`, con `ki emit tokens` y con `ki emit ast`
+expect:  `LoadAndParse` devuelve `nil` y falso, stderr es exactamente una línea que empieza por "error: cannot read file `/nonexistent/x.ki`: " y no hay diagnósticos; y cada uno de los dos comandos sale con 1, con stdout vacío y en stderr la misma línea de error, carácter por carácter, que escribió `LoadAndParse`
+why:     el código de salida 1 del fichero ilegible vivía en un solo sitio, y al cargar el preludio cada comando
+         pasó a decidirlo por su cuenta. Este test les pide a todos lo mismo, porque el que se olvidara de
+         comprobarlo seguiría con un fichero que no existe y acabaría en un `nil` sin explicación (`ki check` tiene
+         su propio test, `TestCLI/check_missing_file`)
+ref:     TestPipeline/unreadable_file
+
+[T07.15] pipeline.analyze_does_not_write                    level: core
+kind:    unit (go test)      file: internal/driver/pipeline_test.go
+case:    `Analyze` informa al sink y no escribe: quien decide cuándo salen los diagnósticos es el comando
+input:   `ParseSource("a.ki", "fn f() {}\nfn f() {}\n")` y `Analyze` sobre su resultado
+expect:  tras `Analyze`, `Resolved` ya no es nulo, el sink tiene exactamente un diagnóstico, un E0302, y no se ha escrito nada en stderr
+why:     `ki emit` escribe primero su volcado y después los diagnósticos, y los tests de `testsupport` leen el sink
+         sin que nada salga por pantalla. Un `Analyze` que escribiera por su cuenta rompería el orden de los
+         dos y haría que cada diagnóstico saliera dos veces cuando el comando llamara a `ReportAll`
+ref:     TestPipeline/analyze_does_not_write
+
+[T07.16] pipeline.emit_ast_shows_syntax_only                level: core
+kind:    unit (go test)      file: internal/driver/pipeline_test.go
+case:    `ki emit ast` imprime el árbol del fichero y no informa de errores de nombres: solo los del lexer y del parser
+input:   un fichero con "fn f() {}\nfn f() {}\n"
+expect:  con dos `fn f() {}` seguidas: código 0, stdout exactamente las dos líneas `(fn f (params) (ret _) (block))` y stderr vacío
+why:     `emit ast` sirve para ver lo que el parser entendió; un error de nombres no es del árbol, y mezclarlo
+         con él haría que el volcado de un fichero sintácticamente bueno acabara en código 1. Los errores de
+         nombres los da `ki check` (`tests/errors/ch07/duplicate_definition.ki`)
+ref:     TestPipeline/emit_ast_shows_syntax_only
+
+[T07.17] resolve.duplicate_fn_is_reported_by_check          level: core
+kind:    diag                file: tests/errors/ch07/duplicate_definition.ki
+case:    `ki check` pasa el fichero por la resolución de nombres y da el E0302 de una función definida dos veces, también cuando el fichero tiene un error de sintaxis
+input:   `fn f() {}` dos veces, `fn g() { let = 1 }` y `fn main() {}`
+expect:  sale con 1 y los únicos diagnósticos son un E0302 en la línea 4, columna 4, el nombre de la segunda `f`, y un E0201 en la línea 5, columna 14, el `=` que ocupa el sitio del nombre del `let`; el preludio y `main` no dan ninguno
+why:     los tests de `TestResolve` llaman a `Analyze` a mano; este es el que comprueba que el comando de
+         verdad lo llama. Si `ki check` solo leyera y parseara, todas las pruebas de la resolución seguirían en
+         verde y ningún usuario vería nunca un error de nombres. El `let = 1` es el error de sintaxis que fija
+         cuándo se llama: `ki check` analiza los árboles aunque el parser haya informado, porque los nodos de
+         error no nombran nada. Un comando que se saltara el análisis en cuanto hubiera un error de sintaxis
+         escondería los de nombres hasta que arreglaras los demás, y solo este fichero lo notaría
+ref:     tests/errors/ch07/duplicate_definition.ki

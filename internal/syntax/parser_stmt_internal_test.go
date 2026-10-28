@@ -426,7 +426,7 @@ func TestParseStmt(t *testing.T) {
 			// The types of the module are numbered in the order they are read, so
 			// the one of the `let` is not the first.
 			{"fn f(a: Bool) -> Bool { let b: Int = 1\n a }", "(fn f (params (a Bool)) (ret Bool) (block (let b Int 1) a))\n"},
-			{"pub fn a(x: Int)\nfn b() { x }", "(pub fn a (params (x Int)) (ret _) none)\n(fn b (params) (ret _) (block x))\n"},
+			{"#[extern(\"a\")] pub fn a(x: Int)\nfn b() { x }", "(pub fn a (attrs (extern \"a\")) (params (x Int)) (ret _) none)\n(fn b (params) (ret _) (block x))\n"},
 			{"fn a() {\n  if c {\n    1\n  } else {\n    2\n  }\n}\n",
 				"(fn a (params) (ret _) (block (if c (block 1) (block 2))))\n"},
 		}
@@ -570,6 +570,8 @@ func TestParseStmt(t *testing.T) {
 			{"fn f() { if a }", "}", 0, "expected `{`, found `}`"},
 			{"fn f() { if a\n{ 1 } }", "\n", 0, "expected `{`, found newline"},
 			{"fn f() { if a { 1 } else 2 }", "2", 0, "expected `{`, found `2`"},
+			// a function with no body and no `#[extern]`
+			{"fn f()\nfn g() {}", "\n", 0, "expected `{`, found newline"},
 			// newline
 			{"fn f() { f() x }", "x", 0, "expected newline, found `x`"},
 			{"fn f() { let a = 1 b }", "b", 0, "expected newline, found `b`"},

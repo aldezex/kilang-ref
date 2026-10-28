@@ -31,30 +31,40 @@ func runEmit(s *Session, c *command, args []string) int {
 // emitTokens is `ki emit tokens`: it lexes FILE and prints the tokens on stdout,
 // one per line (see syntax.DumpTokens), and then the diagnostics on stderr. It
 // exits with 1 if the file has errors, but only after both are written, so the
-// dump of a file with errors shows what the lexer made of it.
+// dump of a file with errors shows what the lexer made of it. It shows the
+// tokens of FILE alone: the prelude, which the other targets load as module 0,
+// is not lexed.
 func emitTokens(s *Session, c *command, args []string) int {
-	id, code, done := fileArgs(s, c, args)
+	path, code, done := fileArgs(s, c, args)
 	if done {
 		return code
+	}
+	id, ok := s.load(path)
+	if !ok {
+		return 1
 	}
 	tb := syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
 	return finishEmit(s, c, syntax.DumpTokens(&tb, &s.Sources, s.Interner))
 }
 
-// emitAST is `ki emit ast`: it lexes and parses FILE and prints the syntax tree
-// on stdout, one line per item (see syntax.PrintModule), and then the
-// diagnostics on stderr. As with emit tokens, the exit code is 1 if the file has
-// errors, but only after both are written, so the dump of a file with syntax
-// errors shows what the parser made of it, with an (error) where it could not
-// read.
+// emitAST is `ki emit ast`: it lexes and parses FILE, with the prelude, and
+// prints the syntax tree of FILE on stdout, one line per item (see
+// syntax.PrintModule), and then the diagnostics on stderr. The prelude's tree is
+// not printed. As with emit tokens, the exit code is 1 if the file has errors,
+// but only after both are written, so the dump of a file with syntax errors
+// shows what the parser made of it, with an (error) where it could not read.
+// The errors are those of the lexer and the parser: this target does not
+// analyze the trees, because the dump is of the syntax.
 func emitAST(s *Session, c *command, args []string) int {
-	id, code, done := fileArgs(s, c, args)
+	path, code, done := fileArgs(s, c, args)
 	if done {
 		return code
 	}
-	tb := syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
-	m := syntax.Parse(&tb, id, s.Interner, &s.Sink)
-	return finishEmit(s, c, syntax.PrintModule(m, s.Interner))
+	f, ok := s.LoadAndParse(path)
+	if !ok {
+		return 1
+	}
+	return finishEmit(s, c, syntax.PrintModule(f.Modules[f.User], s.Interner))
 }
 
 // finishEmit ends every target of `ki emit` the same way, so that the order

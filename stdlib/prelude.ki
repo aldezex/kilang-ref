@@ -1,0 +1,3 @@
+// The Ki prelude: names every module sees without importing them.
+#[extern("ki_print_int")]
+pub fn print(x: Int)

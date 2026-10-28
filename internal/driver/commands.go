@@ -5,8 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-
-	"github.com/aldezex/kilang/internal/base"
 )
 
 // command is one word ki understands after its own name, such as "version",
@@ -73,42 +71,31 @@ func parseFlags(s *Session, c *command, fs *flag.FlagSet, args []string) (code i
 
 // fileArgs reads the words after the name of c for a command whose line is
 // `[--diagnostics=human|short|json] FILE`, as check and emit are. It sets the
-// session's diagnostic format from the flag and loads FILE into s.Sources,
-// returning its id.
+// session's diagnostic format from the flag and returns the path of FILE, which
+// the command reads with LoadAndParse (or load, if it needs the file alone).
 //
 // When the command line is already answered it returns that answer's exit code
 // and done == true, and the command must return it. That is the case for a
-// request for help (code 0), for a usage error (2) and for a file that cannot
-// be read (1): the last prints "error: cannot read file `<path>`: <reason>" on
-// stderr, as plain text whatever the diagnostic format.
-func fileArgs(s *Session, c *command, args []string) (id base.FileID, code int, done bool) {
+// request for help (code 0) and for a usage error (2).
+func fileArgs(s *Session, c *command, args []string) (path string, code int, done bool) {
 	fs := newFlagSet(c)
 	diagnostics := fs.String("diagnostics", "human", "how to write diagnostics: human, short or json")
 	if code, done := parseFlags(s, c, fs, args); done {
-		return 0, code, true
+		return "", code, true
 	}
 	format, err := parseDiagFormat(*diagnostics)
 	if err != nil {
-		return 0, usageError(s, c, err), true
+		return "", usageError(s, c, err), true
 	}
 	switch fs.NArg() {
 	case 0:
-		return 0, usageError(s, c, fmt.Errorf("missing FILE")), true
+		return "", usageError(s, c, fmt.Errorf("missing FILE")), true
 	case 1:
 	default:
-		return 0, usageError(s, c, fmt.Errorf("unexpected argument %q", fs.Arg(1))), true
+		return "", usageError(s, c, fmt.Errorf("unexpected argument %q", fs.Arg(1))), true
 	}
 	s.Format = format
-
-	path := fs.Arg(0)
-	id, err = s.Sources.Load(path, path)
-	if err != nil {
-		// stderr is the last place left to report this; if it fails too there
-		// is nowhere else to say so.
-		_, _ = fmt.Fprintf(s.Stderr, "error: %v\n", err)
-		return 0, 1, true
-	}
-	return id, 0, false
+	return fs.Arg(0), 0, false
 }
 
 // runVersion prints ki's version and, in parentheses, the version of Go that

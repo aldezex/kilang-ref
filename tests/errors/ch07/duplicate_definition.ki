@@ -1,0 +1,6 @@
+// test: T07.17
+// run: check
+fn f() {}
+fn f() {}  // ERROR(E0302) @4
+fn g() { let = 1 }  // ERROR(E0201) @14
+fn main() {}

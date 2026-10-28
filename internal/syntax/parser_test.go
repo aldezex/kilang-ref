@@ -106,13 +106,74 @@ func TestParser(t *testing.T) {
 	})
 	t.Run("extern_then_item", func(t *testing.T) {
 		// A function has a body when a `{` follows on the same line. Without
-		// one it ends at the line break, and the next item is a new item.
-		wantModule(t, "no return type", "pub fn a(x: Int)\nfn b() {}",
-			"(pub fn a (params (x Int)) (ret _) none)\n(fn b (params) (ret _) (block))\n")
-		wantModule(t, "return type", "fn a() -> Int\nfn b() {}",
-			"(fn a (params) (ret Int) none)\n(fn b (params) (ret _) (block))\n")
-		wantModule(t, "last item", "fn a() {}\nfn b() -> ()",
-			"(fn a (params) (ret _) (block))\n(fn b (params) (ret ()) none)\n")
+		// one, which only an `#[extern]` function may do, it ends at the line
+		// break, and the next item is a new item.
+		wantModule(t, "no return type", "#[extern(\"a\")] pub fn a(x: Int)\nfn b() {}",
+			"(pub fn a (attrs (extern \"a\")) (params (x Int)) (ret _) none)\n(fn b (params) (ret _) (block))\n")
+		wantModule(t, "return type", "#[extern(\"a\")] fn a() -> Int\nfn b() {}",
+			"(fn a (attrs (extern \"a\")) (params) (ret Int) none)\n(fn b (params) (ret _) (block))\n")
+		wantModule(t, "last item", "fn a() {}\n#[extern(\"b\")] fn b() -> ()",
+			"(fn a (params) (ret _) (block))\n(fn b (attrs (extern \"b\")) (params) (ret ()) none)\n")
+	})
+	t.Run("bodyless_fn_needs_extern_E0201", func(t *testing.T) {
+		// A function without a body is a declaration whose code lives
+		// elsewhere, and only the attribute `extern` says so. Anywhere else the
+		// missing `{` is an E0201 at the token that is where the `{` should be,
+		// and the function stays in the tree, with its name and no body, so
+		// that the rest of the file can still use it. Every row has one
+		// function that lacks its body and, after it, the evidence that the
+		// parser went on: the item that follows. lo and hi are the bytes of the
+		// token found (a line feed, the end of the file or a token); a row with
+		// no message must be accepted without any diagnostic.
+		rows := []struct {
+			name, src string
+			msg       string
+			lo, hi    uint32
+			want      string
+		}{
+			{"brief", "fn f()\nfn g() {}", "expected `{`, found newline", 6, 7,
+				"(fn f (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"return type", "fn f() -> Int\nfn g() {}", "expected `{`, found newline", 13, 14,
+				"(fn f (params) (ret Int) none)\n(fn g (params) (ret _) (block))\n"},
+			{"pub", "pub fn f(x: Int)\nfn g() {}", "expected `{`, found newline", 16, 17,
+				"(pub fn f (params (x Int)) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"end of file", "fn g() {}\nfn f()", "expected `{`, found end of file", 16, 16,
+				"(fn g (params) (ret _) (block))\n(fn f (params) (ret _) none)\n"},
+			{"another token", "fn f() 1\nfn g() {}", "expected `{`, found `1`", 7, 8,
+				"(fn f (params) (ret _) none)\n(error)\n(fn g (params) (ret _) (block))\n"},
+			{"an attribute that is not extern", "#[inline]\nfn f()\nfn g() {}", "expected `{`, found newline", 16, 17,
+				"(fn f (attrs (inline)) (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"extern with arguments", "#[extern(\"x\")]\nfn f()\nfn g() {}", "", 0, 0,
+				"(fn f (attrs (extern \"x\")) (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"extern without arguments", "#[extern]\nfn f()\nfn g() {}", "", 0, 0,
+				"(fn f (attrs (extern)) (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"extern after another attribute", "#[inline] #[extern(\"x\")] pub fn f()\nfn g() {}", "", 0, 0,
+				"(pub fn f (attrs (inline) (extern \"x\")) (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+			{"extern before another attribute", "#[extern(\"x\")] #[inline] pub fn f()\nfn g() {}", "", 0, 0,
+				"(pub fn f (attrs (extern \"x\") (inline)) (params) (ret _) none)\n(fn g (params) (ret _) (block))\n"},
+		}
+		for _, row := range rows {
+			m, id, in, sink := parseFile(t, row.src)
+			diags := sink.All()
+			if row.msg == "" {
+				if len(diags) != 0 {
+					t.Errorf("%s: %q reported %v, want nothing", row.name, row.src, diags)
+				}
+			} else if len(diags) != 1 {
+				t.Errorf("%s: %q reported %d diagnostics %v, want exactly 1", row.name, row.src, len(diags), diags)
+			} else {
+				d := diags[0]
+				wantLabel := diag.Label{Span: base.Span{File: id, Lo: row.lo, Hi: row.hi}}
+				if d.Code != diag.E(201) || d.Message != row.msg || d.Primary != wantLabel ||
+					len(d.Secondary) != 0 || len(d.Notes) != 0 || d.Help != "" {
+					t.Errorf("%s: %q reported %+v, want E0201 %q with the primary label %+v and nothing else",
+						row.name, row.src, d, row.msg, wantLabel)
+				}
+			}
+			if got := syntax.PrintModule(m, in); got != row.want {
+				t.Errorf("%s: %q printed\n%s\nwant\n%s", row.name, row.src, got, row.want)
+			}
+		}
 	})
 	t.Run("empty_module", func(t *testing.T) {
 		for _, src := range []string{"", "\n\n", "// only a comment\n", "/* a */ // b\n"} {
@@ -190,10 +251,10 @@ func TestParser(t *testing.T) {
 		}
 		// An item without a body ends at the end of its signature, not at the
 		// line break that follows it.
-		const extern = "fn h(x: Int)\n"
+		const extern = "#[extern(\"h\")] fn h(x: Int)\n"
 		m, id, _, _ = parseFile(t, extern)
 		it = m.ItemNodes.Get(m.Items[0])
-		if got, want := it.Span, (base.Span{File: id, Lo: 0, Hi: uint32(len("fn h(x: Int)"))}); got != want {
+		if got, want := it.Span, (base.Span{File: id, Lo: 0, Hi: uint32(len("#[extern(\"h\")] fn h(x: Int)"))}); got != want {
 			t.Errorf("item without a body: span %v, want %v", got, want)
 		}
 
