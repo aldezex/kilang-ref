@@ -1026,7 +1026,7 @@ ref:     TestErrorDocs/catalog_matches_the_codes_in_the_source
 kind:    unit (go test)      file: tests/errors_docs_test.go
 case:    cada fichero del catálogo empieza por `# EXXXX: <mensaje>`, tiene un texto antes del primer encabezado, al menos un ejemplo erróneo bajo `## Erroneous example` y al menos uno corregido bajo `## Corrected`
 input:   los ficheros de `docs/errors`
-expect:  todos cumplen las reglas; las palabras de la valla son `erroneous` o `corrected` y, tras ellas, solo `escaped`, `run` y `also=`
+expect:  todos cumplen las reglas; las palabras de la valla son `erroneous` o `corrected` y, tras ellas, solo `escaped`, `run`, `also=` y `pending=` (esta con un valor y solo en un ejemplo erróneo)
 why:     el catálogo lo incrusta `ki explain` más adelante, y una forma fija es lo que le deja leerlo sin adivinar.
          El test se prueba a sí mismo en `checks_catch_bad_catalogs`, que escribe catálogos malos y exige que cada
          comprobación los rechace
@@ -1034,9 +1034,9 @@ ref:     TestErrorDocs/documents_have_the_fixed_shape
 
 [T07.87] errordocs.erroneous_examples_report_their_code     level: core
 kind:    unit (go test)      file: tests/errors_docs_test.go
-case:    cada ejemplo erróneo, ejecutado con `ki check --diagnostics=json`, da al menos un diagnóstico con el código de su fichero, y ningún otro código que no esté en la lista `also=` de su valla; y cada código de esa lista aparece de verdad
+case:    cada ejemplo erróneo, ejecutado con `ki check --diagnostics=json`, da al menos un diagnóstico con el código de su fichero, y ningún otro código que no esté en la lista `also=` de su valla; y cada código de esa lista aparece de verdad. La excepción es el ejemplo con `pending=`: se ejecuta igual, pero no se le exige su código ni se miran los demás, y falla si ya lo da
 input:   los ejemplos erróneos de los ficheros de `docs/errors`
-expect:  todos los ejemplos erróneos (con `escaped` decodificados con `strconv.Unquote`); los de E0106, E0108 y E0109 declaran `also=E0201`
+expect:  todos los ejemplos erróneos (con `escaped` decodificados con `strconv.Unquote`); los de E0106, E0108 y E0109 declaran `also=E0201`, y los de E0401 y E0405 llevan `pending=T36`
 why:     un ejemplo que no falla con su código enseña un error que no es: se prueba en cada CI. La palabra `also`
          existe porque hoy una cadena, un carácter o un flotante no pueden estar en una expresión y `ki check` añade
          un E0201 al literal; como cada código de la lista tiene que aparecer, la palabra se borra sola, a la fuerza,

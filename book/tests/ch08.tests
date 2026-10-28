@@ -137,3 +137,159 @@ why:     la comprobación de occurs es lo que impide construir un tipo infinito:
          pasos, así que un recorrido que mirara cada función dos o tres veces también pasaría. Un programa
          corto llega a un tipo así (`p1(p0, p0)`, `p2(p1, p1)`…), y el occurs check corre en cada unión
 ref:     TestTypeTable/occurs
+
+[T08.10] unify.same_type_ok                                 level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    dos tipos que ya son el mismo no necesitan nada: `Unify` da `true`, no informa de nada y no liga ninguna variable, aunque uno sea una variable que representa al otro o aunque sean dos funciones del mismo aspecto que la tabla guarda como nodos distintos
+input:   `Int` con `Int`, `Bool` con `Bool`, `()` con `()` y `(Int) -> Bool` con el mismo tipo pedido otra vez; una variable sin ligar con ella misma; una variable ligada a otra sin ligar, en los dos órdenes; una variable ligada a `Int` con `Int`, y `Int` con ella; y `(c) -> Int` con `(Int) -> Int`, con `c` ligada a `Int`, en los dos órdenes
+expect:  las once llamadas dan `true` y ninguna informa de un diagnóstico; la variable que se unió consigo misma y la variable sin ligar a la que apunta la otra siguen sin ligar; y `(c) -> Int` y `(Int) -> Int` son dos ids distintos, de modo que el test falla si dejaran de serlo y la fila ya no probara nada
+why:     unificar una variable con ella misma tiene que acabar antes del occurs check: `Occurs(a, a)` es
+         verdadero y daría un E0405 falso, y ligar `a` a `a` dejaría una cadena que `Resolve` recorre sin
+         parar. Y los ids se resuelven antes de compararlos: una variable ligada a `Int` es `Int`. La
+         tabla compara los parámetros de una función tal como vienen, así que `(c) -> Int` y `(Int) -> Int`
+         son dos nodos, y `Unify` los tiene que dar por iguales mirando dentro
+ref:     TestUnify/same_type_ok
+
+[T08.11] unify.var_binds_then_matches                       level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    una variable sin ligar se liga al tipo con el que se unifica, esté en el lado esperado o en el hallado, y desde entonces es ese tipo: unirla con otro da un E0401 que la deja como estaba; dos variables unidas pasan a ser una, y una variable puede ligarse a un tipo función
+input:   `a ~ Int` y después `a ~ Bool`; `Bool ~ b` y después `Int ~ b`; `c ~ d`, `d ~ Int` y `c ~ Bool`; `f ~ (Int) -> Bool` y después `f ~ Int`; todas con la razón de un `let` con anotación
+expect:  las ligaduras dan `true` sin diagnósticos y la variable resuelve al tipo (`a` y `c` a `Int`, `b` a `Bool`, y `f` se escribe `(Int) -> Bool`; tras `c ~ d`, las dos resuelven a la misma variable sin ligar); cada unión que falla da `false` y exactamente un diagnóstico, igual campo por campo a: E0401 `mismatched types`, primaria en el span hallado con «expected `Int`, found `Bool`» (en la última, «expected `(Int) -> Bool`, found `Int`»), secundaria en el span de la razón con «expected because of this annotation», y ninguna nota, ayuda ni fix-it; después de fallar, `a` sigue resolviendo a `Int`
+why:     el primer tipo que se une a una variable es el que vale para el resto del programa: sin la ligadura,
+         `a ~ Int` seguido de `a ~ Bool` daría dos `true` y el error de tipos no saldría nunca. Y si `Unify`
+         no resolviera antes de comparar, la segunda unión volvería a ligar `a` a `Bool` en vez de fallar.
+         La etiqueta dice `Int` y no `a`, porque `Show` escribe lo que la variable ya es
+ref:     TestUnify/var_binds_then_matches
+
+[T08.12] unify.function_types_componentwise                 level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    dos tipos función se unifican parte a parte, los parámetros de primero a último y después el resultado; la primera parte que no cuadra es el error, que se informa una sola vez con los dos tipos en la etiqueta, escritos como los escribe `Show`: cortados a 256 bytes si son más largos (T08.03); las variables de las partes que sí cuadran quedan ligadas, el recorrido llega hasta el fondo de un tipo muy anidado, y no baja por todos los caminos cuando un tipo lleva el mismo tipo dos veces en cada nivel, ni cuando lo que hay al fondo no cuadra: entonces el error escribe los dos tipos cortados; y toma cada pareja de tipos función por separado, de modo que un mismo tipo de un lado frente a dos distintos del otro sigue siendo un error
+input:   pares de funciones que difieren en el resultado, en el primero, el de en medio o el último de tres parámetros, en el orden de dos, dentro de un parámetro, dentro de un resultado y en tres partes a la vez; una función de un parámetro contra `Int` y `Int` contra ella, una función sin parámetros contra `Int` y `Int` contra ella, `Int` contra `Bool` y `()` contra `Int`; `(a, c) -> a` con `(Bool, Int) -> Bool` y `(Bool) -> Int` contra `(x) -> y`; `(p, p) -> Int` con `(Int, Bool) -> Int` y `(q) -> Int` con `(Int) -> Bool`; tres cadenas de 3000 funciones, `(…((T) -> Int)…) -> Int`, con `T` igual a `Int`, a una variable ligada a `Int` y a `Bool`; y dos pares de tipos de 40 niveles, cada nivel `(t, t) -> Int` con `t` el nivel de abajo, que llevan el mismo tipo dos veces en cada nivel (40 funciones por lado y 2^40 caminos, sin ninguna función en común): uno acaba en dos variables sin ligar y el otro en `Int` y en una variable ligada a `Int`; y un par más de 40 niveles, uno que acaba en `Int` y otro en `Bool`; y, con `pf` una variable ligada a `(Int) -> Int` y `cv` otra ligada a `Int`, `(pf, pf) -> Int` contra `((cv) -> Int, (Int) -> Bool) -> Int` y la misma pareja con los lados cambiados
+expect:  cada par que no cuadra da `false` y exactamente un E0401 con la primaria «expected `E`, found `F`», donde `E` y `F` son los dos tipos tal como se pidieron, escritos como los escribe `Show` (por ejemplo «expected `(Bool, Int, Int) -> Int`, found `(Int, Int, Int) -> Int`»), la secundaria «expected because of this annotation» y nada más; las que llevan variables dan `true` sin diagnósticos y después `(a, c) -> a` se escribe `(Bool, Int) -> Bool` y `(x) -> y`, `(Bool) -> Int`; en `(p, p) -> Int` contra `(Int, Bool) -> Int` el error sale en el segundo parámetro y la etiqueta ya enseña `p` como `Int` («expected `(Int, Int) -> Int`, found `(Int, Bool) -> Int`»), y `p` sigue siendo `Int`; en `(q) -> Int` contra `(Int) -> Bool` la etiqueta enseña `q` como `Int`, porque el parámetro se unifica antes que el resultado; las cadenas sobre `Int` y sobre la variable, que son dos ids distintos, dan `true` sin diagnósticos, y la de `Bool` contra la de `Int` da un solo E0401 con las dos cadenas como las escribe `Show`: las dos empiezan con 3000 paréntesis, así que `Show` corta las dos igual, en 256 paréntesis y `…` (T08.03), y la etiqueta no dice cuál es cuál; los dos pares de 40 niveles dan `true` sin diagnósticos antes de 10 segundos (pasado el plazo el test falla con un mensaje) y, en el primero, las dos variables del fondo quedan siendo una; el par que acaba en `Int` y en `Bool` da `false` y un solo E0401, igual campo por campo, con la primaria «expected `E`, found `F`», donde `E` y `F` son lo que escribe `Show` de cada tipo (cortado a 256 bytes y acabado en `…`, como dice T08.03), la secundaria de siempre y nada más, también antes de 10 segundos; `(pf, pf) -> Int` contra `((cv) -> Int, (Int) -> Bool) -> Int` da `false` y un solo E0401 «expected `((Int) -> Int, (Int) -> Int) -> Int`, found `((Int) -> Int, (Int) -> Bool) -> Int`», y con los lados cambiados da `false` y el E0401 con esos dos tipos cambiados de sitio
+why:     un tipo función es igual a otro cuando lo son sus partes, no sus ids. Y la equivocación es una: si
+         cada parte que no cuadra diera su diagnóstico, un error en una firma saldría tres veces. La etiqueta
+         enseña los tipos y no la parte que falla porque son los que tú escribiste y reconoces (si son tan
+         largos que `Show` los corta, T08.03, enseña el principio de cada uno). El
+         orden se nota en lo que enseña la etiqueta, por eso hay una fila para «los parámetros de primero a
+         último» y otra para «los parámetros antes que el resultado». Un recorrido que soltara pares, o que
+         se parara en el primer nivel, aceptaría una cadena que difiere en el fondo. Y dos tipos que llevan el
+         mismo tipo dos veces en cada nivel tienen pocas funciones y muchísimos caminos: un recorrido que
+         bajara por todos tardaría 2^40 pasos en dos tipos de 40 niveles, que con el comprobador de la sesión
+         siguiente construye un programa de unas pocas líneas (`a1(a0, a0)`, `a2(a1, a1)`…, igual con
+         `b`, y un `if` que une `aN` con `bN`).
+         El test corta la espera a los 10 segundos y falla con un mensaje; no cuenta los pasos, así que un
+         recorrido que bajara dos veces por cada par también pasaría. Las dos primeras filas son aciertos.
+         La tercera es un fallo, y su etiqueta escribe los dos tipos, que enteros serían 2^40 trozos de texto
+         cada uno: no lo son porque `Show` los corta, y la fila falla si el error no acaba o si su etiqueta
+         no es el texto cortado. Que el texto esté cortado no quiere decir que sea útil: la cadena de 3000
+         niveles da dos etiquetas iguales, hechas solo de paréntesis. El tope evita un texto sin fin, no
+         promete que enseñe dónde se distinguen los tipos.
+         La memoria con la que el recorrido no repite una pareja es de parejas, no de un solo lado: `pf` es
+         una variable ligada a `(Int) -> Int`, así que sus dos usos son el mismo nodo, y ese nodo se encuentra
+         con dos tipos distintos del otro lado, `(cv) -> Int` y `(Int) -> Bool`. Si la memoria guardara solo
+         el tipo esperado (o, en la fila al revés, solo el encontrado), la segunda pareja se daría por hecha
+         con la primera y un programa mal tipado se aceptaría. La primera fila mata la clave del tipo
+         esperado solo, y la segunda, la del encontrado solo
+ref:     TestUnify/function_types_componentwise
+
+[T08.13] unify.arity_mismatch_is_E0401                      level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    dos funciones con distinto número de parámetros no se unifican, aunque los parámetros que tienen en común coincidan: es un E0401 con los dos tipos, y antes de verlo no se liga ninguna variable
+input:   `(Int) -> Int` con `(Int, Int) -> Int` y al revés; `() -> Int` con `(Int) -> Int` y al revés; `((Int) -> Int) -> Int` con `((Int, Int) -> Int) -> Int`; `(x) -> Int` con `(y, y) -> Int`, con `x` e `y` variables sin ligar; y una función de 51 parámetros `Int` y una variable `z`, contra `(w) -> Int`, con `z` y `w` sin ligar
+expect:  cada par da `false` y exactamente un E0401 con la primaria «expected `E`, found `F`» con los dos tipos, la secundaria «expected because of this annotation» y nada más; en el penúltimo par la etiqueta es «expected `(a) -> Int`, found `(b, b) -> Int`» (dos variables distintas se llaman distinto en una misma etiqueta) y `x` e `y` siguen sin ligar y siendo variables distintas; en el último, los 51 `Int` y sus comas llenan los 256 bytes que `Show` escribe como mucho (T08.03), la `z` no cabe y la etiqueta es «expected `(`, cincuenta y una veces `Int, ` y `…`, found `(a) -> Int`»
+why:     si la comparación se parara en la lista más corta, `(Int)` y `(Int, Int)` se darían por iguales y
+         una llamada con un argumento de más compilaría. Comprobar la aridad antes de unificar las partes
+         evita además ligar variables de una función que ya se sabe que no encaja. Y la etiqueta escribe los
+         dos tipos con los mismos nombres: si cada uno empezara en `a`, `(a) -> Int` y `(a, a) -> Int`
+         parecerían hablar de la misma variable. Y un nombre que el corte deja fuera no se gasta: si la `z`,
+         que no llega a escribirse, se llevara la `a`, la `w` de al lado sería la `b`, y la etiqueta
+         hablaría de una variable que no aparece
+ref:     TestUnify/arity_mismatch_is_E0401
+
+[T08.14] unify.operand_reason_names_expected_type           level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    la secundaria de un operando nombra el operador (`Detail`) y el tipo esperado, en plural para dos operandos (`Index` 2) y en singular, con «an» si el nombre del tipo empieza por vocal y con «a» si no, para uno (`Index` 1); un `Index` que no es 1 ni 2 y una clase de razón que no existe son errores del comprobador
+input:   seis uniones que fallan con la razón de operando: `&&` con `Bool` esperado y `Int` hallado (`Index` 2), `+` con `Int` y `Bool` (2), `-` con `Int` y `Bool` (1), `!` con `Bool` y `Int` (1), `!` con `()` esperado e `Int` hallado (1) y `-` con `(Int) -> Int` esperado y `Bool` hallado (1); una unión que cuadra (`Int` con `Int`) con `Index` 0; la unión que falla con `Index` 0, 3 y -1, y la que falla con una razón de clase 200, que no existe
+expect:  las seis que fallan dan `false` y un solo E0401 con la primaria «expected `E`, found `F`» y la secundaria, en el span de la razón, «`&&` expects `Bool` operands», «`+` expects `Int` operands», «`-` expects an `Int` operand», «`!` expects a `Bool` operand», «`!` expects a `()` operand» y «`-` expects a `(Int) -> Int` operand»; la que cuadra da `true` sin diagnósticos; y las tres con `Index` fuera de rango y la de la clase inexistente hacen `panic`
+why:     el texto sale del operador y del tipo esperado, y no de un `Int` escrito a mano: «`&&` expects `Int`
+         operands» sería falso. Por eso hay filas con los dos tipos y con las dos aridades, y una por
+         operador. Un `Index` que no es 1 ni 2, o una clase de razón fuera de las ocho, es una equivocación
+         de quien llama a `Unify`, no del programa que se compila, y el compilador no inventa un texto para
+         ella. Y el artículo sale del nombre del tipo y no de la plantilla: con un «an» fijo, quien escribe `!1`
+         leería «`!` expects an `Bool` operand»; las filas de `()` y de una función fijan que «a» no es solo
+         el de `Bool`, y la de `Int`, que «an» tampoco se queda en el de siempre
+ref:     TestUnify/operand_reason_names_expected_type
+
+[T08.15] unify.occurs_check_E0405                           level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    unificar una variable con un tipo que la contiene da un E0405 y no liga nada; la nota dice qué tendría que ser la variable, con los mismos nombres en los dos tipos; el error no lleva secundaria ni ayuda, sea cual sea la razón; una variable con un tipo que lleva otra no es un tipo infinito
+input:   `a ~ (a) -> Int` con la razón de un `let`, la de un argumento y la de la cola de un bloque; `(a) -> Int ~ a`; `(a) -> Int` contra `((a) -> Int) -> Int`; `a ~ (Int, (a) -> Int) -> Int`; `a ~ b`, con `b` ligada a `(a) -> Int`; `y ~ (x, y) -> Int` con `x` e `y` distintas; y `c ~ (d) -> Int`
+expect:  los ocho primeros dan `false` y exactamente un diagnóstico, igual campo por campo a: E0405 `cannot construct an infinite type`, primaria en el span hallado con «this type would contain itself», una nota y nada más (ni secundaria, ni ayuda, ni fix-it); la nota es «`a` would have to be `(a) -> Int`, which has no finite size» en seis de ellos, «`a` would have to be `(Int, (a) -> Int) -> Int`, which has no finite size» en el de la función anidada y «`a` would have to be `(b, a) -> Int`, which has no finite size» en el de dos variables; en `a ~ (a) -> Int` (con las tres razones), en `(a) -> Int ~ a` y en `y ~ (x, y) -> Int` las variables siguen sin ligar después; y `c ~ (d) -> Int` da `true` sin diagnósticos y `c` se escribe `(a) -> Int`
+why:     sin el occurs check, `a ~ (a) -> Int` ligaría `a` a un tipo que se contiene a sí mismo, y `Resolve`
+         o `Show` no acabarían nunca de recorrerlo. La variable de la nota es la del tipo que se contiene,
+         se llame como se llame dentro de él: por eso `y ~ (x, y) -> Int` dice `(b, a)` y no `(a, b)`. La
+         causa está en el tipo y no en un sitio del programa que explique la expectativa, y por eso la razón
+         no añade ninguna secundaria. Y una variable distinta no es un tipo infinito
+ref:     TestUnify/occurs_check_E0405
+
+[T08.16] unify.error_type_unifies_silently                  level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    el tipo de error unifica con cualquier tipo, sin informar de nada y sin ligar ninguna variable; dentro de una función, la parte que es el tipo de error cuadra y las demás se comparan como siempre
+input:   el tipo de error con `Int`, `Int` con él, él consigo mismo, él con una función y al revés, y `()` esperado con él hallado con la razón de la cola de un bloque; una variable con él y él con una variable; una función con él de parámetro contra `(Bool) -> Int`, y con él de resultado contra `(Int) -> Bool`; y `({error}, Int) -> Int` contra `(Bool, Bool) -> Int`
+expect:  las diez primeras dan `true` y ningún diagnóstico; las dos variables siguen sin ligar; la última da `false` y un solo E0401, con la etiqueta «expected `({error}, Int) -> Int`, found `(Bool, Bool) -> Int`», porque el primer parámetro cuadra y el segundo no
+why:     el tipo de error es lo que queda de algo que ya dio su error: si `Unify` lo tratara como un tipo
+         más, cada uso de un nombre desconocido daría otro E0401 detrás del E0301. No liga las variables,
+         porque una variable que se quedara como «error» taparía los errores de verdad que vienen después.
+         Y que una parte sea el error no puede hacer que se dejen de mirar las demás: la última fila
+         es una equivocación real en el segundo parámetro
+ref:     TestUnify/error_type_unifies_silently
+
+[T08.17] unify.mismatch_has_reason_label                    level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    la etiqueta secundaria del E0401 está en el span de la razón y su texto depende de la clase de razón: «expected because of this annotation», «expected because of the return type», «the parameter is declared here» o «the other branch has type `E`»
+input:   `Int` esperado y `Bool` hallado con las seis clases de razón (anotación, anotación de `let`, tipo de retorno, cola de bloque, argumento y ramas de un `if`); y, con la razón de las ramas, una variable ligada a `Int` esperada y `Bool` hallado, `(Int) -> Int` esperado y `Bool` hallado, y `(a, b) -> Int` esperado contra `(b) -> Bool` hallado, con `a` y `b` variables distintas
+expect:  cada una da `false` y exactamente un E0401, igual campo por campo: la primaria en el span hallado con «expected `Int`, found `Bool`» (en las siete primeras filas; «expected `(Int) -> Int`, found `Bool`» y «expected `(a, b) -> Int`, found `(b) -> Bool`» en las dos últimas), la secundaria en el span de la razón y ninguna nota, ayuda ni fix-it; el texto de la secundaria es «expected because of this annotation» para la anotación y la anotación de `let`, «expected because of the return type» para el tipo de retorno y la cola de bloque, «the parameter is declared here» para el argumento y «the other branch has type `E`» para las ramas, donde `E` es el tipo esperado resuelto (`Int`, `Int`, `(Int) -> Int` y `(a, b) -> Int`, con los mismos nombres de variable que la primaria)
+why:     la secundaria es lo que convierte «tipos distintos» en «tipos distintos, y esto es lo que lo explica»:
+         si cayera en el span hallado, la primaria y la secundaria señalarían el mismo sitio; si el texto no
+         dependiera de la razón, un argumento diría «annotation». El texto de las ramas usa el tipo
+         esperado ya resuelto, y no el id: una variable ligada a `Int` se escribe `Int`
+ref:     TestUnify/mismatch_has_reason_label
+
+[T08.18] unify.if_condition_has_note                        level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    la condición de un `if` que no es `Bool` da un E0401 con la nota «an `if` condition must be `Bool`» y sin etiqueta secundaria, aunque la razón lleve un span
+input:   la razón de condición con `Bool` esperado y `Int` hallado, con `Bool` esperado y `(Int) -> Int` hallado, y con `Bool` y `Bool`
+expect:  las dos primeras dan `false` y un solo E0401, igual campo por campo: la primaria «expected `Bool`, found `Int`» (o «found `(Int) -> Int`») en el span hallado, `Notes` igual a [«an `if` condition must be `Bool`»], ninguna secundaria, ninguna ayuda ni fix-it; la tercera da `true` sin diagnósticos
+why:     la regla de la condición no depende de ningún otro sitio del programa: no hay nada que señalar con
+         una secundaria, y lo que ayuda es decir la regla. Una secundaria sobre el span de la razón
+         señalaría un sitio que no explica nada
+ref:     TestUnify/if_condition_has_note
+
+[T08.19] unify.unit_at_block_tail_has_help                  level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    la cola de un cuerpo que espera `()` y tiene otro tipo da un E0401 con la ayuda «this value is unused: bind it with `let name = …`, or return it from the function» y sin fix-it; si devolver el valor no arreglaría nada (la razón no lleva `CanReturn`), la ayuda es solo «this value is unused: bind it with `let name = …`»; ninguna otra razón ni otro par de tipos la lleva, tenga o no `CanReturn`
+input:   con la razón de cola de bloque con `CanReturn` y `()` esperado: `Int`, `Bool` y `(Int) -> Int` hallados; `Int` hallado como una variable ligada a `Int`; `()` esperado como una variable ligada a `()` con `Int` hallado; y una variable sin ligar hallada; con la razón de cola de bloque sin `CanReturn`: `Int` y `(Int) -> Int` hallados, y `()` esperado como una variable ligada a `()` con `Int` hallado; con `()` esperado e `Int` hallado y cada una de las otras siete clases de razón, con `CanReturn` puesto; y con la cola de bloque con `CanReturn`, `Int` esperado y `Bool` hallado, `Int` esperado y `()` hallado, y `() -> ()` esperado e `Int` hallado; y, sin `CanReturn`, `Int` esperado y `Bool` hallado
+expect:  las cinco primeras (con `Int` hallado por la variable, y con `()` esperado como variable) dan `false` y un solo E0401, igual campo por campo: primaria «expected `()`, found `<F>`» con `<F>` igual a `Int`, `Bool`, `(Int) -> Int`, `Int` e `Int`, secundaria «expected because of the return type», la ayuda con las dos mitades, ningún fix-it y ninguna nota; la de la variable sin ligar da `true` sin diagnósticos; las tres sin `CanReturn` dan lo mismo con la ayuda de una sola mitad, la de ligar; las otras once dan `false` y un solo E0401 con `Help` vacío y sin fix-its
+why:     la ayuda es la única de E0401, y solo es cierta en un sitio: `fn f() { 1 }`, donde la función no
+         dice `->` y devuelve `()` sin que quien la escribió lo piense. Con el mismo par de tipos en un `let`
+         con anotación sería falsa; con `Int` y `Bool` no hay nada que ligar. Se elige por la clase de la
+         razón y por lo que los tipos son una vez resueltos, no por sus ids. No lleva fix-it porque ligar
+         el valor o devolverlo, y cómo llamar a la variable, lo decides tú.
+         Lo que propone tiene que funcionar: `let _ = …` no (el parser lo rechaza, una variable tiene
+         nombre), y por eso dice `let name = …`. Y devolver el valor solo se ofrece donde sirve: el valor con
+         el que acaba la rama de un `if` sin `else` no es lo que devuelve la función. `Unify` no sabe en qué
+         sitio está, lo sabe quien lo llama, que lo dice con `CanReturn`; las filas sin él matan una ayuda
+         que ofreciera devolver siempre, y las que lo llevan, una que no lo ofreciera nunca
+ref:     TestUnify/unit_at_block_tail_has_help
+
+[T08.20] errordocs.pending_word                             level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    la valla de un ejemplo erróneo puede llevar `pending=<quién>` cuando `ki check` todavía no puede dar el código de su fichero: el ejemplo se ejecuta, no se le exige nada salvo no dar ese código, y el test falla el día que lo da
+input:   ficheros y ejemplos escritos en el propio test, con el código E0301: un ejemplo erróneo con `pending=T36` que ya da E0301, uno que no lo da, uno que da E0201, uno con `escaped` que no es una cadena de Go y uno corregido con `pending=T36` que sigue dando E0301; y tres vallas con `pending` sin valor, con `pending=` vacío y sobre un ejemplo corregido
+expect:  el que ya da su código falla con «now reports E0301: remove `pending`»; el que no lo da y el que da otro código pasan sin problemas; el `escaped` falla con «not a Go string literal», porque la palabra no impide ejecutarlo; el corregido falla con «still reports E0301», porque se comprueba como cualquier otro; `pending` sin valor y `pending=` vacío son «unknown word», y sobre un ejemplo corregido es un problema de forma («which only an erroneous example may carry»); un ejemplo erróneo con `pending=T36` no tiene ningún problema de forma
+why:     E0401 y E0405 nacen con su entrada en el catálogo antes de que nada llame a `Unify`, y un ejemplo
+         erróneo que no puede dar su código haría fallar el test del catálogo. La palabra deja que la entrada
+         exista hoy, y se borra sola: si te olvidas de quitarla cuando el comprobador de tipos funcione, el test
+         falla con el código que ya sale. Por eso se exige el valor (quién hará alcanzable el código) y por
+         eso solo un ejemplo erróneo puede llevarla: uno corregido es un programa limpio y pasa hoy
+ref:     TestErrorDocs/pending_word

@@ -353,6 +353,28 @@ func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 // one. Like Occurs it keeps its own stack of what is left to write, because
 // how deep a type goes is up to the program that is being compiled.
 func (t *TypeTable) Show(id TypeID) string {
+	return t.show(id, make(map[TypeVarID]int))
+}
+
+// showAll writes each of ids the way Show does, with one set of names for all
+// of them: the first unbound variable that any of the texts mentions is `a`,
+// the next `b`, and a variable that appears in two of them has the same name
+// in both. A message that shows two types side by side needs this, because
+// Show on each would call two different variables `a`. Each text is cut on its
+// own, as Show cuts it, so together they are at most len(ids) times as long.
+func (t *TypeTable) showAll(ids ...TypeID) []string {
+	names := make(map[TypeVarID]int)
+	texts := make([]string, len(ids))
+	for i, id := range ids {
+		texts[i] = t.show(id, names)
+	}
+	return texts
+}
+
+// show is Show with the numbers of the variables it has named so far, which it
+// adds to: names maps an unbound variable to its number, in order of
+// appearance.
+func (t *TypeTable) show(id TypeID, names map[TypeVarID]int) string {
 	// piece is a part of the text that is left to write: the type id, or, when
 	// text is not empty, that text as it is.
 	type piece struct {
@@ -360,7 +382,6 @@ func (t *TypeTable) Show(id TypeID) string {
 		text string
 	}
 	var out strings.Builder
-	names := make(map[TypeVarID]int) // unbound variable -> its number, in order of appearance
 	todo := []piece{{id: id}}
 	for len(todo) > 0 {
 		p := todo[len(todo)-1]
