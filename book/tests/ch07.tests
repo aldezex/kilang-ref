@@ -137,9 +137,9 @@ case:    la resolución deja, para cada módulo, una tabla de expresiones, una d
 input:   "fn f(x: Int) -> Int {\n  let y = x\n  y\n}\n#[extern(\"a\")] fn g()\n"
 expect:  dos módulos resueltos; en cada uno `ExprRes` tiene tantas filas como expresiones, `LetLocal` como sentencias y `ParamLocals` como items; y el fichero tiene expresiones, sentencias y exactamente dos items, para que la comprobación diga algo
 why:     los pases de después indexan estas tablas con el id de un nodo sin mirar el largo: una tabla corta es un
-         `index out of range` en el peor sitio, lejos de su causa. `LetLocal` y `ParamLocals` aún no las rellena
-         nadie (las rellenan los ámbitos de la sesión siguiente), pero su tamaño ya es el de su contrato, y este
-         test lo fija
+         `index out of range` en el peor sitio, lejos de su causa. `LetLocal` y `ParamLocals` las rellenan los
+         ámbitos (`TestScopes` lee sus filas), pero este test fija otra cosa: que el tamaño de las tablas es una
+         fila por nodo, tenga o no algo que guardar
 ref:     TestResolve/tables_are_indexed_by_id
 
 [T07.13] pipeline.parse_source_puts_prelude_first           level: core
@@ -196,3 +196,111 @@ why:     los tests de `TestResolve` llaman a `Analyze` a mano; este es el que co
          error no nombran nada. Un comando que se saltara el análisis en cuanto hubiera un error de sintaxis
          escondería los de nombres hasta que arreglaras los demás, y solo este fichero lo notaría
 ref:     tests/errors/ch07/duplicate_definition.ki
+
+[T07.18] scopes.param_resolves_to_local                     level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    los parámetros de una función son variables locales, una por parámetro y en orden, con el span de su nombre y la función como dueña; un nombre del cuerpo que es un parámetro se resuelve a su variable aunque una función del fichero o del preludio se llame igual; los parámetros no se ven fuera de su función; una función sin cuerpo también liga los suyos; y una función definida dos veces tiene dos `Def`, cada una dueña de sus variables
+input:   tres funciones, `first(a: Int, b: Int) -> Int` con la cola `b`, `second(first: Int, print: Int) -> Int` con la cola `first + print` y `third(a: Int) -> Int` con la cola `a`; "fn a(x: Int) {}\nfn b() { x }\n"; un preludio escrito a mano con `#[extern("k")] pub fn g(p: Int, q: Int)` y el fichero `fn f(a: Int) { a }`; ese mismo fichero con un preludio vacío; y `fn f(a: Int) { a }` seguida de `fn f(b: Int) { b }`
+expect:  con las tres funciones: ningún diagnóstico y el fichero liga 5 variables; `ParamLocals` de `first`, `second` y `third` tiene 2, 2 y 1 variables, y cada una es un `Local` con el nombre, el span del nombre solo (sin el `: Int`) y su función como `Owner`; el `b` de la cola es `ResLocal` a la segunda variable de `first`; el `first` y el `print` de `second` son `ResLocal` a sus dos parámetros, y no `ResDef` a la función del fichero ni a la del preludio; el `a` de `third` es la variable de `third` y no la de `first`. Con `a` y `b`: un solo E0301, y la `x` de `b` es `ResError`; `b` no liga ninguna. Con el preludio de `g`: `g` liga las variables 0 y 1, la 1 es `q` y su dueña es `g`, y la `a` del fichero es la variable 2. Con el preludio vacío, la `a` es exactamente `ResLocal` con la variable 0. Con las dos `f`: un solo E0302; la `a` es la variable del parámetro de la primera `f`, con la primera `f` como `Owner`, y la `b` la del parámetro de la segunda, con la segunda `f` como `Owner`
+why:     un parámetro es lo primero que un cuerpo puede nombrar, y sin variables locales cada `b` de una función sería un
+         nombre desconocido. `first` y `print` son parámetros con el nombre de una función del fichero y de otra del
+         preludio: es el hueco con que se cerró la sesión anterior, donde `fn f(print: Int) { print }` se resolvía a
+         la función de la biblioteca; si buscaras las definiciones antes que las variables, este test lo diría. El
+         span cubre `a` y no `a: Int` porque los errores que vengan subrayarán el nombre. Los parámetros de una
+         función extern son variables que nadie lee, pero existen, para que cada parámetro de cada función tenga
+         el suyo y quien consulte `ParamLocals` no tenga que distinguir. Y la variable 0 no puede confundirse con
+         «ninguna variable»: en el último caso es la que un nombre del cuerpo tiene que encontrar. Y una función
+         definida dos veces sigue teniendo dos `Def`, cada una con sus variables: el dueño de una variable es la
+         definición que se recorre y no la que su nombre encuentra, que sería siempre la primera, y un pase que
+         consultara `Owner` tras un E0302 atribuiría a la primera `f` las variables de la segunda
+ref:     TestScopes/param_resolves_to_local
+
+[T07.19] scopes.let_visible_after_binding                   level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    un `let` liga su nombre desde la sentencia siguiente hasta el final de su bloque, cola incluida, y su variable se ve en los bloques de dentro, por hondos que estén; los parámetros se ven desde esos mismos sitios
+input:   una función `f(p: Int) -> Int` con las sentencias `let a: Int = p` y `let b = a`, dos bloques uno dentro de otro cuyo valor es `p + a + b`, y la cola `a + b`
+expect:  ningún diagnóstico; los dos `p` son `ResLocal` al parámetro; los tres `a` son `ResLocal` a la variable del primer `let` (la que guarda `LetLocal` de esa sentencia) y los dos `b` a la del segundo; cada `Local` tiene su nombre, el span del nombre en su `let` y a `f` por dueña; el parámetro y los dos `let` son tres variables distintas y `f` no liga más
+why:     este test mide hasta dónde llega un `let`: a la sentencia que le sigue (`let b = a`), a las de después y a
+         la cola, que se resuelve antes de cerrar el bloque; y a dos bloques anidados, donde encontrar `a` obliga
+         a subir dos ámbitos y encontrar `p`, tres. Un `let` que solo se viera en la sentencia siguiente, un
+         bloque que no enlazara con el de fuera o una búsqueda que no subiera más de un escalón dejarían a un
+         programa corriente sin sus propias variables
+ref:     TestScopes/let_visible_after_binding
+
+[T07.20] scopes.let_not_visible_in_own_init                 level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    la variable de un `let` no se ve en su propio inicializador, que lee lo que haya fuera; y el error no se propaga: el `let` liga su nombre igualmente
+input:   "fn f() {\n  let x = x\n  x\n}\n" y "fn g(x: Int) {\n  let x = x\n  x\n}\n"
+expect:  con `f`: exactamente un E0301 «unknown name `x`», con la primaria «not found in this scope» sobre la `x` del inicializador (no la que va tras `let`) y sin etiqueta secundaria ni notas; esa `x` es exactamente `ResError` y la `x` de la línea siguiente es `ResLocal` a la variable que liga el `let`, con el span de su nombre. Con `g`: ningún diagnóstico; la `x` del inicializador es el parámetro y la de la línea siguiente, la variable del `let`
+why:     `let x = x` es la forma de preguntar si un `let` se ve a sí mismo, y la respuesta tiene que ser que no: en `g`
+         el `x` de la derecha es el parámetro, que es lo que quien escribe `let x = x + 1` espera, y el de abajo
+         es el nuevo. Si el `let` ligara antes de resolver su inicializador, `f` no daría ningún error y `g` leería
+         su propia variable, todavía sin valor. Y el `x` de la tercera línea de `f` tiene que seguir resolviéndose:
+         un solo error en el origen y no uno por cada uso posterior
+ref:     TestScopes/let_not_visible_in_own_init
+
+[T07.21] scopes.shadowing_picks_innermost                   level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    un `let` puede ocultar un nombre ya ligado en un bloque exterior, en el mismo bloque, un parámetro, una función del fichero o una del preludio; los usos que le siguen ven la variable más reciente y las dos variables existen. Un nombre sigue siendo la función hasta el `let` que lo liga. Y una función puede repetir el nombre de un parámetro: el segundo oculta al primero, y no se informa de nada
+input:   cuatro programas: `f` con `let n = 1`, un bloque con `let n = 2` y `n`, y un `n` fuera del bloque; `g(p: Int)` con `let y = p`, `let y = y + 1`, `let p = y` y la cola `p`; `fn h() {}` con una `k` que tiene las sentencias `h`, `let h = 1`, `h`, `let print = h` y `print`; y `fn w(x: Int, x: Int) -> Int` con la cola `x`
+expect:  ningún diagnóstico en los cuatro. En `f`, la `n` del bloque es la variable del segundo `let` y la de fuera la del primero, cada una con el span de su nombre, y `f` liga 2 variables. En `g`: el `p` del primer `let` es el parámetro; la `y` de `y + 1` es la del primer `let y` y la del `let p`, la del segundo; la cola `p` es la del `let p` y no el parámetro; y `g` liga 4 variables. En `k`: el primer `h` es `ResDef` a la función `h`, el segundo y el de `let print = h` son `ResLocal` a la variable del `let h`, y la cola `print` lo es a la del `let print`, y no a la función del preludio. En `w`: la cola `x` es la variable del segundo parámetro, los dos parámetros son variables distintas, cada una con el span de su nombre, y `w` liga 2 variables
+why:     sombrear es lo que hace útil a un `let`: sin él, cada paso de un cálculo necesitaría un nombre nuevo. El
+         mutante clásico es el que recuerda el primer `let` de un nombre en vez del último (`g` lo mata), o el que
+         busca desde el bloque de fuera hacia dentro (`f`). `k` fija el orden con las funciones: una variable gana
+         a una función del mismo nombre, también a `print`, pero solo desde su `let`, así que el primer `h` sigue
+         siendo la función. Y las dos variables existen: lo que recorra el cuerpo después, con tipos o con Core,
+         las necesita a las dos. El parámetro repetido está para que aceptarlo sea una decisión escrita y no un
+         accidente: Ki no define ningún diagnóstico para él, y mientras no lo defina el segundo parámetro oculta al
+         primero, como un segundo `let` del mismo nombre. Un mutante que se quedara con el primero lo mata `w`
+ref:     TestScopes/shadowing_picks_innermost
+
+[T07.22] scopes.block_scope_ends                            level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    las variables de un bloque, y las de una función, acaban con él: ni el código que viene después, ni la otra rama de un `if`, ni la función siguiente las ven
+input:   "fn f() {\n  { let y = 1 }\n  y\n}\n"; "fn g(c: Bool) {\n  if c { let z = 1 } else { z }\n  z\n}\n"; y "fn a() { let q = 1 }\nfn b() { q }\n"
+expect:  en `f`, exactamente un E0301 «unknown name `y`» sobre la `y` de la última línea, con la primaria «not found in this scope» y sin secundaria ni notas, y esa `y` es `ResError`; en `g`, exactamente dos, sobre la `z` de la rama `else` y sobre la de después del `if`, las dos `ResError`; y en `a` y `b`, exactamente uno, sobre la `q` de `b`
+why:     un bloque que no abriera ámbito ligaría sus variables en el de fuera, y un bloque que no lo cerrara las dejaría
+         vivas hasta el final de la función: en los dos casos `y` se resolvería sin quejarse y el error saldría
+         mucho después, o nunca. Las ramas de un `if` son bloques y se prueban aparte porque son el sitio donde
+         menos se espera esto: lo que se liga en el `then` no existe en el `else`. Y el cuerpo de una función es
+         un bloque como los demás: lo que liga no pasa a la función de al lado
+ref:     TestScopes/block_scope_ends
+
+[T07.23] scopes.unknown_name_E0301                          level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    un nombre que no es ni una variable ni una definición es un E0301 con la etiqueta «not found in this scope» sobre el nombre, su resolución es `ResError`, y se informa de cada uno, esté donde esté
+input:   "fn main() {\n  missing\n}\n" y "fn main() {\n  nope(nada, 1 + nil)\n}\n"
+expect:  con `missing`: exactamente un E0301 «unknown name `missing`», con la primaria «not found in this scope» sobre los bytes de `missing`, sin etiqueta secundaria, nota, ayuda ni fixit; la resolución del nombre es exactamente `Res{Kind: ResError}` (ni `Def` ni `Local`) y el fichero no liga ninguna variable. Con la llamada: exactamente tres E0301, uno por `nope` (la función llamada), `nada` (un argumento) y `nil` (un operando), cada uno con su nombre en el mensaje y su span; los tres nombres son `ResError`
+why:     es el error que más vas a ver, y tiene que decir qué nombre y dónde: el mensaje lleva el nombre entre comillas
+         invertidas y la etiqueta cae justo sobre él. `ResError` y no `ResNone` es lo que dice a los pases de
+         después que el nombre ya está explicado, para que no den un segundo error sobre él. La ayuda («did you mean…?») llega en la sesión
+         siguiente: este test usa `missing`, lejos de `main` y de `print`, para que «sin ayuda» siga siendo cierto
+         cuando exista. Y el callee, el argumento y el operando son tres sitios distintos del recorrido: cada uno
+         puede olvidarse por separado
+ref:     TestScopes/unknown_name_E0301
+
+[T07.24] scopes.forward_reference_to_later_fn               level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    una función se puede nombrar antes de definirse, también desde dentro de bloques y después de variables, y las variables siguen siendo variables
+input:   "fn a() { b() }\nfn b() {}" (sin salto de línea final); y `fn c(n: Int)` con las sentencias `let v = d(n)` y un bloque `{ c(v) }`, seguida de `fn d(n: Int) {}`
+expect:  ningún diagnóstico en los dos; en el primero, la `b` es `ResDef` a la función `b`. En el segundo, la `d` es `ResDef` a `d`, la `c` (la función dentro de sí misma) es `ResDef` a `c`, y la `n` y la `v` son `ResLocal`: la `n` al parámetro de `c` y la `v` a la variable del `let`, con el span de su nombre
+why:     las dos pasadas existen para esto, y ahora hay un camino nuevo que puede romperlo: si el nombre no está en
+         ningún ámbito, hay que seguir buscando entre las definiciones antes de dar el error. Una resolución que
+         diera E0301 en cuanto fallara la búsqueda de variables rompería `fn a() { b() }`. El primer programa ya
+         lo cumplía antes de existir los ámbitos; el segundo no, porque mezcla las dos clases de nombre en el
+         mismo cuerpo y en bloques anidados: ahí la función y las variables tienen que resolverse cada una a lo
+         suyo
+ref:     TestScopes/forward_reference_to_later_fn
+
+[T07.25] scope.visible_lists_innermost_first_once           level: core
+kind:    unit (go test)      file: internal/sema/scope_internal_test.go
+case:    `visible` da los nombres que ve un ámbito, el propio primero y luego, hacia fuera, los de cada ámbito que lo rodea; cada nombre una sola vez, con el ámbito más interior que lo liga; los de un mismo ámbito en orden creciente de `Symbol`; y quien lo recorre puede parar cuando quiera
+input:   tres ámbitos anidados cuyos nombres, como `Symbol` escritos en números, están dados desordenados (el exterior {7, 3, 9, 5}, el del medio {6, 2, 5, 8} y el interior {4, 1, 7, 5}), y uno vacío dentro de ellos; el 5 está en los tres y el 7 en dos
+expect:  desde el ámbito vacío, en 50 recorridos seguidos: 1 4 5 7 2 6 8 3 9; desde el interior, lo mismo; desde el del medio, 2 5 6 8 3 7 9; y un recorrido que para tras 1, 2, 4, 5, 9 y 12 nombres recibe exactamente los primeros (o todos, si no hay tantos) y no vuelve a ser llamado
+why:     las sugerencias de «¿quisiste decir…?» sacan sus candidatos de aquí, y la lista no puede depender del
+         azar: un `map` de Go se recorre en un orden distinto cada vez, y por eso el test pide el mismo resultado
+         50 veces y escribe cada ámbito desordenado, de modo que ninguna rotación de él sea la lista ordenada.
+         Cada nombre sale una vez y con su ámbito más interior: el 5, que está en los tres, sale con el interior y
+         no con el exterior. Y parar a medias tiene su trampa: un recorrido que siguiera llamando a quien ya paró
+         hace que Go detenga el programa con un panic
+ref:     TestScope/visible_lists_innermost_first_once

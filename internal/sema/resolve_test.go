@@ -26,14 +26,24 @@ func nameExprs(m *syntax.Module, in *base.Interner, name string) []syntax.ExprID
 	return ids
 }
 
+// resAt returns what the n-th ExprName of module mod called name, counting from
+// 0 in id order, stands for. It fails the test if there are not n+1 of them.
+func resAt(t *testing.T, rp *sema.ResolvedProgram, mods []*syntax.Module, in *base.Interner, mod sema.ModuleIdx, name string, n int) sema.Res {
+	t.Helper()
+	ids := nameExprs(mods[mod], in, name)
+	if n >= len(ids) {
+		t.Fatalf("module %d has %d names called %q, want at least %d", mod, len(ids), name, n+1)
+	}
+	return rp.Modules[mod].ExprRes[ids[n]]
+}
+
 // onlyRes returns the resolution of the one ExprName of module mod called name.
 func onlyRes(t *testing.T, rp *sema.ResolvedProgram, mods []*syntax.Module, in *base.Interner, mod sema.ModuleIdx, name string) sema.Res {
 	t.Helper()
-	ids := nameExprs(mods[mod], in, name)
-	if len(ids) != 1 {
+	if ids := nameExprs(mods[mod], in, name); len(ids) != 1 {
 		t.Fatalf("module %d has %d names called %q, want exactly 1", mod, len(ids), name)
 	}
-	return rp.Modules[mod].ExprRes[ids[0]]
+	return resAt(t, rp, mods, in, mod, name, 0)
 }
 
 // userRes is onlyRes for the user's file of a program made by Analyze.

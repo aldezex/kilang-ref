@@ -56,13 +56,15 @@ type Def struct {
 	ExternName string
 }
 
-// Local is a local variable: a parameter or a `let`. Resolve makes none yet;
-// the next session binds them.
+// Local is a local variable: a parameter or a `let`. Every parameter and every
+// `let` in the program is one Local, even when another one has the same name:
+// `let x = 1` followed by `let x = 2` is two.
 type Local struct {
 	Name base.Symbol
-	// Span is the span of the name where it is bound.
+	// Span is the span of the name where it is bound: `x` in `let x = 1` and
+	// in the parameter `x: Int`, not the whole parameter.
 	Span base.Span
-	// Owner is the function whose body binds it.
+	// Owner is the function that binds it, as a parameter or in its body.
 	Owner DefID
 }
 
@@ -72,15 +74,18 @@ type ResKind uint8
 // The kinds of resolution.
 const (
 	// ResNone is the zero Res: nothing was resolved. Every expression that is
-	// not a name has it. So has a name that is not a definition: until locals
-	// exist (next session) the resolver does not look at parameters or `let`s,
-	// and it does not yet report a name that is nowhere.
+	// not a name has it. A name that an item reaches has another kind once
+	// Resolve has run; one that no item reaches keeps it. When the parser
+	// recovers from a syntax error inside a body it drops the sub-expression
+	// that it replaces with an error node: the names in it stay in the arena, no
+	// item reaches them and Resolve never sees them.
 	ResNone ResKind = iota
 	// ResDef is a name that stands for a top-level definition, Res.Def.
 	ResDef
 	// ResLocal is a name that stands for a local variable, Res.Local.
 	ResLocal
-	// ResError is a name that stands for nothing and has been reported.
+	// ResError is a name that stands for nothing: Resolve has reported it
+	// (E0301).
 	ResError
 )
 
@@ -102,12 +107,12 @@ type ModuleRes struct {
 	// expressions that are not names stay zero.
 	ExprRes []Res
 	// LetLocal is indexed by StmtID: the variable that a `let` binds. It
-	// means something only for a StmtLet, and nothing sets it until locals
-	// exist: every row is 0 for now.
+	// means something only for a StmtLet; the other rows stay 0.
 	LetLocal []LocalID
 	// ParamLocals is indexed by ItemID: the variables that the parameters of a
-	// function bind, in order. Nothing sets it until locals exist: every row is
-	// nil for now.
+	// function bind, in order, whether or not the function has a body. The row
+	// of a function with no parameters, and that of an item that is not a
+	// function, is empty.
 	ParamLocals [][]LocalID
 }
 
@@ -116,7 +121,10 @@ type ResolvedProgram struct {
 	// Defs lists the top-level definitions of every module: those of module 0
 	// first and, within a module, in source order. A function defined twice
 	// has a Def for each definition.
-	Defs   base.IdVec[DefID, Def]
+	Defs base.IdVec[DefID, Def]
+	// Locals lists the local variables of every module: the ones that
+	// ModuleRes.ParamLocals and ModuleRes.LetLocal name, and that a name
+	// refers to with ResLocal.
 	Locals base.IdVec[LocalID, Local]
 	// Modules has one entry for each module, in the order of the modules.
 	Modules []ModuleRes
@@ -133,17 +141,27 @@ type ResolvedProgram struct {
 //
 // It makes two passes. The first collects the top-level definitions of every
 // module, before any body is read, so that a function can call itself and the
-// ones further down the file. The second walks the body of each function and
-// resolves its names. In the body of a module's function a name stands first
-// for a definition of that module and then for a `pub` definition of the
+// ones further down the file. The second binds the parameters of each function
+// and walks its body, resolving its names. A name stands first for a local
+// variable (see scope), the innermost one if there are several; failing that
+// for a definition of its module and then for a `pub` definition of the
 // prelude. Each module has a name space of its own, so a module can define a
 // name that the prelude has already defined: its own definition wins.
 //
-// It reports to sink: E0302 for a function defined twice in a module, E0304
-// for `#[extern]` anywhere but the standard library (any module but user) and
-// E0305 for any other attribute, in any module. A tree that has syntax errors
-// is resolved like any other: its error nodes stand for nothing and are
-// skipped. Resolve does not change the modules.
+// A `let` binds its name from the statement after it to the end of its block.
+// Its own initializer does not see it, so `let x = x` reads the `x` outside.
+// A name can be bound again, in the same block or in one inside it: the later
+// binding shadows the earlier one, whose Local still exists. That holds for the
+// parameters too: `fn f(x: Int, x: Int)` binds two variables and the body sees
+// the second. Nothing is reported, because Ki defines no diagnostic for a
+// repeated parameter (TestScopes/shadowing_picks_innermost pins this).
+//
+// It reports to sink: E0301 for a name that stands for nothing, E0302 for a
+// function defined twice in a module, E0304 for `#[extern]` anywhere but the
+// standard library (any module but user) and E0305 for any other attribute, in
+// any module. A tree that has syntax errors is resolved like any other: its
+// error nodes stand for nothing and are skipped. Resolve does not change the
+// modules.
 //
 // The second pass recurses once per level of the tree. Parse bounds that depth
 // (MaxNesting levels, and the operators and calls of one statement, MaxChain,
@@ -184,6 +202,11 @@ type resolver struct {
 	mod ModuleIdx
 	m   *syntax.Module
 	res *ModuleRes
+
+	// The function whose body is being walked and the scope of the place in it
+	// that is being walked.
+	owner DefID
+	scope *scope
 }
 
 // collect is the first pass: it makes a Def for every function of every module.
@@ -251,10 +274,11 @@ func (r *resolver) attributes(mod ModuleIdx, m *syntax.Module, it syntax.Item) (
 	return kind, externName
 }
 
-// lookup returns the top-level definition that name stands for in module mod:
+// lookupDef returns the top-level definition that name stands for in module mod:
 // the module's own, and failing that a `pub` one of the prelude. (The prelude
-// itself has no other module to fall back on.)
-func (r *resolver) lookup(mod ModuleIdx, name base.Symbol) (DefID, bool) {
+// itself has no other module to fall back on.) It knows nothing of local
+// variables: see name.
+func (r *resolver) lookupDef(mod ModuleIdx, name base.Symbol) (DefID, bool) {
 	if def, ok := r.tops[mod][name]; ok {
 		return def, true
 	}
@@ -266,16 +290,60 @@ func (r *resolver) lookup(mod ModuleIdx, name base.Symbol) (DefID, bool) {
 	return 0, false
 }
 
-// bodies is the second pass: it walks the body of every function with one.
+// bodies is the second pass: it goes through the definitions, which are in the
+// order of the modules and, within one, of the source, binds the parameters of
+// each function and walks the body of those that have one.
 func (r *resolver) bodies() {
-	for i, m := range r.mods {
-		r.mod, r.m, r.res = ModuleIdx(i), m, &r.rp.Modules[i]
-		for _, id := range m.Items {
-			if it := m.ItemNodes.Get(id); it.Kind == syntax.ItemFn && it.HasBody {
-				r.expr(it.Body)
-			}
-		}
+	for id, def := range r.rp.Defs.All() {
+		r.mod, r.m, r.res = def.Module, r.mods[def.Module], &r.rp.Modules[def.Module]
+		r.function(id, def)
 	}
+}
+
+// function binds the parameters of the function that def defines, id being its
+// DefID, and resolves the names in its body if it has one. The parameters are a
+// scope of their own and the body, a block, is a scope inside it: a `let` in the
+// body that has the name of a parameter shadows it, and so does a later
+// parameter of the same name.
+//
+// A function with no body, such as an `#[extern]` one, binds its parameters all
+// the same: they are variables that nothing can read.
+func (r *resolver) function(id DefID, def Def) {
+	it := r.m.ItemNodes.Get(def.Item)
+	r.owner, r.scope = id, &scope{}
+	var params []LocalID
+	for _, p := range r.m.Params(it.Params) {
+		// Param.Span covers `x: Int`. The name is its first len(name) bytes.
+		name := base.Span{File: p.Span.File, Lo: p.Span.Lo, Hi: p.Span.Lo + uint32(len(r.in.Bytes(p.Name)))}
+		params = append(params, r.bind(p.Name, name))
+	}
+	r.res.ParamLocals[def.Item] = params
+	if it.HasBody {
+		r.expr(it.Body)
+	}
+}
+
+// bind makes a new variable of the function being walked, called name and bound
+// at span, and makes name stand for it in the scope being walked from now on.
+func (r *resolver) bind(name base.Symbol, span base.Span) LocalID {
+	id := r.rp.Locals.Push(Local{Name: name, Span: span, Owner: r.owner})
+	r.scope.bind(name, id)
+	return id
+}
+
+// name says what the name written in e stands for: a local variable if a scope
+// has one by that name, and failing that a definition. If there is none it
+// reports E0301 and says ResError.
+func (r *resolver) name(e syntax.Expr) Res {
+	if local, ok := r.scope.lookup(e.Name); ok {
+		return Res{Kind: ResLocal, Local: local}
+	}
+	if def, ok := r.lookupDef(r.mod, e.Name); ok {
+		return Res{Kind: ResDef, Def: def}
+	}
+	r.sink.Report(diag.NewError(diag.E(301), "unknown name `"+r.in.String(e.Name)+"`",
+		diag.Label{Span: e.Span, Message: "not found in this scope"}))
+	return Res{Kind: ResError}
 }
 
 // expr resolves the names in the expression id and in everything inside it.
@@ -285,9 +353,7 @@ func (r *resolver) expr(id syntax.ExprID) {
 	case syntax.ExprInt, syntax.ExprBool, syntax.ExprUnit, syntax.ExprError:
 		// No names inside.
 	case syntax.ExprName:
-		if def, ok := r.lookup(r.mod, e.Name); ok {
-			r.res.ExprRes[id] = Res{Kind: ResDef, Def: def}
-		}
+		r.res.ExprRes[id] = r.name(e)
 	case syntax.ExprCall:
 		r.expr(e.Callee)
 		for _, arg := range r.m.ExprList(e.Args) {
@@ -305,12 +371,17 @@ func (r *resolver) expr(id syntax.ExprID) {
 			r.expr(e.Else)
 		}
 	case syntax.ExprBlock:
+		// A block is a scope inside the one around it. Its variables are the
+		// ones its `let`s bind, and they end with it, tail included.
+		outer := r.scope
+		r.scope = &scope{parent: outer}
 		for _, s := range r.m.StmtList(e.Stmts) {
 			r.stmt(s)
 		}
 		if e.HasTail {
 			r.expr(e.Tail)
 		}
+		r.scope = outer
 	default:
 		panic("unreachable")
 	}
@@ -320,7 +391,12 @@ func (r *resolver) expr(id syntax.ExprID) {
 func (r *resolver) stmt(id syntax.StmtID) {
 	s := r.m.Stmts.Get(id)
 	switch s.Kind {
-	case syntax.StmtLet, syntax.StmtExpr:
+	case syntax.StmtLet:
+		// The initializer first: the variable is not bound, so not visible in
+		// it, until the initializer has been resolved.
+		r.expr(s.Expr)
+		r.res.LetLocal[id] = r.bind(s.Name, s.NameSpan)
+	case syntax.StmtExpr:
 		r.expr(s.Expr)
 	case syntax.StmtError:
 		// Only its span is set: there is no expression to walk.
