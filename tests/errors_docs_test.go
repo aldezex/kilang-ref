@@ -64,11 +64,22 @@ import (
 //     the parser cannot yet use in an expression (E0201). Each code listed must
 //     really appear, so the word is removed from the file as soon as the
 //     compiler stops reporting it.
+//   - pending=T36: the example is erroneous, but `ki check` cannot report the
+//     code of its file yet, because the pass that finds it is not wired into the
+//     compiler. The value says what will wire it, a task or a chapter (T36,
+//     ch15); it has no spaces, because the words of a fence are split at spaces,
+//     and the test requires it and does not interpret it. A pending example is
+//     run, and nothing else is asked of it except that it does not report the
+//     code of its file: the day it does, the test fails with "now reports
+//     E0401: remove `pending`", so the word goes away in the task that makes the
+//     code reachable and the example comes under the rule below. Only an
+//     erroneous example can be pending: a corrected one is a clean program and
+//     passes today.
 //
 // An erroneous example reports at least one diagnostic with the code of its file
-// and no other code than the ones its also lists. A corrected example reports
-// none with that code and, without the word also, nothing at all: it exits with
-// 0 and writes nothing to stderr.
+// and no other code than the ones its also lists, unless it is pending. A
+// corrected example reports none with that code and, without the word also,
+// nothing at all: it exits with 0 and writes nothing to stderr.
 
 // docFileName is the name of a file of the catalog: the code and ".md".
 var docFileName = regexp.MustCompile(`^([EW][0-9]{4})\.md$`)
@@ -81,6 +92,7 @@ type example struct {
 	escaped bool     // the block is a Go string literal
 	run     bool     // the example is run, not checked
 	also    []string // the codes besides the code of the file that it reports
+	pending string   // what will make the code reachable (T36); "" if it is reachable now
 	source  string   // the block, as written in the file
 }
 
@@ -153,6 +165,11 @@ func parseDoc(code, text string) errorDoc {
 					cur.run = true
 				case strings.HasPrefix(w, "also="):
 					cur.also = strings.Split(strings.TrimPrefix(w, "also="), ",")
+				case strings.HasPrefix(w, "pending=") && len(w) > len("pending="):
+					cur.pending = strings.TrimPrefix(w, "pending=")
+					if cur.kind == "corrected" {
+						problem(n, "the fence %q has %q, which only an erroneous example may carry", line, w)
+					}
 				default:
 					problem(n, "the fence %q has the unknown word %q", line, w)
 				}
@@ -271,6 +288,14 @@ func exampleProblems(dir string, d errorDoc, kind string) []string {
 			continue
 		}
 		mine := slices.Contains(out.codes, d.code)
+		if kind == "erroneous" && ex.pending != "" {
+			// The compiler cannot report this code yet, so nothing is asked of the
+			// output but that it does not. When it does, the word has to go.
+			if mine {
+				problems = append(problems, fmt.Sprintf("%s: now reports %s: remove `pending`", where, d.code))
+			}
+			continue
+		}
 		var others []string // the other codes that it reports, without repeats
 		for _, c := range out.codes {
 			if c != d.code && !slices.Contains(others, c) {
@@ -465,6 +490,50 @@ func sortedCodes(docs map[string]errorDoc) []string {
 }
 
 func TestErrorDocs(t *testing.T) {
+	// The rows of checks_catch_bad_catalogs and of pending_word write their
+	// files from the pieces of one good file, of the code E0301: its head, an
+	// erroneous example and a corrected one.
+	const head = "# E0301: unknown name\n\nThe rule.\n\n"
+	const erroneous = "## Erroneous example\n\n```ki erroneous\nfn main() { prnt(1) }\n```\n\n"
+	const corrected = "## Corrected\n\n```ki corrected\nfn main() { print(1) }\n```\n"
+
+	// The examples run through the compiler. The file's code is E0301. Each
+	// row puts its block in place of the example of its kind in a good file.
+	build := func(kind, fence, source string) string {
+		erroneousBlock := "```ki erroneous\nfn main() { prnt(1) }\n```"
+		correctedBlock := "```ki corrected\nfn main() { print(1) }\n```"
+		if block := "```" + fence + "\n" + source + "```"; kind == "erroneous" {
+			erroneousBlock = block
+		} else {
+			correctedBlock = block
+		}
+		return head + "## Erroneous example\n\n" + erroneousBlock + "\n\n## Corrected\n\n" + correctedBlock + "\n"
+	}
+
+	// shapeRow and exampleRow check one row of a table of bad files: want is "",
+	// when the check must find nothing wrong, or words that one of the problems
+	// it reports must contain.
+	shapeRow := func(t *testing.T, name, text, want string) {
+		t.Helper()
+		problems := shapeProblems(parseDoc("E0301", text))
+		if want == "" && len(problems) != 0 {
+			t.Errorf("%s: shape problems %q, want none", name, problems)
+		}
+		if want != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, want) }) {
+			t.Errorf("%s: shape problems %q, want one with %q", name, problems, want)
+		}
+	}
+	exampleRow := func(t *testing.T, name, kind, fence, source, want string) {
+		t.Helper()
+		problems := exampleProblems(t.TempDir(), parseDoc("E0301", build(kind, fence, source)), kind)
+		if want == "" && len(problems) != 0 {
+			t.Errorf("%s: problems %q, want none", name, problems)
+		}
+		if want != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, want) }) {
+			t.Errorf("%s: problems %q, want one with %q", name, problems, want)
+		}
+	}
+
 	t.Run("catalog_matches_the_codes_in_the_source", func(t *testing.T) {
 		docs, problems := readCatalog(t)
 		problems = append(problems, catalogProblems(sourceCodes(t), docs)...)
@@ -505,10 +574,6 @@ func TestErrorDocs(t *testing.T) {
 		// fails on a bad one. Every row is a file (or a pair of sets of codes)
 		// written here, and the problems that the check must report, as pieces
 		// of their text.
-		const head = "# E0301: unknown name\n\nThe rule.\n\n"
-		const erroneous = "## Erroneous example\n\n```ki erroneous\nfn main() { prnt(1) }\n```\n\n"
-		const corrected = "## Corrected\n\n```ki corrected\nfn main() { print(1) }\n```\n"
-
 		shape := []struct{ name, text, want string }{
 			{"a good file", head + erroneous + corrected, ""},
 			{"no code in the title", "# unknown name\n\nThe rule.\n\n" + erroneous + corrected, "the first line is"},
@@ -528,27 +593,9 @@ func TestErrorDocs(t *testing.T) {
 			{"a fence that is not Ki", head + strings.Replace(erroneous, "```ki erroneous", "```text\n## Corrected\n```ki corrected\n```\n\n```ki erroneous", 1) + corrected, ""},
 		}
 		for _, row := range shape {
-			problems := shapeProblems(parseDoc("E0301", row.text))
-			if row.want == "" && len(problems) != 0 {
-				t.Errorf("%s: shape problems %q, want none", row.name, problems)
-			}
-			if row.want != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, row.want) }) {
-				t.Errorf("%s: shape problems %q, want one with %q", row.name, problems, row.want)
-			}
+			shapeRow(t, row.name, row.text, row.want)
 		}
 
-		// The examples run through the compiler. The file's code is E0301. Each
-		// row puts its block in place of the example of its kind in a good file.
-		build := func(kind, fence, source string) string {
-			erroneousBlock := "```ki erroneous\nfn main() { prnt(1) }\n```"
-			correctedBlock := "```ki corrected\nfn main() { print(1) }\n```"
-			if block := "```" + fence + "\n" + source + "```"; kind == "erroneous" {
-				erroneousBlock = block
-			} else {
-				correctedBlock = block
-			}
-			return head + "## Erroneous example\n\n" + erroneousBlock + "\n\n## Corrected\n\n" + correctedBlock + "\n"
-		}
 		examples := []struct{ name, kind, fence, source, want string }{
 			{"an erroneous example that reports its code", "erroneous", "ki erroneous", "fn main() { prnt(1) }\n", ""},
 			{"an erroneous example that reports nothing", "erroneous", "ki erroneous", "fn main() { print(1) }\n", "want at least one E0301"},
@@ -566,13 +613,7 @@ func TestErrorDocs(t *testing.T) {
 			{"a corrected example that exits with 1 and writes to stderr", "corrected", "ki corrected", "fn main() { 1 + }\n", "exits with 1 and writes"},
 		}
 		for _, row := range examples {
-			problems := exampleProblems(t.TempDir(), parseDoc("E0301", build(row.kind, row.fence, row.source)), row.kind)
-			if row.want == "" && len(problems) != 0 {
-				t.Errorf("%s: problems %q, want none", row.name, problems)
-			}
-			if row.want != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, row.want) }) {
-				t.Errorf("%s: problems %q, want one with %q", row.name, problems, row.want)
-			}
+			exampleRow(t, row.name, row.kind, row.fence, row.source, row.want)
 		}
 
 		// A corrected example with no also list must be quiet, and quiet is
@@ -712,6 +753,28 @@ func TestErrorDocs(t *testing.T) {
 		}
 		if got := catalogProblems(map[string]bool{"E0101": true}, map[string]errorDoc{"E0101": doc("E0101")}); len(got) != 0 {
 			t.Errorf("a catalog that matches: problems %q, want none", got)
+		}
+	})
+
+	t.Run("pending_word", func(t *testing.T) {
+		// The word pending in the fence of an erroneous example: the fence is read
+		// (shapeRow) and the example is run (exampleRow).
+		for _, row := range []struct{ name, text, want string }{
+			{"pending with its value on an erroneous example", head + strings.Replace(erroneous, "ki erroneous", "ki erroneous pending=T36", 1) + corrected, ""},
+			{"pending without a value", head + strings.Replace(erroneous, "ki erroneous", "ki erroneous pending", 1) + corrected, `the unknown word "pending"`},
+			{"pending with an empty value", head + strings.Replace(erroneous, "ki erroneous", "ki erroneous pending=", 1) + corrected, `the unknown word "pending="`},
+			{"pending on a corrected example", head + erroneous + strings.Replace(corrected, "ki corrected", "ki corrected pending=T36", 1), "which only an erroneous example may carry"},
+		} {
+			shapeRow(t, row.name, row.text, row.want)
+		}
+		for _, row := range []struct{ name, kind, fence, source, want string }{
+			{"a pending example that already reports its code", "erroneous", "ki erroneous pending=T36", "fn main() { prnt(1) }\n", "now reports E0301: remove `pending`"},
+			{"a pending example that does not report its code yet", "erroneous", "ki erroneous pending=T36", "fn main() { print(1) }\n", ""},
+			{"a pending example that reports another code", "erroneous", "ki erroneous pending=T36", "fn main() { 1 + }\n", ""},
+			{"a pending example that is not a Go string", "erroneous", "ki erroneous escaped pending=T36", "fn main() { prnt(1) }\n", "not a Go string literal"},
+			{"a corrected example marked pending is checked as any other", "corrected", "ki corrected pending=T36", "fn main() { prnt(1) }\n", "still reports E0301"},
+		} {
+			exampleRow(t, row.name, row.kind, row.fence, row.source, row.want)
 		}
 	})
 }
