@@ -61,7 +61,7 @@ Las horas son las de las cabeceras de parte del índice del spec (apartado 12.5)
 - **Requisitos de máquina**, cada uno antes del plan que lo usa:
   - Plan 01, capítulo 10: Delve, sin `sudo`: `go install github.com/go-delve/delve/cmd/dlv@vX.Y.Z` a la última versión publicada que soporte go1.27 (se determina al ejecutar con `gh release list -R go-delve/delve --limit 5` y se anota en `docs/toolchain.md`; nunca `@latest`).
   - Plan 08, capítulo 47, opcional: `sudo apt install -y gdb`.
-  - Plan 10, capítulo 64: Neovim ya está en la máquina (es el editor de Álvaro); Zed se instala solo si él quiere probar la extensión, y lo instala él.
+  - Plan 10, capítulo 64: Neovim (el editor de Álvaro; se comprueba con `nvim --version` al llegar al capítulo, y si falta lo instala él); Zed se instala solo si él quiere probar la extensión, y lo instala él.
   - Plan 11, capítulo 66: `sudo apt install -y qemu-user qemu-user-binfmt`.
   - Nada de `sysctl`, nada de toolchains cruzados, nada de perf (lo sustituyen `pprof` y `go tool trace`).
   - Lo que lleva `sudo` lo ejecuta Álvaro cuando toque; el plan correspondiente le da el comando.
