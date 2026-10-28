@@ -1,0 +1,139 @@
+[T08.01] types.builtins_are_distinct                        level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Int`, `Bool`, `()` y el tipo de error son cuatro tipos distintos; cada uno tiene siempre el mismo id, también después de crear otros tipos, y su nodo dice cuál es
+input:   `NewTypeTable()`; `Builtin` de cada uno de los tres tipos predefinidos y `Error()`, pedidos dos veces; y otra vez después de crear una variable con `FreshVar` y una función con `Fun`
+expect:  los cuatro ids son distintos dos a dos (seis pares); la segunda y la tercera lectura de cada uno dan el mismo id que la primera; el nodo de `Int`, `Bool` y `()` es de clase `TypeBuiltin` con el `Builtin` que se pidió, y el del tipo de error es de clase `TypeErr`
+why:     la tabla compara tipos comparando ids, así que de que cada tipo predefinido tenga un id único y
+         estable depende todo lo demás. Si `Int` y `Bool` compartieran id, el comprobador daría por buena
+         `1 + true`; si cada llamada a `Builtin` creara un nodo nuevo, dos `Int` serían tipos distintos y
+         hasta `1 + 2` daría un error de tipos. El tipo de error también ha de ser el suyo: si fuera el id
+         de `Int`, un error ya dado se confundiría con un entero y se comportaría como tal
+ref:     TestTypeTable/builtins_are_distinct
+
+[T08.02] types.fun_types_hash_cons                          level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    dos tipos función con los mismos parámetros, resultado y efectos son el mismo tipo, el mismo id; y cualquier diferencia en el número de parámetros, en un parámetro, en su orden, en el resultado o en los efectos da otro id; la tabla guarda su propia copia de los parámetros, la fila vacía es una sola, pedir dos veces la misma función no añade ningún nodo y la clave recoge los ids enteros, también los de más de 16 bits
+input:   `Fun([Int], Int, ∅)` pedida dos veces y `Fun([Int, Int], Int, ∅)`; otras ocho funciones sobre `Int`, `Bool` y `()` que cambian una parte cada una (tres parámetros, otro resultado, otro parámetro, dos parámetros en los dos órdenes, ningún parámetro con resultado `()` y con resultado `Int`, un parámetro `()`); `Fun([]TypeID{}, ())` y `Fun(nil, ())`, en ese orden; `EmptyRow()` dos veces; un slice de parámetros que el llamador cambia después de la llamada; una segunda fila hecha a mano, con `Fun([Int], Int, otra)`; y una tabla nueva con 4 tipos y 300 variables, de la que se toman 48 ids (los 44 primeros, entre ellos 1, 2, 11 y 12, y los 4 que están 256 por encima de los ids 4 a 7) y se hacen con ellos las funciones `Fun([a], Int)`, `Fun([a, b], Int)` y `Fun([a], b)` para todos los `a` y `b`; y, en esa tabla, otras 70 000 variables, de las que se toman dos que están 65 536 ids una de la otra, `a` y `b`, y se hacen `Fun([a], Int)` y `Fun([b], Int)`
+expect:  los dos `Fun([Int], Int, ∅)` tienen el mismo id y el de dos parámetros, otro; las otras ocho son distintas entre sí y de las dos primeras; `Fun([]TypeID{}, ())` y `Fun(nil, ())` tienen el mismo id; las dos lecturas de `EmptyRow()` dan el mismo id y la fila no tiene etiquetas ni cola; el nodo de `Fun([Int, Bool], Int)` es un `TypeFun` con esos parámetros, ese resultado y la fila vacía, y el de la función sin parámetros tiene `Params` a `nil` (aunque se la pidió con un slice vacío, que es lo primero que hace el test) y su resultado es `()`; tras cambiar el llamador su slice, el nodo conserva `[Int, Bool]`, pedir `Fun([Int, Bool], Bool)` otra vez da el mismo id y con los parámetros cambiados da otro; con la fila hecha a mano la función tiene otro id que con la vacía, el mismo id si se pide dos veces, y su nodo guarda esa fila; y de las 4608 funciones de la tabla nueva (48 + 48·48 + 48·48 − 48, porque 48 están en dos grupos) ninguna comparte id con otra, el nodo de cada una dice de qué parámetros y resultado salió, y la tabla guarda exactamente 4912 tipos: los 304 del principio (4 tipos y 300 variables) y un nodo por cada una de las 4608 funciones, de modo que pedir otra vez una función que ya existe no deja ningún nodo; y `Fun([a], Int)` y `Fun([b], Int)` de las 70 000 variables tienen ids distintos y el nodo de la segunda tiene por parámetros `[b]`
+why:     la igualdad de tipos es la igualdad de ids, y para las funciones eso solo se cumple si la clave
+         del hash-consing recoge todo lo que distingue a un tipo: si olvidara el resultado, `(Int) -> Int` y
+         `(Int) -> Bool` serían el mismo tipo; si mirara solo cuántos parámetros hay o solo el primero,
+         `(Int, Bool)` y `(Bool, Int)` se confundirían; si no mirara los efectos, una función pura y una con
+         efectos serían iguales y el sistema de efectos del capítulo 20 no tendría dónde apoyarse. Los
+         parámetros viajan en la clave como cuatro bytes por id: escribirlos en decimal y pegados haría que
+         `[1, 12]` y `[11, 2]` dieran la misma clave, y guardar un solo byte de cada id los mezclaría en
+         cuanto la tabla pasara de 256 tipos, que ocurre en cualquier programa de tamaño real, y guardar
+         dos bytes, en cuanto pasara de 65 536, que un programa grande puede alcanzar.
+         Pedir otra vez una función que ya existe tampoco puede dejar un nodo de más, aunque todos los ids
+         que devuelva sean los correctos: la tabla crecería con cada consulta. Y la copia de los parámetros
+         protege al tipo: sin ella, un llamador que reutilice su slice cambiaría un tipo que ya está en la
+         tabla y en todos los sitios que lo usan. Y el nodo de una función sin parámetros guarda `nil` y no
+         un slice vacío, como dicen el comentario de `Fun` y el capítulo: si la tabla copiara el slice vacío
+         que le dan, todas las comparaciones por longitud seguirían pasando y nada avisaría de que la
+         representación ha cambiado
+ref:     TestTypeTable/fun_types_hash_cons
+
+[T08.03] types.show_function_type                           level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Show` escribe un tipo como lo muestra un diagnóstico: los parámetros entre paréntesis, separados por una coma y un espacio, después ` -> ` y el resultado; el tipo de error, como `{error}`; y una función dentro de otra no cambia esa forma. Un texto de más de 256 bytes se corta después de la última pieza que cabe y acaba en `…`: uno de 256 se escribe entero, y un tipo de 40 niveles que lleva el mismo tipo dos veces en cada nivel (40 funciones en la tabla y 2^40 trozos de texto) se escribe como el principio de su texto
+input:   `Int`, `Bool` y el tipo de error; `Fun([Int, Bool], Int)`, `Fun([Int], Bool)` y `Fun([Bool, Int, ()], ())`; cuatro funciones que contienen otras: una como único parámetro, una como segundo parámetro, una como resultado y funciones en los tres sitios a la vez; funciones de parámetros `Int` y `Bool` cuyo texto completo mide 256 y 257 bytes, y una de 100 parámetros `Int`; y un tipo de 40 niveles, cada nivel `(t, t) -> Int` con `t` el nivel de abajo, que acaba en `Int`
+expect:  `Int`, `Bool`, `{error}`, `(Int, Bool) -> Int`, `(Int) -> Bool`, `(Bool, Int, ()) -> ()`, `((Int) -> Int) -> Int`, `(Bool, (Int, Int) -> ()) -> Int`, `(Int) -> (Int) -> Bool` y `((Int) -> Int, Bool) -> () -> ()`; el texto de 256 bytes, entero; el de 257, sin su último `Int` (el resultado) y con `…` detrás; el de 100 parámetros, `(`, cincuenta y una veces `Int, ` y `…`, porque el `Int` que sigue a la coma ya no cabe; y el de 40 niveles acaba en `…`, y lo que hay antes de la marca es el principio del texto completo, mide como mucho 256 bytes y no menos de 253 (la pieza más larga, ` -> `, tiene 4), todo antes de 10 segundos (pasado el plazo el test falla con un mensaje)
+why:     el texto de `Show` es lo que ves dentro de las comillas invertidas de cada error de
+         tipos («expected `(Int, Bool) -> Int`, found…»), y un parámetro en el sitio del otro, una coma sin
+         espacio o un paréntesis que falta lo convertirían en un tipo que no es el del programa. `Show`
+         escribe con una pila propia de lo que le queda por escribir y no llamándose a sí misma: las
+         funciones dentro de otras comprueban que las piezas salen de esa pila en el orden del texto, y que
+         el resultado de un tipo no se mezcla con los parámetros del siguiente.
+         Y el texto tiene tope porque la tabla construye cada tipo una sola vez: `p1(p0, p0)`, `p2(p1, p1)`…
+         hace un tipo de n niveles con n nodos y 2^n trozos de texto, que unas pocas líneas de programa
+         llevan a 2^40, y un error que escribiera todos no acabaría nunca ni cabría en memoria. El corte
+         cae después de la última pieza entera que cabe, no en medio de un nombre, y un texto de justo
+         256 bytes no se corta: las filas de 256 y 257 bytes fijan ese borde, y la de 100 parámetros, que
+         la coma anterior a lo que ya no cabe se queda. El test del tipo de 40 niveles corta la espera a
+         los 10 segundos y falla con un mensaje; no cuenta los trozos, así que fija que `Show` acaba y qué
+         escribe, no cuánto trabaja
+ref:     TestTypeTable/show_function_type
+
+[T08.04] types.show_unit_and_nullary_fun                    level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    el tipo unidad se escribe `()`, una función sin parámetros se escribe `() -> R`, y no se confunde con la que tiene un parámetro de tipo unidad
+input:   el tipo `()`; `Fun([], ())`; `Fun([], Int)`; `Fun([()], ())`
+expect:  `()`, `() -> ()`, `() -> Int` y `(()) -> ()`
+why:     una lista de parámetros vacía es el caso en el que un `Show` mal escrito suele tropezar: puede
+         dejar una coma de más, quitar los paréntesis o no escribir nada, y `() -> ()` es el tipo de
+         `fn main()`. El último caso separa dos cosas que parecen la misma: ninguna lista de parámetros y
+         una lista con un parámetro `()`
+ref:     TestTypeTable/show_unit_and_nullary_fun
+
+[T08.05] types.show_names_vars_in_order                     level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    una variable sin ligar se escribe con un nombre inventado al momento: `a`, `b`… por orden de aparición en el texto y no por el orden en que se crearon; la misma variable conserva su nombre dentro de una llamada y cada llamada empieza otra vez en `a`; una variable ligada se escribe como lo que tiene ligado y no gasta nombre; y pasada la `z` siguen `a1`, `b1`…
+input:   dos variables `x` e `y`, creadas en ese orden, y `Fun([x, y], x)`; otras dos, `p` y `q`, creadas en ese orden, y `Fun([q, p], q)`, `Fun([p, p, q], p)` y después `Show(q)` y `Show(p)` sueltas; una variable ligada a `Bool` en `Fun([ligada, x], ligada)`; una ligada a `y` en `Fun([alias, y], Int)`; y una función con 53 variables distintas como parámetros y `()` como resultado
+expect:  `(a, b) -> a`; `(a, b) -> a`; `(a, a, b) -> a`; `a` y `a`; `(Bool, a) -> Bool`; `(a, a) -> Int`; y en la de 53 variables, 53 nombres distintos, de los que los de las posiciones 0, 1, 24, 25, 26, 27, 51 y 52 son `a`, `b`, `y`, `z`, `a1`, `b1`, `z1` y `a2`
+why:     las variables no tienen nombre en el programa y el error tiene que llamarlas de alguna manera: `a`
+         es la primera que aparece en el texto, como en `(a, b) -> a`. Si los nombres siguieran el orden
+         de creación, el mismo tipo se llamaría de una manera u otra según lo que el comprobador hubiera
+         inferido antes, y los mensajes cambiarían con cambios que no tienen que ver con el error; si el
+         contador sobreviviera a la llamada, cada mensaje seguiría por donde acabó el anterior. Una
+         variable ligada no debe verse: tú no sabes que existió. Y la fila de 53 variables fija los
+         dos bordes del cambio de letra a letra con número: la `z` es la 26.ª y la `a1`, la 27.ª
+ref:     TestTypeTable/show_names_vars_in_order
+
+[T08.06] types.fresh_vars_are_distinct                      level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    cada `FreshVar` crea una variable nueva, con su propio id de tipo y su propio id de variable y distinta de los tipos predefinidos; es de clase tipo, no está ligada, tiene rango 0 y nivel 0, y guarda el origen que se le dio
+input:   dos llamadas a `FreshVar`, con los orígenes {fichero 1, bytes 3 a 4, nota "parameter `x`"} y {fichero 1, bytes 9 a 10, nota "let `y`"}
+expect:  los dos ids de tipo son distintos y los dos ids de variable, también; ninguno de los dos es el id de `Int`, `Bool`, `()` ni el del tipo de error; y el registro de cada variable en la tabla es exactamente `TypeVar{Kind: VarKindType, Origin: el suyo}`, es decir, sin ligar y con `Bound`, `Rank` y `Level` a cero
+why:     si dos variables compartieran registro, ligar una ligaría la otra y un tipo desconocido
+         arrastraría a todos los demás; si compartieran el id de tipo, serían el mismo tipo en todas
+         partes y `Show` las llamaría igual. El
+         origen es lo que dará, en los capítulos siguientes, las notas de «porque…» de los errores de tipos,
+         y el rango y el nivel no los lee nadie hasta el capítulo 13: por eso el test los fija en cero aquí,
+         para que el día que alguien los use no haya un valor que no se sepa de dónde viene
+ref:     TestTypeTable/fresh_vars_are_distinct
+
+[T08.07] types.resolve_follows_binding                      level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Resolve` sigue las ligaduras hasta el final de la cadena: una variable ligada a `Int` da `Int`, una cadena de dos variables acaba en `Bool` desde sus dos extremos, una que acaba en una variable sin ligar da el id de tipo de esa variable, y una ligada a una función da esa función; lo que no es una variable ligada se devuelve tal cual, y `Show` también mira a través de la ligadura
+input:   una variable `a` sin ligar, una función `(a) -> Int`, `Int`, y el tipo de error; después `a` ligada a `Int`; `m` ligada a `n` y `n` ligada a `Bool`; `r` ligada a `s`, sin ligar; una variable ligada a `(Int) -> Bool`; y una variable que nadie ha ligado
+expect:  antes de ligar, `Resolve` devuelve el mismo id para la variable, la función, `Int` y el tipo de error; con `a` ligada a `Int`, `Resolve(a)` es el id de `Int`, `Show(a)` es `Int` y `Resolve((a) -> Int)` sigue siendo la función; `Resolve(m)` y `Resolve(n)` son el id de `Bool`; `Resolve(r)` y `Resolve(s)` son el id de tipo de `s`; `Resolve` de la variable ligada a una función es esa función; y la variable que nadie ha ligado se devuelve a sí misma
+why:     `Resolve` es por donde el comprobador mira un tipo que puede ser una variable:
+         si se parara en el primer eslabón, `m` parecería un tipo distinto de `Bool` aunque ya se sepa que
+         lo es, y la unificación daría un error que el programa no tiene. Que devuelva el id de tipo de
+         la variable final y no su id de variable, que son números distintos, evita tomar por un tipo
+         cualquiera que casualmente tenga ese número. Y solo mira la cabeza del tipo, no sus parámetros:
+         quien necesite resolver dentro de una función tiene que bajar él, y `Show` lo hace
+ref:     TestTypeTable/resolve_follows_binding
+
+[T08.08] types.resolve_compresses_paths                     level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    tras `a → b → c`, con `c` sin ligar, `Resolve(a)` da `c` y el registro de `a` queda ligado directamente a `c`; en una cadena de cinco variables que acaba en `Int` quedan las cinco ligadas directamente a `Int`; el final del camino no se liga y del registro de las variables solo cambia el enlace
+input:   tres variables `a`, `b`, `c` con `a` ligada a `b` y `b` ligada a `c`, cada una con una nota de origen propia; y cinco variables encadenadas, la última ligada a `Int`, con otra nota cada una; se resuelve `a`, se resuelve la cabeza de la cadena de cinco y se vuelve a resolverla
+expect:  antes de resolver, `a` está ligada a `b`; `Resolve(a)` es el id de `c`; después, el registro de `a` es exactamente `{Bound: c, IsBound: true, Origin: el suyo}`, el de `b` sigue ligado a `c` y el de `c` es exactamente el de una variable sin ligar con su origen; `Resolve` de la cabeza de la cadena de cinco da el id de `Int`, el registro de cada una de las cinco es exactamente `{Bound: Int, IsBound: true, Origin: el suyo}`, y una segunda llamada da lo mismo y deja igual el registro de la tercera
+why:     sin la compresión el resultado sería el mismo, pero cada consulta recorrería toda la cadena, y las
+         cadenas crecen con el tamaño del programa; con ella, la segunda consulta de cualquier variable de
+         la cadena cuesta un paso. Es una optimización que no se ve desde fuera, y por eso el test mira el
+         registro de la variable y no solo lo que `Resolve` devuelve. La cadena de cinco impide
+         una implementación a medias, la que recoloca solo el primer eslabón, que pasaría el caso de
+         tres. Y el final del camino no puede quedar ligado, y menos a sí mismo: la siguiente búsqueda no
+         acabaría nunca
+ref:     TestTypeTable/resolve_compresses_paths
+
+[T08.09] types.occurs                                       level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Occurs(v, t)` dice si la variable `v` aparece dentro del tipo `t`, en cualquier parámetro, en el resultado y a cualquier profundidad, mirando a través de las variables ligadas, y no baja por todos los caminos cuando el tipo contiene la misma función por muchos; no se confunde con otra variable ni con un tipo cuyo id sea el mismo número
+input:   cinco variables sin ligar (con ids de variable de 0 a 4, números que comparten algunos ids de tipo) y tres ligadas: `d` a `(a) -> Int`, `e` a `d` y `g` a `Int`; una tabla de casos con `a` y `b` frente a sí mismas, a otra variable, a `Int`, a `Bool`, al tipo de error, a funciones que la llevan de primer, segundo, intermedio y último parámetro, de resultado y dentro de un parámetro de un parámetro, a las mismas funciones sin ella, y a las tres variables ligadas, solas y dentro de funciones; cada una de las cinco frente a las cinco y frente a los cuatro tipos predefinidos; y dos tipos de 40 niveles que llevan el mismo tipo dos veces en cada nivel (40 funciones en la tabla y 2^40 caminos), uno que acaba en `Int` y otro que acaba en una variable `w`, frente a `a` y a `w`
+expect:  `true` cuando la variable es el tipo, está en algún parámetro, está en el resultado, está dentro de un parámetro de un parámetro, o es el tipo de una variable ligada a una función que la contiene (a una o a dos ligaduras de distancia, solas o como parámetro o resultado); `false` en una función que lleva solo otra variable, en `Int`, en `Bool`, en el tipo de error, en la variable ligada a `(a) -> Int` cuando se busca `b`, y en `g`, una variable ligada a `Int`, sola y como parámetro y como resultado; en las cinco frente a las cinco, `true` solo cuando es la misma, y `false` frente a los cuatro tipos predefinidos; y en los de 40 niveles, `false` para `a` en el que acaba en `Int` y en el que acaba en `w`, y `true` para `w` en este último, con esas respuestas dadas antes de 10 segundos (pasado el plazo el test falla con un mensaje)
+why:     la comprobación de occurs es lo que impide construir un tipo infinito: si `a` se ligara a
+         `(a) -> Int`, `Show` nunca acabaría de escribirlo. Cada fila mata un recorrido distinto: el que mira
+         solo los parámetros, solo el resultado, el primer parámetro o todos menos el último, el que no
+         baja dentro de una función, el que no mira a través de las ligaduras y el que da `true` por
+         cualquier variable. Y la comparación es entre ids de variable: un recorrido que comparara el id
+         de la variable con el id de un tipo daría `true` para `Int` cuando la variable es la 0, y para la
+         variable 4 frente a la variable 0, porque el id de tipo de esa es 4. Los tipos de 40 niveles fijan
+         que el recorrido no baja por todos los caminos: tienen 40 nodos y 2^40 caminos, y uno que bajara
+         por todos no acabaría nunca con una pregunta que responde `false`. El test lo corta a los 10
+         segundos y falla con un mensaje, en vez de esperar los diez minutos de `go test`; no cuenta los
+         pasos, así que un recorrido que mirara cada función dos o tres veces también pasaría. Un programa
+         corto llega a un tipo así (`p1(p0, p0)`, `p2(p1, p1)`…), y el occurs check corre en cada unión
+ref:     TestTypeTable/occurs
