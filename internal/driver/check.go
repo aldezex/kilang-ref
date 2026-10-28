@@ -15,10 +15,12 @@ package driver
 // of its own). Last it analyzes the trees (see Analyze): so far it resolves
 // names (see sema.Resolve). It collects the top-level definitions, binds the
 // parameters and the `let`s, resolves every name in the function bodies, and
-// reports what is wrong: a name that stands for nothing (with a suggestion if
-// one is spelled almost like it), a function defined twice and an attribute
-// that is not allowed. That happens even if the file has syntax errors: the
-// error nodes of the trees stand for nothing.
+// reports what is wrong: a name that stands for nothing (with a suggestion and
+// its edit if one is spelled almost like it), a function defined twice and an
+// attribute that is not allowed. That happens even if the file has syntax
+// errors: the error nodes of the trees define nothing, except that a function
+// whose signature could not be read after its name still has the name, so the
+// calls to it are not reported as unknown names.
 //
 // With --diagnostics=json each diagnostic is one line of JSON on stderr, but
 // two things are still written there as plain text: the "error: cannot read

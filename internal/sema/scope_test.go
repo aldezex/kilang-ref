@@ -138,9 +138,26 @@ func userDiags(t *testing.T, p *testsupport.Program, n int) []diag.Diagnostic {
 }
 
 // checkUnknown fails the test unless d is the E0301 for the name written at
-// span. It leaves the help line alone: a name that is close to one that exists
-// has one, and TestSuggestions is the test that pins what it says.
+// span, with no secondary label and no note. It leaves the help line alone: a
+// name that is close to one that exists has one, and TestSuggestions is the test
+// that pins what it says.
 func checkUnknown(t *testing.T, d diag.Diagnostic, name string, span base.Span) {
+	t.Helper()
+	checkUnknownWith(t, d, name, span, nil, nil)
+}
+
+// checkUnknownSelf is checkUnknown for a name that is the one its own `let`
+// binds: the diagnostic has the label on the pattern of that `let`, and the note
+// with the rule (TestScopes/let_in_own_init_names_the_let).
+func checkUnknownSelf(t *testing.T, d diag.Diagnostic, name string, span, letName base.Span) {
+	t.Helper()
+	label := diag.Label{Span: letName, Message: "`" + name + "` is bound by this `let`, which cannot see itself"}
+	checkUnknownWith(t, d, name, span, []diag.Label{label}, []string{"a `let` is visible only after its own statement"})
+}
+
+// checkUnknownWith fails the test unless d is the E0301 for the name written at
+// span, with exactly these secondary labels and notes.
+func checkUnknownWith(t *testing.T, d diag.Diagnostic, name string, span base.Span, secondary []diag.Label, notes []string) {
 	t.Helper()
 	if d.Severity != diag.Error || d.Code != diag.E(301) {
 		t.Errorf("%s: %v %v, want error E0301", name, d.Severity, d.Code)
@@ -151,8 +168,8 @@ func checkUnknown(t *testing.T, d diag.Diagnostic, name string, span base.Span) 
 	if want := (diag.Label{Span: span, Message: "not found in this scope"}); d.Primary != want {
 		t.Errorf("%s: primary label %+v, want %+v", name, d.Primary, want)
 	}
-	if len(d.Secondary) != 0 || len(d.Notes) != 0 {
-		t.Errorf("%s: secondary labels %+v and notes %q, want none", name, d.Secondary, d.Notes)
+	if !slices.Equal(d.Secondary, secondary) || !slices.Equal(d.Notes, notes) {
+		t.Errorf("%s: secondary labels %+v and notes %q, want %+v and %q", name, d.Secondary, d.Notes, secondary, notes)
 	}
 }
 
@@ -312,7 +329,7 @@ fn third(a: Int) -> Int {
 		const src = "fn f() {\n  let x = x\n  x\n}\n"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p, "E0301")
-		checkUnknown(t, userDiags(t, p, 1)[0], "x", spanIn(t, p, src, "= x", "x"))
+		checkUnknownSelf(t, userDiags(t, p, 1)[0], "x", spanIn(t, p, src, "= x", "x"), spanIn(t, p, src, "let x", "x"))
 		wantUnknown(t, p, "x", 0)
 		fID, _ := fnNamed(t, p, "f")
 		wantLocal(t, p, "x after the let", useAt(t, p, "x", 1), letNamed(t, p, "x", 0), "x", spanIn(t, p, src, "let x", "x"), fID)
@@ -325,6 +342,56 @@ fn third(a: Int) -> Int {
 		gID, _ := fnNamed(t, p, "g")
 		wantLocal(t, p, "x in the initializer", useAt(t, p, "x", 0), paramLocal(t, p, "g", 0), "x", spanIn(t, p, withParam, "g(x:", "x"), gID)
 		wantLocal(t, p, "x after the let", useAt(t, p, "x", 1), letNamed(t, p, "x", 0), "x", spanIn(t, p, withParam, "let x", "x"), gID)
+	})
+
+	t.Run("let_in_own_init_names_the_let", func(t *testing.T) {
+		// The unknown name is the one that the `let` is binding: the label on
+		// the pattern says so and the note gives the rule. (`total` is far from
+		// every name there is, so there is no suggestion to confuse the check.)
+		const src = "fn f() {\n  let total = total\n  total\n}\n"
+		p := testsupport.Analyze(t, src)
+		wantCodes(t, p, "E0301")
+		d := userDiags(t, p, 1)[0]
+		checkUnknownSelf(t, d, "total", spanIn(t, p, src, "= total", "total"), spanIn(t, p, src, "let total", "total"))
+		if d.Help != "" || len(d.Fixits) != 0 {
+			t.Errorf("help %q and fixits %+v, want none", d.Help, d.Fixits)
+		}
+
+		// Inside a call, and inside a block that is the initializer: the name
+		// is still the one the `let` binds, even if that `let` is not the
+		// innermost one.
+		const call = "fn f() {\n  let total = g(total)\n}\nfn g(x: Int) {}\n"
+		p = testsupport.Analyze(t, call)
+		wantCodes(t, p, "E0301")
+		checkUnknownSelf(t, userDiags(t, p, 1)[0], "total", spanIn(t, p, call, "g(total)", "total"), spanIn(t, p, call, "let total", "total"))
+		const nested = "fn f() {\n  let total = {\n    let inner = total\n    inner\n  }\n}\n"
+		p = testsupport.Analyze(t, nested)
+		wantCodes(t, p, "E0301")
+		checkUnknownSelf(t, userDiags(t, p, 1)[0], "total", spanIn(t, p, nested, "= total", "total"), spanIn(t, p, nested, "let total", "total"))
+
+		// Two `let`s that bind the same name, one inside the other: the name is
+		// unknown in the initializer of both, and the label is on the inner one,
+		// the `let` that the name is nearest to.
+		const same = "fn f() {\n  let total = {\n    let total = total\n    total\n  }\n}\n"
+		p = testsupport.Analyze(t, same)
+		wantCodes(t, p, "E0301")
+		checkUnknownSelf(t, userDiags(t, p, 1)[0], "total", spanIn(t, p, same, "= total\n", "total"), spanIn(t, p, same, "let total = total", "total"))
+
+		// An unknown name that is not the one being bound gets neither label nor
+		// note, the `let` that is being bound or one that already finished, in
+		// another function or in this one, notwithstanding.
+		for _, row := range []struct{ what, src string }{
+			{"another name", "fn f() {\n  let total = totl\n}\n"},
+			{"a let that finished", "fn f() {\n  { let total = 1 }\n  total\n}\n"},
+			{"a let of another function", "fn a() { let total = 1 }\nfn b() { total }\n"},
+			{"inside the let after it", "fn f() {\n  let total = 1\n  let other = total2\n}\n"},
+		} {
+			p := testsupport.Analyze(t, row.src)
+			wantCodes(t, p, "E0301")
+			if d := userDiags(t, p, 1)[0]; len(d.Secondary) != 0 || len(d.Notes) != 0 {
+				t.Errorf("%s: secondary labels %+v and notes %q, want none", row.what, d.Secondary, d.Notes)
+			}
+		}
 	})
 
 	t.Run("shadowing_picks_innermost", func(t *testing.T) {

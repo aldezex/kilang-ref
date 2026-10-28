@@ -1,6 +1,9 @@
 package syntax
 
-import "github.com/aldezex/kilang/internal/base"
+import (
+	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/internal/diag"
+)
 
 // This file reads blocks, `let` and `if`. The grammar (spec 5.3) is
 //
@@ -145,8 +148,13 @@ func (p *parser) block() ExprID {
 // of the block.
 func (p *parser) letStmt() StmtID {
 	kw := p.advance()
-	name, ok := p.expect(LowerIdent, "identifier")
+	name, ok := p.eat(LowerIdent)
 	if !ok {
+		// The help is for the `let` alone: any other place that needs an
+		// identifier has nothing concrete to suggest.
+		p.expectedWith("identifier", func(d diag.Diagnostic) diag.Diagnostic {
+			return d.WithHelp("write the name of the variable: `let x = …`")
+		})
 		return p.m.Stmts.Push(Stmt{Kind: StmtError, Span: kw.Span})
 	}
 	s := Stmt{Kind: StmtLet, Name: base.Symbol(name.Payload), NameSpan: name.Span}

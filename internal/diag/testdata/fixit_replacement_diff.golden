@@ -1,0 +1,9 @@
+error[E0301]: unknown name `fibb`
+ --> test.ki:1:9
+  |
+1 | let y = fibb
+  |         ^^^^ not found in this scope
+  = help: did you mean `fib`?
+  |
+1 - let y = fibb
+1 + let y = fib

@@ -63,11 +63,35 @@ type Label struct {
 	Message string
 }
 
-// FixIt is a suggested edit: replace the text of Span with Replacement.
+// FixIt is a suggested edit: replace the text of Span with Replacement. An
+// empty Span inserts and an empty Replacement deletes; Insert, Delete and
+// Replace build the three kinds. A fix-it always comes with a help line that
+// says what it does (RenderHuman refuses one without), and its span stays on
+// one line of the file of the primary label.
+//
+// The edits of a diagnostic are all placed by their offsets in the original
+// text, so none of them moves another: applying them is the same as applying
+// them one after the other, the one with the largest offset first. Edits at the
+// same offset go in the order of Diagnostic.Fixits in that sequence, so the
+// later one is written first: two insertions at one offset, a then b, give b
+// followed by a. RenderHuman and the JSON output (the order of its fixits
+// array is that of Fixits) are meant to be read that way.
 type FixIt struct {
 	Span        base.Span
 	Replacement string
 }
+
+// Insert returns the fix-it that writes text at the start of at, which it
+// treats as a position: the span of the result is empty.
+func Insert(at base.Span, text string) FixIt {
+	return FixIt{Span: base.Span{File: at.File, Lo: at.Lo, Hi: at.Lo}, Replacement: text}
+}
+
+// Delete returns the fix-it that removes the text of span.
+func Delete(span base.Span) FixIt { return FixIt{Span: span} }
+
+// Replace returns the fix-it that puts text where span is.
+func Replace(span base.Span, text string) FixIt { return FixIt{Span: span, Replacement: text} }
 
 // Diagnostic is one error, warning or note about the user's program.
 //
@@ -104,6 +128,14 @@ func (d Diagnostic) WithSecondary(l Label) Diagnostic {
 // change.
 func (d Diagnostic) WithNote(n string) Diagnostic {
 	d.Notes = append(slices.Clip(d.Notes), n)
+	return d
+}
+
+// WithFixIt returns a copy of d with f added after its fix-its. d itself does
+// not change. The help line says what the fix-its do, so a pass that adds one
+// sets the help too (see RenderHuman).
+func (d Diagnostic) WithFixIt(f FixIt) Diagnostic {
+	d.Fixits = append(slices.Clip(d.Fixits), f)
 	return d
 }
 

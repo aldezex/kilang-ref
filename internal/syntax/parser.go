@@ -53,11 +53,12 @@ type parser struct {
 	// index is how many of the tokens before the current one are not Newlines.
 	// Mistakes are measured in these (see tokIndex).
 	index int
-	// end is where the last token that the parser consumed ends, not counting
-	// Newlines, so that the span of a node stops at the node's last token and
-	// not at the line break after it. It is 0 before the first token.
-	end uint32
-	m   *Module
+	// last is the last token that the parser consumed, not counting Newlines,
+	// so that the span of a node stops at the node's last token and not at the
+	// line break after it. It is the zero Token before the first token, which
+	// ends at 0.
+	last Token
+	m    *Module
 
 	// chain is the state of the statement-level expression that is being read;
 	// see expr in parser_expr.go.
@@ -107,12 +108,17 @@ func (p *parser) advance() Token {
 	if t.Kind != Eof {
 		p.pos++
 		if t.Kind != Newline {
-			p.end = t.Span.Hi
+			p.last = t
 			p.index++
 		}
 	}
 	return t
 }
+
+// prev returns the last token that advance consumed, not counting Newlines:
+// the token after which a closer that is missing is written. Before the first
+// token it is the zero Token.
+func (p *parser) prev() Token { return p.last }
 
 // eat consumes the current token and returns it with true if it is of kind k;
 // otherwise it consumes nothing and returns false.
@@ -145,13 +151,13 @@ func (p *parser) found() string {
 }
 
 // expected reports E0201, "expected <what>, found <token>", with its primary
-// label on the token at the cursor, and consumes nothing. what is one of the
-// words that the message uses: `expression`, `identifier`, `type`, `item`,
-// `newline` and `string`, or a piece of punctuation between backquotes, such as
-// the `(` after the name of a function or the `[` of an attribute.
-// TestParseStmt/e0201_sites has a row for each word. The word `{` is asked for
-// by the branches of an if and by a function that has no body and no
-// `#[extern]`.
+// label ("expected <what> here") on the token at the cursor, and consumes
+// nothing. what is one of the words that the message uses: `expression`,
+// `identifier`, `type`, `item`, `newline` and `string`, or a piece of
+// punctuation between backquotes, such as the `(` after the name of a function
+// or the `[` of an attribute. TestParseStmt/e0201_sites has a row for each
+// word. The word `{` is asked for by the branches of an if and by a function
+// that has no body and no `#[extern]`.
 //
 // It reports nothing in three cases. The token found may be an Error token: the
 // lexer has reported that character or string already, and a second diagnostic
@@ -163,7 +169,12 @@ func (p *parser) found() string {
 // may suppress it: a mistake fewer than suppressDistance tokens after the last
 // one reported is counted, and the sink hears nothing of it. The E0202 of an
 // unclosed delimiter goes through the same rule (see report).
-func (p *parser) expected(what string) {
+func (p *parser) expected(what string) { p.expectedWith(what, nil) }
+
+// expectedWith is expected for a caller that adds to the diagnostic (a help
+// line, a secondary label, a fix-it): it calls decorate, if there is one, on the
+// E0201 before it is reported, and only if it is reported.
+func (p *parser) expectedWith(what string, decorate func(diag.Diagnostic) diag.Diagnostic) {
 	if p.chain.abandoned {
 		return
 	}
@@ -173,7 +184,12 @@ func (p *parser) expected(what string) {
 	}
 	if p.admit() {
 		t := p.tok()
-		p.sink.Report(diag.NewError(diag.E(201), "expected "+what+", found "+p.found(), diag.Label{Span: t.Span}))
+		d := diag.NewError(diag.E(201), "expected "+what+", found "+p.found(),
+			diag.Label{Span: t.Span, Message: "expected " + what + " here"})
+		if decorate != nil {
+			d = decorate(d)
+		}
+		p.sink.Report(d)
 	}
 }
 
@@ -199,7 +215,7 @@ func (p *parser) skipNewlines() {
 // last consumed token ends. If nothing has been consumed since start, the span
 // is empty and sits at the start of start.
 func (p *parser) spanFrom(start base.Span) base.Span {
-	return base.Span{File: start.File, Lo: start.Lo, Hi: max(p.end, start.Lo)}
+	return base.Span{File: start.File, Lo: start.Lo, Hi: max(p.last.Span.Hi, start.Lo)}
 }
 
 // module reads items until the end of the file. Every pass of the loop consumes
@@ -226,6 +242,16 @@ func (p *parser) errorItem(start base.Span) ItemID {
 	return p.m.ItemNodes.Push(Item{Kind: ItemError, Span: p.spanFrom(start)})
 }
 
+// namedErrorItem is errorItem for a function whose name, the token name, was
+// read before its signature stopped making sense. The item keeps the name, so
+// that name resolution knows that the function exists and a call to it is not
+// reported as the call of a name that nothing defines.
+func (p *parser) namedErrorItem(start base.Span, name Token) ItemID {
+	return p.m.ItemNodes.Push(Item{
+		Kind: ItemError, Span: p.spanFrom(start), Name: base.Symbol(name.Payload), NameSpan: name.Span,
+	})
+}
+
 // item reads one item and always consumes at least one token. The grammar is
 //
 //	item = { attr } [ 'pub' ] 'fn' lower '(' [ param { ',' param } ] ')'
@@ -239,7 +265,8 @@ func (p *parser) errorItem(start base.Span) ItemID {
 // missing body, so the rest of the file can still call the function. A token
 // that cannot start an item, or a signature that stops making sense, is an
 // ItemError and E0201: the tokens read so far are consumed, and module skips
-// the rest of the item.
+// the rest of the item. If it goes wrong after the name, the ItemError keeps the
+// name (see namedErrorItem).
 func (p *parser) item() ItemID {
 	start := p.tok().Span
 	if !p.at(Hash) && !p.at(KwPub) && !p.at(KwFn) {
@@ -266,10 +293,10 @@ func (p *parser) item() ItemID {
 	it.Name, it.NameSpan = base.Symbol(name.Payload), name.Span
 	open, ok := p.expect(LParen, "`(`")
 	if !ok {
-		return p.errorItem(start)
+		return p.namedErrorItem(start, name)
 	}
 	if it.Params, ok = p.params(open); !ok {
-		return p.errorItem(start)
+		return p.namedErrorItem(start, name)
 	}
 	if _, ok = p.eat(Arrow); ok {
 		it.Ret, it.HasRet = p.typeExpr(), true
@@ -323,6 +350,7 @@ func (p *parser) attrs() (base.ListRange, bool) {
 // that is not what the grammar needs: the `[`, the name, a string, a `)` or the
 // `]`; or E0202, if the file ends where a `)` or a `]` was needed.
 func (p *parser) attr() (Attr, bool) {
+	first := p.pos
 	hash := p.advance()
 	bracket, ok := p.expect(LBracket, "`[`")
 	if !ok {
@@ -332,7 +360,7 @@ func (p *parser) attr() (Attr, bool) {
 	if !ok {
 		return Attr{}, false
 	}
-	a := Attr{Name: base.Symbol(name.Payload)}
+	a := Attr{Name: base.Symbol(name.Payload), NameSpan: name.Span}
 	if paren, ok := p.eat(LParen); ok {
 		for {
 			arg, ok := p.expect(String, "string")
@@ -352,6 +380,14 @@ func (p *parser) attr() (Attr, bool) {
 		return Attr{}, false
 	}
 	a.Span = p.spanFrom(hash.Span)
+	// The tokens after the `#` that have a line break in front of them are the
+	// ones that put the attribute on more than one line.
+	a.OneLine = true
+	for _, t := range p.tb.Tokens[first+1 : p.pos] {
+		if t.NewlineBefore {
+			a.OneLine = false
+		}
+	}
 	return a, true
 }
 

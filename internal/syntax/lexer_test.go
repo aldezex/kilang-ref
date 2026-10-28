@@ -38,6 +38,22 @@ func lexFile(t *testing.T, src string) (syntax.TokenBuffer, *diag.Sink, base.Fil
 	return syntax.Lex(&sm, id, in, sink), sink, id, in
 }
 
+// applyFixits returns src with the fix-its of d applied, each at its offsets in
+// the original text (from the right, so that no edit moves another: of two
+// edits at one offset the later one in d.Fixits is written first, as FixIt in
+// package diag says). It is for the tests that check that a fix-it does what
+// its help says. (The internal tests of the package have their own
+// applyFixes, in parser_expr_internal_test.go: the two test packages cannot
+// share a helper.)
+func applyFixits(src string, d diag.Diagnostic) string {
+	fixits := slices.Clone(d.Fixits)
+	slices.SortStableFunc(fixits, func(a, b diag.FixIt) int { return int(b.Span.Lo) - int(a.Span.Lo) })
+	for _, f := range fixits {
+		src = src[:f.Span.Lo] + f.Replacement + src[f.Span.Hi:]
+	}
+	return src
+}
+
 // lexKinds returns the kind of every token of src, the final Eof included.
 func lexKinds(t *testing.T, src string) []syntax.TokenKind {
 	t.Helper()
@@ -260,6 +276,100 @@ func TestLexer(t *testing.T) {
 				}
 			} else if len(tb.Tokens) != 1 || tb.Tokens[0].Kind != syntax.Eof {
 				t.Errorf("%q: tokens %+v, want only Eof", row.src, tb.Tokens)
+			}
+		}
+	})
+
+	t.Run("e0103_fixit_closes_the_comment", func(t *testing.T) {
+		// The help says how to close the comment and the one fix-it writes the
+		// `*/` at the end of the file: after the last byte, also when that is a
+		// line break (the fix-it is then on the empty last line). A comment
+		// that is nested gets one `*/` for each level that is open. When the
+		// file ends in a `/` that belongs to the text of the comment (a path, a
+		// URL), the edit starts with a space, because without it the `/` and the
+		// first `*` would read as a `/*` and open one more level: the rows
+		// without that space end in something else, or in the `/` of a `*/`.
+		for _, row := range []struct {
+			src  string
+			end  uint32
+			text string // what is inserted: one `*/` for each level left open
+		}{
+			{"/* x", 4, "*/"},
+			{"/* x\n", 5, "*/"},
+			{"a /* b /* c */ d", 16, "*/"},
+			{"/*", 2, "*/"},
+			{"/* /* x", 7, "*/*/"},
+			{"/* a /* b /* c */", 17, "*/*/"},
+			{"/* a/", 5, " */"},
+			{"/* a//", 6, " */"},
+			{"/* /* a/", 8, " */*/"},
+			{"/*/", 3, " */"},
+			{"/* a/*", 6, "*/*/"}, // the last `/` is the start of a `/*`, not loose
+			{"/* a*", 5, "*/"},
+		} {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if want := "close the comment with `*/`"; d.Help != want {
+				t.Errorf("%q: help %q, want %q", row.src, d.Help, want)
+			}
+			if want := []diag.FixIt{diag.Insert(base.Span{File: id, Lo: row.end}, row.text)}; !slices.Equal(d.Fixits, want) {
+				t.Errorf("%q: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			if len(d.Notes) != 0 || len(d.Secondary) != 0 {
+				t.Errorf("%q: notes %q and secondary labels %+v, want none", row.src, d.Notes, d.Secondary)
+			}
+			// The fix-it does what it says: the file with it applied has no
+			// unterminated comment left.
+			fixed := row.src[:row.end] + row.text
+			if _, again, _, _ := lexFile(t, fixed); again.Count(diag.E(103)) != 0 {
+				t.Errorf("%q: after the fix-it, %q still has an unterminated comment", row.src, fixed)
+			}
+		}
+	})
+	t.Run("e0104_help_and_fixit", func(t *testing.T) {
+		// Every character gets the help "remove it" and a fix-it that deletes
+		// all of its bytes. The note about ASCII goes only to a letter, a
+		// character that looks like something Ki accepts: not to a symbol, an
+		// emoji, a space or a digit of another script.
+		const note = "identifiers and operators are ASCII in Ki"
+		for _, row := range []struct {
+			src  string
+			size uint32
+			note bool
+		}{
+			{"$", 1, false},
+			{"é", 2, true},
+			{"λ", 2, true},
+			{"€", 3, false},
+			{"😀", 4, false},
+			{"\u00a0", 2, false},
+			{"\u0663", 2, false}, // an Arabic-Indic digit: a number, not a letter
+		} {
+			src := "a " + row.src + " b"
+			_, sink, id, _ := lexFile(t, src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if d.Help != "remove it" {
+				t.Errorf("%q: help %q, want %q", src, d.Help, "remove it")
+			}
+			if want := []diag.FixIt{diag.Delete(base.Span{File: id, Lo: 2, Hi: 2 + row.size})}; !slices.Equal(d.Fixits, want) {
+				t.Errorf("%q: fixits %+v, want %+v", src, d.Fixits, want)
+			}
+			wantNotes := []string(nil)
+			if row.note {
+				wantNotes = []string{note}
+			}
+			if !slices.Equal(d.Notes, wantNotes) {
+				t.Errorf("%q: notes %q, want %q", src, d.Notes, wantNotes)
 			}
 		}
 	})

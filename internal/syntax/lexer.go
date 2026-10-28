@@ -68,6 +68,10 @@ type lexer struct {
 
 	// interp is the state that string literals and their interpolations need.
 	interp interpState
+
+	// inChar is set while char reads the contents of a character literal, so
+	// that an escape that goes wrong knows which kind of literal it is in.
+	inChar bool
 }
 
 // emit appends a token of the given kind that starts at start and ends at the
@@ -104,10 +108,13 @@ func (lx *lexer) skipTrivia() {
 		case c == ' ' || c == '\t' || c == '\r':
 			lx.pos++
 		case c == '/' && lx.at(1) == '/':
-			// Stop before the line break, so that the case above sees it.
+			// Stop before the line break, so that the case above sees it. A
+			// lone CR is no line break, so it is part of the comment.
 			for lx.pos < len(lx.src) && lx.src[lx.pos] != '\n' {
 				lx.pos++
 			}
+			// Nothing came after the comment, not even a line break.
+			lx.tb.endsInComment = lx.pos == len(lx.src)
 		case c == '/' && lx.at(1) == '*':
 			lx.skipBlockComment()
 		default:
@@ -118,12 +125,15 @@ func (lx *lexer) skipTrivia() {
 
 // skipBlockComment skips a /* */ comment, which may contain other comments:
 // each /* inside opens one more level and each */ closes one. If the file ends
-// before the outermost one closes, it reports E0103 on the outermost /*.
+// before the outermost one closes, it reports E0103 on the outermost /* and
+// notes that the file ends inside a comment.
 func (lx *lexer) skipBlockComment() {
 	start := lx.pos
 	depth := 1
 	lx.pos += 2
+	unit := lx.pos // where the last unit read starts: a `/*`, a `*/` or one byte
 	for lx.pos < len(lx.src) {
+		unit = lx.pos
 		switch {
 		case lx.src[lx.pos] == '/' && lx.at(1) == '*':
 			depth++
@@ -141,8 +151,22 @@ func (lx *lexer) skipBlockComment() {
 			lx.pos++
 		}
 	}
+	// The comment runs to the end of the file, so that is where the closing
+	// `*/` goes, one for each level that is still open: a fix-it with fewer
+	// would leave the file with the same mistake. If the file ends in a `/`
+	// that is a unit of its own (the text of the comment, as in a URL, and not
+	// the end of a `*/`), the first `*` of the edit would join it into a `/*`
+	// and open one level more, so the edit starts with a space.
+	closing := strings.Repeat("*/", depth)
+	if unit == len(lx.src)-1 && lx.src[unit] == '/' {
+		closing = " " + closing
+	}
+	lx.tb.endsInComment = true
+	end := base.Span{File: lx.id, Lo: uint32(len(lx.src))}
 	lx.sink.Report(diag.NewError(diag.E(103), "unterminated block comment",
-		diag.Label{Span: base.Span{File: lx.id, Lo: uint32(start), Hi: uint32(start) + 2}, Message: "comment starts here"}))
+		diag.Label{Span: base.Span{File: lx.id, Lo: uint32(start), Hi: uint32(start) + 2}, Message: "comment starts here"}).
+		WithHelp("close the comment with `*/`").
+		WithFixIt(diag.Insert(end, closing)))
 }
 
 // next lexes the token that starts at the current position, which is not
@@ -316,8 +340,16 @@ func (lx *lexer) unexpected() {
 	start := lx.pos
 	r, size := utf8.DecodeRune(lx.src[lx.pos:])
 	lx.pos += size
-	lx.sink.Report(diag.NewError(diag.E(104), "unexpected character `"+visible(string(r))+"`",
-		diag.Label{Span: base.Span{File: lx.id, Lo: uint32(start), Hi: uint32(lx.pos)}, Message: "not valid in Ki source"}))
+	span := base.Span{File: lx.id, Lo: uint32(start), Hi: uint32(lx.pos)}
+	d := diag.NewError(diag.E(104), "unexpected character `"+visible(string(r))+"`",
+		diag.Label{Span: span, Message: "not valid in Ki source"})
+	// A letter of another script is the likely mistake (an accent in a name),
+	// and the user may not see why Ki refuses it; for a symbol the label says
+	// enough.
+	if unicode.IsLetter(r) {
+		d = d.WithNote("identifiers and operators are ASCII in Ki")
+	}
+	lx.sink.Report(d.WithHelp("remove it").WithFixIt(diag.Delete(span)))
 	lx.emit(Error, start, 0)
 }
 

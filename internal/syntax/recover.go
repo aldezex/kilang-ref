@@ -3,6 +3,7 @@ package syntax
 import (
 	"strconv"
 
+	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/diag"
 )
 
@@ -89,17 +90,71 @@ func (p *parser) report(d diag.Diagnostic) {
 	}
 }
 
+// closerOf returns the text of the closing partner of open, a `{`, `(` or `[`.
+func closerOf(open TokenKind) string {
+	switch open {
+	case LBrace:
+		return "}"
+	case LParen:
+		return ")"
+	case LBracket:
+		return "]"
+	}
+	panic("unreachable")
+}
+
 // unclosed reports E0202 for the delimiter open, a `{`, `(` or `[` whose
 // closing partner the parser did not find before the end of the file. The label
 // is on the delimiter, because that is where the mistake is, and not on the end
-// of the file. Nothing is reported while the expression being read is
-// abandoned.
+// of the file. The help names the closer, and the fix-it writes it where the
+// parser noticed, at the end of the file: the cursor is at the Eof token, which
+// is the last in the buffer. That place is not always one where a closer can
+// be written:
+//
+//   - A comment that nothing closes (see TokenBuffer.endsInComment) would take
+//     the closer as part of it, so the closer goes right after the last token
+//     that was read instead, in front of the comment, as expectClose does.
+//   - A string or a character that never ends (see
+//     TokenBuffer.unterminatedLiteral) takes it too, if the place is inside it
+//     or at its end. The end of the file is when the literal runs to it. The
+//     end of the last token read, when a comment ends the file, is when that
+//     token lies in the literal: it is the literal's own token or the code of
+//     its interpolation. Where the closer belongs then depends on how the
+//     literal was meant to end, so there is the help and no fix-it.
+//
+// Nothing is reported while the expression being read is abandoned.
 func (p *parser) unclosed(open Token) {
 	if p.chain.abandoned {
 		return
 	}
-	p.report(diag.NewError(diag.E(202), "unclosed delimiter",
-		diag.Label{Span: open.Span, Message: "this `" + p.tb.text(open) + "` is never closed"}))
+	closer := closerOf(open.Kind)
+	at := p.tb.Tokens[len(p.tb.Tokens)-1].Span // the Eof
+	if p.tb.endsInComment {
+		at = base.Span{File: p.m.File, Lo: p.prev().Span.Hi}
+	}
+	d := diag.NewError(diag.E(202), "unclosed delimiter",
+		diag.Label{Span: open.Span, Message: "this `" + p.tb.text(open) + "` is never closed"}).
+		WithHelp("close it with `" + closer + "`")
+	if !p.tb.inUnterminatedLiteral(at.Lo) {
+		d = d.WithFixIt(diag.Insert(at, closer))
+	}
+	p.report(d)
+}
+
+// closerIsMissing reports whether a token of kind k, found where the closer of
+// a delimiter was expected, says that the closer is what is missing: k is one
+// of the tokens that come after the construct that the delimiter belongs to, so
+// the delimiter was left open. They are the `}` or `]` of the construct around
+// it, a `;`, a `let` (nothing but a statement starts with one) and a token that
+// starts an item. Any other token is more likely a missing `,` or operator
+// (`print(1 2)`, `fn f(x y)`) or a different mistake (`-> (Int)`), and writing
+// the closer after the last token would not fix the line.
+func closerIsMissing(k TokenKind) bool {
+	switch k {
+	case RBrace, RBracket, Semi, KwLet:
+		return true
+	}
+	return isItemStart(k)
 }
 
 // expectClose consumes the closing delimiter of kind k that matches open, the
@@ -107,6 +162,10 @@ func (p *parser) unclosed(open Token) {
 // consumes nothing, and returns false: E0202 at the delimiter if the file ends
 // there, and otherwise E0201 for what (see expected). So the `}` that ends a
 // block ends a `(` that is still open in it, with an E0201.
+//
+// The E0201 points at the delimiter that is still open. When the token found
+// shows that the closer is what is missing (see closerIsMissing) it also says
+// how to close it and offers to write the closer.
 func (p *parser) expectClose(k TokenKind, what string, open Token) bool {
 	if _, ok := p.eat(k); ok {
 		return true
@@ -114,7 +173,19 @@ func (p *parser) expectClose(k TokenKind, what string, open Token) bool {
 	if p.at(Eof) {
 		p.unclosed(open)
 	} else {
-		p.expected(what)
+		p.expectedWith(what, func(d diag.Diagnostic) diag.Diagnostic {
+			// The delimiter that the closer would close explains the mistake,
+			// whatever was found.
+			d = d.WithSecondary(diag.Label{Span: open.Span, Message: "unclosed `" + p.tb.text(open) + "` opened here"})
+			if !closerIsMissing(p.tok().Kind) {
+				return d
+			}
+			// The closer goes right after the last token that was read, where
+			// the expression stopped, and not at the token that was found.
+			closer := closerOf(open.Kind)
+			at := base.Span{File: p.m.File, Lo: p.prev().Span.Hi}
+			return d.WithHelp("close it with `" + closer + "`").WithFixIt(diag.Insert(at, closer))
+		})
 	}
 	return false
 }
@@ -133,8 +204,9 @@ func (p *parser) enter() bool {
 	if p.depth == MaxNesting {
 		p.chain.abandoned = true
 		p.report(diag.NewError(diag.E(204), "expression is nested too deeply",
-			diag.Label{Span: p.tok().Span}).
-			WithNote("the limit is " + strconv.Itoa(MaxNesting)))
+			diag.Label{Span: p.tok().Span, Message: "nesting level " + strconv.Itoa(MaxNesting+1) + " starts here"}).
+			WithNote("the limit is " + strconv.Itoa(MaxNesting)).
+			WithHelp("split the expression with `let` bindings"))
 		return false
 	}
 	p.depth++

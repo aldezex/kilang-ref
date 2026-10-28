@@ -1,0 +1,15 @@
+// test: T07.90
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0201]: expected `)`, found `}`
+// |   --> tests/errors/ch07/unclosed_paren_render.ki:15:20
+// |    |
+// | 15 | fn c() -> Int { (1 }
+// |    |                    ^ expected `)` here
+// |    |                 - unclosed `(` opened here
+// |    = help: close it with `)`
+// |    |
+// | 15 - fn c() -> Int { (1 }
+// | 15 + fn c() -> Int { (1) }
+fn c() -> Int { (1 }

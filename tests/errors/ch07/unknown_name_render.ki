@@ -3,11 +3,14 @@
 // expect-exit: 1
 // expect-stderr:
 // | error[E0301]: unknown name `fibb`
-// |   --> tests/errors/ch07/unknown_name_render.ki:12:25
+// |   --> tests/errors/ch07/unknown_name_render.ki:15:25
 // |    |
-// | 12 |   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
+// | 15 |   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
 // |    |                         ^^^^ not found in this scope
 // |    = help: did you mean `fib`?
+// |    |
+// | 15 -   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
+// | 15 +   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 fn fib(n: Int) -> Int {
   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
 }

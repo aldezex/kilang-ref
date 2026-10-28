@@ -47,6 +47,10 @@ type Param struct {
 // string arguments.
 type Attr struct {
 	Name base.Symbol
+	// NameSpan is the span of the name. The parser does not require the `#`,
+	// the `[` and the name to be next to each other, so it cannot be worked
+	// out from Span.
+	NameSpan base.Span
 	// Args holds the value of each string argument, with the escapes already
 	// resolved. It is a slice and not a ListRange because its elements are not
 	// nodes (spec 7.2). It is nil when the attribute has no arguments. The
@@ -55,6 +59,11 @@ type Attr struct {
 	Args []string
 	// Span runs from the `#` to the closing `]`.
 	Span base.Span
+	// OneLine says that no line break lies between the `#` and the `]`, so Span
+	// is a piece of one line and an edit over it stays on that line. (Inside the
+	// brackets and the parentheses a line break is only a space, so an attribute
+	// can run over several lines.)
+	OneLine bool
 }
 
 // ItemKind says what an Item is.
@@ -63,8 +72,11 @@ type ItemKind uint8
 // The kinds of item.
 const (
 	ItemFn ItemKind = iota
-	// ItemError stands for tokens that could not be read as an item. Only its
-	// Span is set.
+	// ItemError stands for tokens that could not be read as an item. Its Span
+	// is set. If the tokens began a function and its name was read before they
+	// stopped making sense, Name and NameSpan are set too; otherwise Name is
+	// base.NoSymbol and NameSpan is the zero Span. The function is known to
+	// exist then, although nothing of its signature is.
 	ItemError
 )
 

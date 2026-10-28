@@ -1,6 +1,7 @@
 package syntax
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/aldezex/kilang/internal/base"
@@ -29,6 +30,13 @@ import (
 
 // escapesNote is the note of E0106. The `…` is U+2026.
 const escapesNote = `valid escapes: \n \t \r \\ \' \" \0 \$ \u{…}`
+
+// maxHelpText is the longest text between the quotes of a character literal,
+// in bytes, that the help of E0108 quotes as the string to write. The help is
+// a hint and the edit carries the whole text (the human format shows only a
+// window of it), so a longer text is left out of the help and the help line
+// does not grow with the literal.
+const maxHelpText = 80
 
 // modeKind says what the lexer is reading.
 type modeKind uint8
@@ -214,10 +222,35 @@ func hexValue(c byte) byte {
 // position and appends U+FFFD to text. The message shows that text as visible
 // does, since the character after the backslash can be a tab or a carriage
 // return.
+//
+// The help is that a backslash is written by doubling it. In a string the
+// fix-it does that for the whole escape, `\\q` for `\q`, and the text that
+// followed the backslash becomes plain text; this is also what it does for a
+// `\u{…}` that is not valid. In a character it offers no fix-it, because
+// `'\\q'` holds two characters: the help is still true, the edit is not one.
 func (lx *lexer) badEscape(text []byte, start int) []byte {
-	lx.sink.Report(diag.NewError(diag.E(106), "invalid escape sequence `"+visible(string(lx.src[start:lx.pos]))+"`",
-		diag.Label{Span: lx.span(start)}).WithNote(escapesNote))
+	span := lx.span(start)
+	d := diag.NewError(diag.E(106), "invalid escape sequence `"+visible(string(lx.src[start:lx.pos]))+"`",
+		diag.Label{Span: span, Message: "unknown escape"}).
+		WithNote(escapesNote).
+		WithHelp("to write a backslash, double it: `\\\\`")
+	if !lx.inChar {
+		d = d.WithFixIt(diag.Replace(span, `\`+string(lx.src[start:lx.pos])))
+	}
+	lx.sink.Report(d)
 	return utf8.AppendRune(text, utf8.RuneError)
+}
+
+// danglingBackslash reports whether the backslashes that end the text before
+// offset end leave one that nothing follows: the lexer reads them in pairs,
+// and an odd one out at the end of a line is not an escape. A quote written
+// after it would be the escape's operand, not a closing quote.
+func (lx *lexer) danglingBackslash(end int) bool {
+	n := 0
+	for i := end - 1; i >= 0 && lx.src[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // char lexes the character literal whose opening quote is at lx.pos. Whatever
@@ -228,6 +261,7 @@ func (lx *lexer) char() {
 	start := lx.pos
 	lx.pos++
 	var text []byte
+	lx.inChar = true
 	for !lx.atLineEnd() && lx.src[lx.pos] != '\'' {
 		if lx.src[lx.pos] == '\\' {
 			text = lx.escape(text)
@@ -236,9 +270,14 @@ func (lx *lexer) char() {
 			lx.pos++
 		}
 	}
+	lx.inChar = false
 	closed := !lx.atLineEnd()
 	if closed {
 		lx.pos++
+	} else {
+		// The literal takes the rest of its line, and whatever is written at
+		// its end is part of it (see TokenBuffer.unterminatedLiteral).
+		lx.tb.unterminatedLiteral = lx.span(start)
 	}
 	// text holds valid UTF-8, so it is one character exactly when DecodeRune
 	// consumes all of it.
@@ -247,9 +286,79 @@ func (lx *lexer) char() {
 		lx.emit(Char, start, uint32(r))
 		return
 	}
-	lx.sink.Report(diag.NewError(diag.E(108), "invalid character literal",
-		diag.Label{Span: lx.span(start), Message: "a character literal holds exactly one character"}))
+	d := diag.NewError(diag.E(108), "invalid character literal",
+		diag.Label{Span: lx.span(start), Message: "a character literal holds exactly one character"})
+	switch {
+	case !closed:
+		// The literal runs to the end of the line, which is where the quote
+		// goes. A quote there closes a character only if exactly one was
+		// written after the opening quote (size is from the decoding above):
+		// `'a b` would become a literal of three characters and a lone `'` one
+		// of none, both E0108 again. So the edit is offered for one character;
+		// with none the help is the one for an empty literal, and with several
+		// there is nothing concrete to propose. A quote after a backslash that
+		// nothing follows would be escaped, so there the help stays and the
+		// edit does not.
+		switch {
+		case lx.danglingBackslash(lx.pos):
+			d = d.WithHelp("close it with `'`")
+		case size > 0 && size == len(text):
+			d = d.WithHelp("close it with `'`").WithFixIt(diag.Insert(lx.span(lx.pos), "'"))
+		case len(text) == 0:
+			d = d.WithHelp("write the character between the quotes")
+		}
+	case len(text) == 0:
+		d = d.WithHelp("write the character between the quotes")
+	default:
+		// Two or more characters: it is text. The string has the characters
+		// the file has between the quotes, escapes as they are written, unless
+		// one of them would not stay text in a string: a quote ends the string
+		// early and a `${` opens an interpolation, so `'a${b}x'` would become
+		// a string that reads the variable b instead of the characters. Then
+		// the help says what to escape, and there is no fix-it: the edit would
+		// not fix the error. Only a quote or a `${` that is not escaped already
+		// counts (see hasLoose): in `'a\"b'` the string has the escape it needs.
+		inside := string(lx.src[start+1 : lx.pos-1])
+		var escape []string
+		if hasLoose(inside, `"`) {
+			escape = append(escape, "each `\"` in it as `\\\"`")
+		}
+		if hasLoose(inside, "${") {
+			escape = append(escape, "each `${` in it as `\\${`")
+		}
+		if len(escape) > 0 {
+			d = d.WithHelp("for text, write a string, and write " + strings.Join(escape, " and "))
+		} else {
+			// The help quotes the text as visible shows it, so that a mark that
+			// hides itself shows as its code point, and only if it is short;
+			// the edit carries the text as the file has it.
+			help := "for text, write a string"
+			if len(inside) <= maxHelpText {
+				help += ": `\"" + visible(inside) + "\"`"
+			}
+			d = d.WithHelp(help).WithFixIt(diag.Replace(lx.span(start), `"`+inside+`"`))
+		}
+	}
+	lx.sink.Report(d)
 	lx.emit(Char, start, uint32(utf8.RuneError))
+}
+
+// hasLoose reports whether sub occurs in s, the text between the quotes of a
+// literal as the file has it, where no backslash escapes its first byte. A
+// backslash and the byte after it are one escape and the scan goes on after
+// both, so in `a\"b` the quote is escaped and in `a\\"b` it is not: the
+// backslash before it is itself escaped.
+func hasLoose(s, sub string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' {
+			i++
+			continue
+		}
+		if strings.HasPrefix(s[i:], sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // str lexes the string literal whose opening quote is at lx.pos, up to the
@@ -371,7 +480,9 @@ func (lx *lexer) trackBraces(kind TokenKind) {
 // line break ends all of them, and the outermost quote is where the literal
 // starts. Lexing goes on from lx.pos, in the code of the file.
 //
-// TokenBuffer.Strings keeps the text of the parts that were taken out.
+// TokenBuffer.Strings keeps the text of the parts that were taken out. The span
+// of the Error token is also recorded as the last literal that never ends (see
+// TokenBuffer.unterminatedLiteral).
 func (lx *lexer) unterminated(at int) {
 	st := &lx.interp
 	outer := st.modes[0]
@@ -380,8 +491,21 @@ func (lx *lexer) unterminated(at int) {
 	if at > 0 && at < len(lx.src) && lx.src[at] == '\n' && lx.src[at-1] == '\r' {
 		end = at - 1 // the carriage return belongs to the line break
 	}
-	lx.sink.Report(diag.NewError(diag.E(110), "unterminated string literal",
-		diag.Label{Span: base.Span{File: lx.id, Lo: uint32(outer.quote), Hi: uint32(outer.quote) + 1}, Message: "string starts here"}))
+	d := diag.NewError(diag.E(110), "unterminated string literal",
+		diag.Label{Span: base.Span{File: lx.id, Lo: uint32(outer.quote), Hi: uint32(outer.quote) + 1}, Message: "string starts here"}).
+		WithHelp("close the string with `\"`")
+	// The closing quote goes where the line breaks. It closes the string only
+	// if the line breaks in the text of the string itself: in the code of an
+	// interpolation that is open it would start a string there, and after a
+	// backslash that nothing follows it would be escaped. Then there is the
+	// help and no fix-it. When there is one, the help says where it puts the
+	// quote: the lexer cannot tell where the string was meant to end, and the
+	// rest of the line may be code that belongs outside it (`print("abc) }`).
+	if len(st.modes) == 1 && !lx.danglingBackslash(end) {
+		d = d.WithHelp("close the string with `\"` at the end of the line").
+			WithFixIt(diag.Insert(lx.span(end), `"`))
+	}
+	lx.sink.Report(d)
 
 	toks := lx.tb.Tokens
 	kept := make([]Token, 0, len(toks)-outer.first)
@@ -398,9 +522,16 @@ func (lx *lexer) unterminated(at int) {
 		// line break that was waiting for the string.
 		lx.newline = false
 	}
+	// The span of the Error token is the string as far as it goes: if no line
+	// break came before the end of the file, that is the end of the file.
+	// Whatever is written inside it or at its end is part of the string. It
+	// replaces what a literal inside its interpolation recorded, since that one
+	// lies in this span.
+	span := base.Span{File: lx.id, Lo: uint32(outer.quote), Hi: uint32(end)}
+	lx.tb.unterminatedLiteral = span
 	lx.tb.Tokens = append(toks[:outer.first], Token{
 		Kind:          Error,
-		Span:          base.Span{File: lx.id, Lo: uint32(outer.quote), Hi: uint32(end)},
+		Span:          span,
 		NewlineBefore: outer.newline,
 	})
 	lx.tb.Tokens = append(lx.tb.Tokens, kept...)

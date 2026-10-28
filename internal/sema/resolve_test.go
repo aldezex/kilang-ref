@@ -185,8 +185,8 @@ func TestResolve(t *testing.T) {
 		if want := []diag.Label{{Span: first, Message: "first defined here"}}; !slices.Equal(d.Secondary, want) {
 			t.Errorf("secondary labels %+v, want %+v", d.Secondary, want)
 		}
-		if len(d.Notes) != 0 || d.Help != "" {
-			t.Errorf("notes %q and help %q, want none", d.Notes, d.Help)
+		if len(d.Notes) != 0 {
+			t.Errorf("notes %q, want none", d.Notes)
 		}
 		// Both definitions are definitions of the program (and `main` a third
 		// of the file), and a use of the name finds the first, which is the
@@ -235,11 +235,11 @@ func TestResolve(t *testing.T) {
 		if d.Message != "`#[extern]` is only allowed in the standard library" {
 			t.Errorf("message %q", d.Message)
 		}
-		if want := (diag.Label{Span: base.Span{File: file, Lo: 0, Hi: 17}, Message: "remove the attribute"}); d.Primary != want {
+		if want := (diag.Label{Span: base.Span{File: file, Lo: 0, Hi: 17}, Message: "not allowed outside the standard library"}); d.Primary != want {
 			t.Errorf("primary label %+v, want %+v", d.Primary, want)
 		}
-		if len(d.Secondary) != 0 || len(d.Notes) != 0 || d.Help != "" {
-			t.Errorf("secondary labels %+v, notes %q, help %q, want none", d.Secondary, d.Notes, d.Help)
+		if len(d.Secondary) != 0 {
+			t.Errorf("secondary labels %+v, want none", d.Secondary)
 		}
 		// The attribute is refused, so the function is a plain one, with no
 		// extern name: only the standard library has extern functions.
@@ -269,11 +269,11 @@ func TestResolve(t *testing.T) {
 		if d.Message != "unknown attribute `inline`" {
 			t.Errorf("message %q", d.Message)
 		}
-		if want := (diag.Label{Span: base.Span{File: file, Lo: 0, Hi: 9}, Message: "the only attribute in Part I is `#[extern]`"}); d.Primary != want {
+		if want := (diag.Label{Span: base.Span{File: file, Lo: 0, Hi: 9}, Message: "not an attribute Ki knows"}); d.Primary != want {
 			t.Errorf("primary label %+v, want %+v", d.Primary, want)
 		}
-		if len(d.Secondary) != 0 || len(d.Notes) != 0 || d.Help != "" {
-			t.Errorf("secondary labels %+v, notes %q, help %q, want none", d.Secondary, d.Notes, d.Help)
+		if len(d.Secondary) != 0 {
+			t.Errorf("secondary labels %+v, want none", d.Secondary)
 		}
 
 		// Every attribute of the function is looked at, each with its name and
@@ -293,6 +293,189 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate_definition_help", func(t *testing.T) {
+		// Which of the two stays is not for the compiler to say, so the help
+		// names both ways out and there is no fix-it. Every repeat gets it.
+		p := testsupport.Analyze(t, "fn f() {}\nfn f() {}\nfn f() {}\n")
+		wantCodes(t, p, "E0302", "E0302")
+		for i, d := range p.Session.Sink.All() {
+			if want := "rename one of them, or delete the second"; d.Help != want {
+				t.Errorf("diagnostic %d: help %q, want %q", i, d.Help, want)
+			}
+			if len(d.Fixits) != 0 {
+				t.Errorf("diagnostic %d: fixits %+v, want none", i, d.Fixits)
+			}
+		}
+	})
+
+	t.Run("extern_only_in_std_help_and_fixit", func(t *testing.T) {
+		const note = "extern functions are declared by the standard library and implemented by the runtime; a program calls them through the prelude"
+		const src = "#[extern(\"ki_x\")] fn g() {}\nfn main() { g() }\n"
+		p := testsupport.Analyze(t, src)
+		wantCodes(t, p, "E0304")
+		d := p.Session.Sink.All()[0]
+		file := p.Frontend.Modules[p.Frontend.User].File
+		attr := base.Span{File: file, Lo: 0, Hi: 17} // from the `#` to the `]`
+		if want := (diag.Label{Span: attr, Message: "not allowed outside the standard library"}); d.Primary != want {
+			t.Errorf("primary label %+v, want %+v", d.Primary, want)
+		}
+		if want := []string{note}; !slices.Equal(d.Notes, want) {
+			t.Errorf("notes %q, want %q", d.Notes, want)
+		}
+		if want := "remove the attribute"; d.Help != want {
+			t.Errorf("help %q, want %q", d.Help, want)
+		}
+		if want := []diag.FixIt{diag.Delete(attr)}; !slices.Equal(d.Fixits, want) {
+			t.Errorf("fixits %+v, want %+v", d.Fixits, want)
+		}
+		// With the attribute gone the program is fine.
+		wantCodes(t, testsupport.Analyze(t, src[attr.Hi:]))
+
+		// An attribute that runs over several lines would make a fix-it that
+		// no renderer can show, so it has the help and no fix-it, and the
+		// diagnostic can be rendered.
+		const multi = "#[extern(\n  \"ki_x\"\n)]\nfn g() {}\n"
+		p = testsupport.Analyze(t, multi)
+		wantCodes(t, p, "E0304")
+		d = p.Session.Sink.All()[0]
+		if d.Help != "remove the attribute" || len(d.Fixits) != 0 {
+			t.Errorf("an attribute on three lines: help %q and fixits %+v, want the help and no fix-it", d.Help, d.Fixits)
+		}
+		_ = diag.RenderHuman(d, &p.Session.Sources)
+
+		// A function with no body, which the attribute allowed, has no edit
+		// either, on one line or on three: with the attribute deleted the
+		// function has no body and the parser refuses it (E0201), so the help
+		// asks for both and no single edit does it.
+		const bodiless = "remove the attribute, and write a body for the function"
+		for _, src := range []string{"#[extern(\"ki_x\")]\nfn g()\n", "#[extern(\n  \"ki_x\"\n)]\nfn g()\n"} {
+			p = testsupport.Analyze(t, src)
+			wantCodes(t, p, "E0304")
+			d = p.Session.Sink.All()[0]
+			if d.Help != bodiless || len(d.Fixits) != 0 {
+				t.Errorf("%q: help %q and fixits %+v, want %q and no fix-it", src, d.Help, d.Fixits, bodiless)
+			}
+			if want := []string{note}; !slices.Equal(d.Notes, want) {
+				t.Errorf("%q: notes %q, want %q", src, d.Notes, want)
+			}
+			_ = diag.RenderHuman(d, &p.Session.Sources)
+		}
+		wantCodes(t, testsupport.Analyze(t, "fn g()\n"), "E0201")
+	})
+
+	t.Run("unknown_attribute_suggests_extern", func(t *testing.T) {
+		const note = "the attributes Ki knows: `extern`"
+		const programNote = "a program cannot use attributes yet"
+		// name and attr are the spans of the name and of the whole attribute;
+		// near says whether the name is close to `extern`. In the standard
+		// library a near name gets the help that suggests `extern` and the
+		// fix-it that writes it in place of the name, and any other the help to
+		// remove the attribute and the fix-it that deletes it. In the user's
+		// file `extern` is not allowed (it is E0304), so there is nothing to
+		// suggest: every name gets "remove it" and the deletion.
+		rows := []struct {
+			src        string
+			name, attr [2]uint32
+			near       bool
+		}{
+			{"#[extrn] fn f() {}\n", [2]uint32{2, 7}, [2]uint32{0, 8}, true},
+			{"#[intern] fn f() {}\n", [2]uint32{2, 8}, [2]uint32{0, 9}, true},
+			{"#[extern2] fn f() {}\n", [2]uint32{2, 9}, [2]uint32{0, 10}, true},
+			{"#[inline] fn f() {}\n", [2]uint32{2, 8}, [2]uint32{0, 9}, false},
+			{"#[ext] fn f() {}\n", [2]uint32{2, 5}, [2]uint32{0, 6}, false},
+			{"#[inline(\"a\")] fn f() {}\n", [2]uint32{2, 8}, [2]uint32{0, 14}, false},
+			// The name is not next to the `#[`: the fix-it is over the name.
+			{"# [  extrn ] fn f() {}\n", [2]uint32{5, 10}, [2]uint32{0, 12}, true},
+		}
+		for _, row := range rows {
+			// The user's file.
+			p := testsupport.Analyze(t, row.src)
+			wantCodes(t, p, "E0305")
+			d := p.Session.Sink.All()[0]
+			file := p.Frontend.Modules[p.Frontend.User].File
+			attr := base.Span{File: file, Lo: row.attr[0], Hi: row.attr[1]}
+			if want := (diag.Label{Span: attr, Message: "not an attribute Ki knows"}); d.Primary != want {
+				t.Errorf("user %q: primary label %+v, want %+v", row.src, d.Primary, want)
+			}
+			if want := []string{programNote}; !slices.Equal(d.Notes, want) {
+				t.Errorf("user %q: notes %q, want %q", row.src, d.Notes, want)
+			}
+			if want := "remove it"; d.Help != want {
+				t.Errorf("user %q: help %q, want %q", row.src, d.Help, want)
+			}
+			if want := []diag.FixIt{diag.Delete(attr)}; !slices.Equal(d.Fixits, want) {
+				t.Errorf("user %q: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			// With the attribute deleted the file is fine.
+			if fixed := row.src[:row.attr[0]] + row.src[row.attr[1]:]; len(testsupport.ErrorCodes(testsupport.Analyze(t, fixed))) != 0 {
+				t.Errorf("user %q: after the fix-it, %q still has errors", row.src, fixed)
+			}
+
+			// The standard library, where the attribute is the only one that
+			// the file may write.
+			_, mods, _, sink := resolveSources(t, row.src, "fn main() {}\n")
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("prelude %q: %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d, file = diags[0], mods[0].File
+			attr = base.Span{File: file, Lo: row.attr[0], Hi: row.attr[1]}
+			name := base.Span{File: file, Lo: row.name[0], Hi: row.name[1]}
+			if want := (diag.Label{Span: attr, Message: "not an attribute Ki knows"}); d.Primary != want {
+				t.Errorf("prelude %q: primary label %+v, want %+v", row.src, d.Primary, want)
+			}
+			if want := []string{note}; !slices.Equal(d.Notes, want) {
+				t.Errorf("prelude %q: notes %q, want %q", row.src, d.Notes, want)
+			}
+			help, want := "remove it", diag.Delete(attr)
+			if row.near {
+				help, want = "did you mean `extern`?", diag.Replace(name, "extern")
+			}
+			if d.Help != help {
+				t.Errorf("prelude %q: help %q, want %q", row.src, d.Help, help)
+			}
+			if len(d.Fixits) != 1 || d.Fixits[0] != want {
+				t.Errorf("prelude %q: fixits %+v, want [%+v]", row.src, d.Fixits, want)
+			}
+			// With the name replaced, or the attribute deleted, the standard
+			// library is fine.
+			fixed := row.src[:row.attr[0]] + row.src[row.attr[1]:]
+			if row.near {
+				fixed = row.src[:row.name[0]] + "extern" + row.src[row.name[1]:]
+			}
+			if _, _, _, after := resolveSources(t, fixed, "fn main() {}\n"); len(after.All()) != 0 {
+				t.Errorf("prelude %q: after the fix-it, %q has diagnostics: %+v", row.src, fixed, after.All())
+			}
+		}
+
+		// An attribute over several lines cannot be deleted by an edit that
+		// stays on a line, so in the user's file it has the help and no fix-it.
+		// In the standard library the name, which is on one line, can be
+		// replaced. All of them render.
+		const multiInline = "#[inline(\n  \"a\"\n)]\nfn f() {}\n"
+		p := testsupport.Analyze(t, multiInline)
+		wantCodes(t, p, "E0305")
+		d := p.Session.Sink.All()[0]
+		if d.Help != "remove it" || len(d.Fixits) != 0 {
+			t.Errorf("an attribute on three lines: help %q and fixits %+v, want the help and no fix-it", d.Help, d.Fixits)
+		}
+		_ = diag.RenderHuman(d, &p.Session.Sources)
+		const multiExtrn = "#[extrn(\n  \"a\"\n)]\nfn f() {}\n"
+		p = testsupport.Analyze(t, multiExtrn)
+		wantCodes(t, p, "E0305")
+		d = p.Session.Sink.All()[0]
+		if d.Help != "remove it" || len(d.Fixits) != 0 {
+			t.Errorf("a misspelled attribute on three lines, in the user's file: help %q and fixits %+v, want the help and no fix-it", d.Help, d.Fixits)
+		}
+		_ = diag.RenderHuman(d, &p.Session.Sources)
+		_, mods, _, sink := resolveSources(t, multiExtrn, "fn main() {}\n")
+		d = sink.All()[0]
+		file := mods[0].File
+		if want := []diag.FixIt{diag.Replace(base.Span{File: file, Lo: 2, Hi: 7}, "extern")}; d.Help != "did you mean `extern`?" || !slices.Equal(d.Fixits, want) {
+			t.Errorf("a misspelled attribute on three lines, in the standard library: help %q and fixits %+v, want the suggestion and %+v", d.Help, d.Fixits, want)
+		}
+	})
 	t.Run("user_print_shadows_prelude", func(t *testing.T) {
 		// The two `print` live in different modules, so there is no E0302, and
 		// a name in the user's file finds the file's own definition first.
@@ -358,7 +541,8 @@ func TestResolve(t *testing.T) {
 		// an if, a block that is a statement, and the tail. Also a name that
 		// is defined further down, the function itself and a function that
 		// comes before. There are 21 names, and each is the name of a
-		// definition: print of module 0 and the rest of module 1.
+		// definition: print of module 0 and the rest of module 1. The kinds
+		// that have no child, and an if with no else, are in the next test.
 		const src = `fn helper() { print }
 fn main() {
   let a = print
@@ -418,6 +602,92 @@ fn later() { helper }
 		}
 		if count != 21 {
 			t.Errorf("the file has %d names, want 21", count)
+		}
+	})
+
+	t.Run("leaves_and_if_without_else", func(t *testing.T) {
+		// `true`, `false` and `()` have no name inside and an `if` with no
+		// `else` has no branch to walk: the walk has to go past all of them,
+		// and not into an `else` that is not there. An `if` without `else`
+		// has the zero id in its Else field, which is the first expression of
+		// the file; here that is the `p` of `a`, and `b` has no `p`, so a walk
+		// that goes into that Else resolves `p` again inside `b`, where it is
+		// not a name. The body of the `if` is `()` because an `if` with no `else`
+		// is worth `()`, so the source is also a program that type checks.
+		const src = "fn a(p: Int) -> Int { p }\nfn b(c: Bool) {\n  if c { () }\n  false\n  true\n  ()\n}\n"
+		p := testsupport.Analyze(t, src)
+		wantCodes(t, p)
+		if diags := p.Session.Sink.All(); len(diags) != 0 {
+			t.Errorf("diagnostics %+v, want none", diags)
+		}
+		aID, _ := fnNamed(t, p, "a")
+		bID, _ := fnNamed(t, p, "b")
+		wantLocal(t, p, "the p of a", userRes(t, p, "p"), paramLocal(t, p, "a", 0), "p", spanIn(t, p, src, "p: Int", "p"), aID)
+		wantLocal(t, p, "the c of b", userRes(t, p, "c"), paramLocal(t, p, "b", 0), "c", spanIn(t, p, src, "c: Bool", "c"), bID)
+	})
+
+	t.Run("broken_signature_keeps_its_name", func(t *testing.T) {
+		// A function whose signature the parser cannot read is an error item,
+		// but its name was read before the signature went wrong, and the
+		// function exists: a call to it is no unknown name, so the mistake in
+		// the signature is not repeated at every call. Each row is a file, the
+		// codes it gives and what every name called callee stands for.
+		rows := []struct {
+			name, src string
+			codes     []string
+			callee    string
+			calls     int          // how many names called callee the file has
+			kind      sema.ResKind // what each of them stands for
+			defs      int          // definitions of the user's file
+		}{
+			{"forgotten colon, two calls", "fn add(a Int, b Int) -> Int { a + b }\nfn main() {\n  print(add(1, 2))\n  print(add(3, 4))\n}\n",
+				[]string{"E0201"}, "add", 2, sema.ResError, 1},
+			{"forgotten colon, one call", "fn add(a Int, b Int) -> Int { a + b }\nfn main() { add(1, 2) }\n",
+				[]string{"E0201"}, "add", 1, sema.ResError, 1},
+			{"missing parenthesis", "fn add -> Int { 1 }\nfn main() { add() }\n",
+				[]string{"E0201"}, "add", 1, sema.ResError, 1},
+			// The lexer splits `café` at the é, so the name that was read is
+			// `caf`, which is also what the call has in front of its é.
+			{"letter outside ASCII", "fn caf\u00e9() {}\nfn main() { caf\u00e9() }\n",
+				[]string{"E0104", "E0104"}, "caf", 1, sema.ResError, 1},
+			// The module's own function, even a broken one, is found before the
+			// prelude's: the call is not to the prelude's print.
+			{"hides the prelude's", "fn print(x Int) {}\nfn main() { print(1) }\n",
+				[]string{"E0201"}, "print", 1, sema.ResError, 1},
+			// A definition that was read wins over a broken one of the same
+			// name, wherever the two are, and they are not a repeated definition.
+			{"broken one first", "fn f(a Int) {}\nfn f() {}\nfn main() { f() }\n",
+				[]string{"E0201"}, "f", 1, sema.ResDef, 2},
+			{"broken one last", "fn f() {}\nfn f(a Int) {}\nfn main() { f() }\n",
+				[]string{"E0201"}, "f", 1, sema.ResDef, 2},
+			// A variable still hides it, as it hides any function.
+			{"variable of the same name", "fn add(a Int) {}\nfn main() {\n  let add = 1\n  print(add)\n}\n",
+				[]string{"E0201"}, "add", 1, sema.ResLocal, 1},
+			// Only the name of the broken function is known: the names that
+			// nothing defines stay unknown.
+			{"another unknown name", "fn add(a Int) {}\nfn main() { sub(1) }\n",
+				[]string{"E0201", "E0301"}, "sub", 1, sema.ResError, 1},
+		}
+		for _, row := range rows {
+			p := testsupport.Analyze(t, row.src)
+			if got := testsupport.ErrorCodes(p); !slices.Equal(got, row.codes) {
+				t.Errorf("%s: error codes %v, want %v; diagnostics %+v", row.name, got, row.codes, p.Session.Sink.All())
+			}
+			rp, user := p.Frontend.Resolved, p.Frontend.User
+			ids := nameExprs(p.Frontend.Modules[user], p.Session.Interner, row.callee)
+			if len(ids) != row.calls {
+				t.Errorf("%s: %d names called %q, want %d", row.name, len(ids), row.callee, row.calls)
+			}
+			for _, id := range ids {
+				if got := rp.Modules[user].ExprRes[id].Kind; got != row.kind {
+					t.Errorf("%s: a name called %q stands for kind %d, want %d", row.name, row.callee, got, row.kind)
+				}
+			}
+			// The broken function is not a definition: it has no signature
+			// for anything to use.
+			if got := len(defsOf(rp, user)); got != row.defs {
+				t.Errorf("%s: the file has %d definitions, want %d", row.name, got, row.defs)
+			}
 		}
 	})
 

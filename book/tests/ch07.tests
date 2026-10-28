@@ -13,7 +13,7 @@ ref:     TestEmbed/prelude_is_embedded
 kind:    unit (go test)      file: internal/syntax/parser_test.go
 case:    una función sin cuerpo solo se admite si lleva el atributo `extern`; si no, es un E0201 `expected `{`, found <token>` en el token que sigue a la firma, y la función queda en el árbol, sin cuerpo, para que la siguiente se lea como siempre
 input:   diez fuentes: `fn f()\nfn g() {}`; con tipo de retorno (`fn f() -> Int\nfn g() {}`); con `pub` y un parámetro; sin cuerpo al final del fichero (`fn g() {}\nfn f()`); con un token en vez del cuerpo (`fn f() 1\nfn g() {}`); con un atributo que no es `extern` (`#[inline]\nfn f()\nfn g() {}`); y cuatro con `extern`: con un argumento, sin argumentos, tras otro atributo (`#[inline] #[extern("x")] pub fn f()\nfn g() {}`) y antes de otro (`#[extern("x")] #[inline] pub fn f()\nfn g() {}`)
-expect:  las seis primeras dan exactamente un diagnóstico, un E0201 con ese mensaje y la etiqueta primaria sin texto sobre los bytes del token hallado (sin etiqueta secundaria, nota ni ayuda): «expected `{`, found newline» sobre el salto de línea (en la primera, los bytes 6 a 7), «found end of file» sobre el final del fichero y «found `1`» sobre el `1`. Las cuatro con `extern` no dan ninguno. En las diez, `PrintModule` escribe, en el orden del fichero, la función sin cuerpo con `none` y la otra con su `(block)` (en la del `1`, con un `(error)` entre las dos)
+expect:  las seis primeras dan exactamente un diagnóstico, un E0201 con ese mensaje y la etiqueta primaria «expected `{` here» sobre los bytes del token hallado (sin etiqueta secundaria, nota, ayuda ni fixit): «expected `{`, found newline» sobre el salto de línea (en la primera, los bytes 6 a 7), «found end of file» sobre el final del fichero y «found `1`» sobre el `1`. Las cuatro con `extern` no dan ninguno. En las diez, `PrintModule` escribe, en el orden del fichero, la función sin cuerpo con `none` y la otra con su `(block)` (en la del `1`, con un `(error)` entre las dos)
 why:     una función sin cuerpo es una declaración cuyo código vive fuera de Ki, y solo `#[extern]` lo dice. Sin
          este test, un `{` que se te olvide dejaría pasar la función en silencio y el error aparecería mucho
          después, al ejecutarla. Cada fila mata un parser distinto: el que no avisa nunca, el que acepta
@@ -52,7 +52,7 @@ ref:     TestResolve/prelude_names_visible
 kind:    unit (go test)      file: internal/sema/resolve_test.go
 case:    una función definida dos veces en el mismo módulo es un E0302 en la segunda, con la primera como etiqueta secundaria; cada definición de más es otro error que apunta a la primera; y un uso del nombre sigue encontrando la primera
 input:   "fn f() {}\nfn f() {}\nfn main() { f() }\n"; "fn f() {}\nfn f() {}\nfn f() {}\n"; y "#[inline]\nfn f() {}\nfn f() {}\n"
-expect:  con `fn f() {}` dos veces y `fn main() { f() }`: exactamente un E0302 «`f` is defined more than once», con la primaria «redefined here» sobre el nombre de la segunda (bytes 13 a 14), una sola secundaria «first defined here» sobre el de la primera (bytes 3 a 4) y ninguna nota ni ayuda; las tres `Def` del fichero; y el `f` de `main` se resuelve a la primera. Con tres `fn f() {}`: dos E0302, con primarias en los bytes 13 a 14 y 23 a 24 y la misma secundaria, la de la primera, en los dos. Con `#[inline]` sobre la primera de dos: los códigos salen en el orden E0305, E0302
+expect:  con `fn f() {}` dos veces y `fn main() { f() }`: exactamente un E0302 «`f` is defined more than once», con la primaria «redefined here» sobre el nombre de la segunda (bytes 13 a 14), una sola secundaria «first defined here» sobre el de la primera (bytes 3 a 4) y ninguna nota; las tres `Def` del fichero; y el `f` de `main` se resuelve a la primera. Con tres `fn f() {}`: dos E0302, con primarias en los bytes 13 a 14 y 23 a 24 y la misma secundaria, la de la primera, en los dos. Con `#[inline]` sobre la primera de dos: los códigos salen en el orden E0305, E0302. La ayuda y la ausencia de edición las fija la tarjeta T07.82
 why:     el error está en la segunda definición, pero quien lo lee necesita ver la primera para decidir cuál de las
          dos sobra: por eso lleva las dos etiquetas. Si el nombre pasara a ser la última definición, un tercer
          `f` apuntaría a la segunda en vez de a la primera, y el programa se ejecutaría con una función distinta
@@ -64,7 +64,7 @@ ref:     TestResolve/duplicate_definition_E0302
 kind:    unit (go test)      file: internal/sema/resolve_test.go
 case:    `#[extern]` en el fichero del usuario es un E0304 sobre el atributo, también en una función con cuerpo, y la función sigue existiendo como una función corriente, sin nombre `extern`; y el del preludio, que también lo lleva, no da error
 input:   "#[extern(\"ki_x\")]\nfn f()\n" y "#[extern(\"ki_x\")] fn g() {}\nfn main() { g() }\n"
-expect:  con `#[extern("ki_x")]` sobre `fn f()`: exactamente un E0304 «`#[extern]` is only allowed in the standard library», con la primaria «remove the attribute» sobre el atributo (bytes 0 a 17) y sin secundaria, nota ni ayuda, y la única `Def` del fichero es `DefFn` y sin `ExternName`; con el atributo sobre `fn g() {}` y un `g()` en `main`: un E0304, el `g` de `main` se resuelve a una definición y esa `Def` es `DefFn` y sin `ExternName`
+expect:  con `#[extern("ki_x")]` sobre `fn f()`: exactamente un E0304 «`#[extern]` is only allowed in the standard library», con la primaria «not allowed outside the standard library» sobre el atributo (bytes 0 a 17) y sin secundaria, y la única `Def` del fichero es `DefFn` y sin `ExternName`; con el atributo sobre `fn g() {}` y un `g()` en `main`: un E0304, el `g` de `main` se resuelve a una definición y esa `Def` es `DefFn` y sin `ExternName`. La nota, la ayuda y la edición las fija la tarjeta T07.83
 why:     las funciones `extern` son la puerta por la que un programa llega a código que no es Ki; si cualquier
          fichero pudiera declarar una, un programa podría nombrar una función de Go que no existe y el fallo
          saldría al ejecutar. Cada prueba de este capítulo carga el preludio, que sí usa el atributo, así que
@@ -78,7 +78,7 @@ ref:     TestResolve/extern_only_in_std_E0304
 kind:    unit (go test)      file: internal/sema/resolve_test.go
 case:    cualquier atributo que no sea `extern`, en cualquier módulo, es un E0305 sobre el atributo, uno por atributo
 input:   "#[inline] fn f() {}\n"; "#[a] #[b] fn f() {}\n"; y un preludio `#[inline] pub fn g() {}` con un fichero `fn main() {}`
-expect:  con `#[inline] fn f() {}`: exactamente un E0305 «unknown attribute `inline`», con la primaria «the only attribute in Part I is `#[extern]`» sobre el atributo (bytes 0 a 9) y sin secundaria, nota ni ayuda; con `#[a] #[b] fn f() {}`: dos E0305 sobre `a` (bytes 0 a 4) y sobre `b` (bytes 5 a 9); y con un preludio escrito a mano que tiene `#[inline] pub fn g() {}`: exactamente un diagnóstico, un E0305
+expect:  con `#[inline] fn f() {}`: exactamente un E0305 «unknown attribute `inline`», con la primaria «not an attribute Ki knows» sobre el atributo (bytes 0 a 9) y sin secundaria; con `#[a] #[b] fn f() {}`: dos E0305 sobre `a` (bytes 0 a 4) y sobre `b` (bytes 5 a 9); y con un preludio escrito a mano que tiene `#[inline] pub fn g() {}`: exactamente un diagnóstico, un E0305. La nota, la ayuda y la edición las fija la tarjeta T07.84
 why:     un atributo que nadie entiende es casi siempre una errata (`#[inlne]`) y se perdería sin avisar: el
          compilador lo ignoraría y el programa haría otra cosa de la que el texto promete. La regla vale para la
          biblioteca estándar igual que para ti, y por eso el tercer caso: una que solo vigilara el fichero del
@@ -123,7 +123,8 @@ input:   tres funciones (`helper`, `main` y `later`, esta última tras `main`) c
 expect:  no hay diagnósticos; el fichero tiene exactamente 21 nombres, y cada uno se resuelve a una definición: los `print` a la del módulo 0 y los demás (`helper`, `later`, `main`) a la del mismo nombre del módulo 1; y después de `Resolve`, cada módulo imprime exactamente lo mismo que un segundo análisis sintáctico del mismo texto, que ningún pase ha tocado
 why:     los dos pases existen para esto: `later` se usa antes de definirse y `main` se llama a sí misma, y los dos
          tienen que funcionar. Y el recorrido es una función con un `case` por clase de expresión: el que olvide
-         una rama deja sin resolver los nombres que cuelgan de ella sin que ningún otro test lo note. Hay un
+         una rama con hijos deja sin resolver los nombres que cuelgan de ella sin que ningún otro test lo note
+         (las clases sin nombres dentro, `true`, `false` y `()`, y el `if` sin `else` son de la tarjeta T07.95). Hay un
          `print` en un `let`, en un `let` con tipo, en la llamada y en su argumento, tras `-`, tras `!`, a cada
          lado de `+` y de `&&`, en la condición y en las tres ramas de un `if` con `else if`, y en un bloque
          suelto; y los cuerpos de `helper` y de `later` tienen cada uno su propio nombre. Y la resolución lee los árboles sin
@@ -193,8 +194,9 @@ why:     los tests de `TestResolve` llaman a `Analyze` a mano; este es el que co
          verdad lo llama. Si `ki check` solo leyera y parseara, todas las pruebas de la resolución seguirían en
          verde y ningún usuario vería nunca un error de nombres. El `let = 1` es el error de sintaxis que fija
          cuándo se llama: `ki check` analiza los árboles aunque el parser haya informado, porque los nodos de
-         error no nombran nada. Un comando que se saltara el análisis en cuanto hubiera un error de sintaxis
-         escondería los de nombres hasta que arreglaras los demás, y solo este fichero lo notaría
+         error no definen nada (salvo el nombre de una función cuya firma no se pudo leer, que otro test fija).
+         Un comando que se saltara el análisis en cuanto hubiera un error de sintaxis escondería los de nombres
+         hasta que arreglaras los demás, y solo este fichero lo notaría
 ref:     tests/errors/ch07/duplicate_definition.ki
 
 [T07.18] scopes.param_resolves_to_local                     level: core
@@ -231,7 +233,7 @@ ref:     TestScopes/let_visible_after_binding
 kind:    unit (go test)      file: internal/sema/scope_test.go
 case:    la variable de un `let` no se ve en su propio inicializador, que lee lo que haya fuera; y el error no se propaga: el `let` liga su nombre igualmente
 input:   "fn f() {\n  let x = x\n  x\n}\n" y "fn g(x: Int) {\n  let x = x\n  x\n}\n"
-expect:  con `f`: exactamente un E0301 «unknown name `x`», con la primaria «not found in this scope» sobre la `x` del inicializador (no la que va tras `let`) y sin etiqueta secundaria ni notas; esa `x` es exactamente `ResError` y la `x` de la línea siguiente es `ResLocal` a la variable que liga el `let`, con el span de su nombre. Con `g`: ningún diagnóstico; la `x` del inicializador es el parámetro y la de la línea siguiente, la variable del `let`
+expect:  con `f`: exactamente un E0301 «unknown name `x`», con la primaria «not found in this scope» sobre la `x` del inicializador (no la que va tras `let`), la secundaria «`x` is bound by this `let`, which cannot see itself» sobre la `x` del `let` y la nota «a `let` is visible only after its own statement» (las fija con más casos la tarjeta T07.80); esa `x` es exactamente `ResError` y la `x` de la línea siguiente es `ResLocal` a la variable que liga el `let`, con el span de su nombre. Con `g`: ningún diagnóstico; la `x` del inicializador es el parámetro y la de la línea siguiente, la variable del `let`
 why:     `let x = x` es la forma de preguntar si un `let` se ve a sí mismo, y la respuesta tiene que ser que no: en `g`
          el `x` de la derecha es el parámetro, que es lo que quien escribe `let x = x + 1` espera, y el de abajo
          es el nuevo. Si el `let` ligara antes de resolver su inicializador, `f` no daría ningún error y `g` leería
@@ -391,7 +393,7 @@ ref:     TestSuggest/candidates_are_sorted_once
 kind:    unit (go test)      file: internal/sema/suggest_test.go
 case:    el E0301 de un nombre desconocido lleva la ayuda «did you mean `x`?» con el nombre más parecido entre las funciones del fichero (también las que se definen más abajo), los parámetros y los `let` que se ven en ese punto, los de los bloques que lo rodean incluidos; funciones y variables compiten solo por distancia, y los empates los gana el primero por orden alfabético; y un nombre desconocido dentro del propio preludio busca entre las funciones del preludio
 input:   el programa del golden, con `fibb` escrito en el cuerpo de `fib`; `helpr()` con `fn helper` más abajo; `countr` con el parámetro `counter`; `totl` con `let total`; `widt` con el parámetro `width` desde un bloque; `valu` con `let value` desde dos bloques; y `gammc` con una función y un parámetro a la misma distancia, `gamma` y `gammb` en los dos órdenes posibles; y `helpr()` dentro de `fn broken()` en un preludio escrito a mano que define también `fn helper() {}`
-expect:  en cada fuente exactamente un diagnóstico, un E0301 con su mensaje, su etiqueta «not found in this scope» sobre el nombre, sin etiqueta secundaria, nota ni fixit, y `Help` exactamente «did you mean `fib`?», «…`helper`?», «…`counter`?», «…`total`?», «…`width`?», «…`value`?» y, en las dos últimas, «…`gamma`?» sea la función o la variable; y, en el preludio, el único diagnóstico es un E0301 dentro del fichero del preludio, con `Help` «…`helper`?» aunque `helper` no sea `pub`
+expect:  en cada fuente exactamente un diagnóstico, un E0301 con su mensaje, su etiqueta «not found in this scope» sobre el nombre, sin etiqueta secundaria ni nota, `Help` exactamente «did you mean `fib`?», «…`helper`?», «…`counter`?», «…`total`?», «…`width`?», «…`value`?» y, en las dos últimas, «…`gamma`?» sea la función o la variable, y un solo fixit: el `Replace` de los bytes del nombre por el nombre sugerido; y, en el preludio, el único diagnóstico es un E0301 dentro del fichero del preludio, con `Help` «…`helper`?» aunque `helper` no sea `pub`, y su `Replace`
 why:     el caso de `fibb` es el del hito del capítulo, y los demás cierran lo que podría quedarse fuera de la
          lista de candidatos sin que ese caso lo notara: las variables (que no son definiciones), las de los
          ámbitos que rodean al bloque (si solo se mirara el más interior, `widt` y `valu` no encontrarían nada) y
@@ -407,7 +409,7 @@ ref:     TestSuggestions/suggests_closest_name
 kind:    unit (go test)      file: internal/sema/suggest_test.go
 case:    entre los candidatos de un nombre desconocido están las definiciones `pub` del preludio, aunque el fichero no las defina
 input:   `fn main() { prnt(1) }` con el preludio de verdad; y `visibl()` en un fichero cuyo preludio, escrito a mano, es `pub fn visible() {}`
-expect:  en cada caso exactamente un E0301 (mensaje, etiqueta primaria sobre el nombre, sin secundaria, nota ni fixit) con `Help` «did you mean `print`?» y «did you mean `visible`?»
+expect:  en cada caso exactamente un E0301 (mensaje, etiqueta primaria sobre el nombre, sin secundaria ni nota) con `Help` «did you mean `print`?» y «did you mean `visible`?», y el `Replace` de los bytes del nombre por `print` y por `visible`
 why:     `print` no está en el fichero y aun así se puede llamar, y por eso mismo se puede escribir mal: sin el
          preludio entre los candidatos, `prnt` no tendría ayuda justo en el error que más va a cometer quien
          empieza. El segundo caso usa un preludio propio para que el test no dependa de lo que lleve la
@@ -440,13 +442,14 @@ ref:     tests/errors/ch07/unknown_name.ki
 
 [T07.36] check.unknown_name_render                          level: core
 kind:    diag                file: tests/errors/ch07/unknown_name_render.ki
-case:    `ki check` sobre el mismo programa, con el E0301 en la línea 12, columna 25 (el fichero lleva diez líneas de cabecera)
+case:    `ki check` sobre el mismo programa, con el E0301 en la línea 15, columna 25 (el fichero lleva trece líneas de cabecera)
 input:   `fn fib` que llama a `fibb(n - 1) + fib(n - 2)`, y un `main` que imprime `fib(20)`, tras la cabecera
-expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 6 líneas: `error[E0301]: unknown name `fibb``, la ruta relativa a la raíz con `12:25`, el fragmento de la línea 12 con `^^^^` y «not found in this scope» bajo `fibb`, y la línea `= help: did you mean `fib`?`
-why:     la ayuda solo existe de verdad cuando se ve en una terminal: los tests anteriores miran el campo
-         `Help` del diagnóstico, este mira el texto que sale por stderr, con la línea `= help:` en su sitio y
-         el número de línea de dos cifras que ensancha la columna. Si el renderizador olvidara pintar la
-         ayuda, o el compilador no la adjuntara, solo esta tarjeta lo notaría de punta a punta
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 9 líneas: `error[E0301]: unknown name `fibb``, la ruta relativa a la raíz con `15:25`, el fragmento de la línea 15 con `^^^^` y «not found in this scope» bajo `fibb`, la línea `= help: did you mean `fib`?`, una línea con solo la barra, y el diff: la línea 15 con `-` tal cual y con `+` con `fib` en lugar de `fibb`
+why:     la ayuda solo existe de verdad cuando se ve en una terminal: los tests anteriores miran el campo `Help` del
+         diagnóstico, este mira el texto que sale por stderr, con la línea `= help:` en su sitio, el número de línea
+         de dos cifras que ensancha la columna y el diff de la edición que lo sigue. Si el renderizador olvidara
+         pintar la ayuda o la edición, o el compilador no las adjuntara, solo esta tarjeta lo notaría de punta a
+         punta
 ref:     tests/errors/ch07/unknown_name_render.ki
 
 [T07.37] suggest.skips_lengths_out_of_reach                 level: core
@@ -477,3 +480,706 @@ why:     sin este freno, `ki check` de un fichero con miles de nombres desconoci
          guarda que saltara antes de tiempo quitaría la ayuda a errores que sí se ven, y por eso se miran los
          100 que guarda el sink, el último incluido
 ref:     TestSuggest/no_suggestions_after_the_error_cap
+
+[T07.39] diag.with_fixit_returns_copy                       level: core
+kind:    unit (go test)      file: internal/diag/diagnostic_test.go
+case:    WithFixIt devuelve una copia con la edición añadida al final y no cambia el original; dos copias hechas del mismo diagnóstico no comparten hueco; e Insert, Delete y Replace construyen las ediciones que dicen
+input:   un E0301 y una edición `Replace` sobre su span; un `Fixits` de longitud 1 y capacidad 4 del que salen dos copias, una con `Delete` y otra con `Insert`; y las tres funciones sobre el span [7,11) del fichero 3
+expect:  el original se queda sin ediciones y la copia tiene exactamente la añadida; con un diagnóstico cuyo `Fixits` tiene un elemento y capacidad 4, las dos copias valen [f, g] y [f, h] y el original sigue con una; `Insert` da un span vacío en el byte 7 del mismo fichero con el texto dado, `Delete` conserva el span y no lleva texto, y `Replace` conserva el span con el texto
+why:     los métodos With construyen sobre una copia para que un diagnóstico hecho en un sitio no lo cambie otro, y
+         con capacidad de sobra un `append` descuidado escribiría las dos ediciones en el mismo hueco del array: una
+         copia pisaría a la otra sin que ningún error lo anunciara. `Insert` es la única edición cuyo span es vacío,
+         y de eso depende que el renderizador sepa que solo añade
+ref:     TestDiagnostic/with_fixit_returns_copy
+
+[T07.40] diag.render_human_fixit_replacement_diff           level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    bajo la línea de ayuda, el renderizador humano muestra la edición al estilo de rustc: una línea con solo la barra y, por cada línea que toca, la línea tal cual con `-` y la línea con la edición aplicada con `+`
+input:   "let y = fibb\n" y un E0301 sobre `fibb` con la ayuda «did you mean `fib`?» y `Replace` de `fibb` por `fib`
+expect:  tras `= help: did you mean `fib`?` va `  |`, y después `1 - let y = fibb` y `1 + let y = fib`; el resto del diagnóstico es el de siempre (golden `fixit_replacement_diff.golden`)
+why:     es la forma en que el libro enseña el «¿quisiste decir…?»: sin la pareja `-`/`+` la ayuda dice qué cambiar
+         pero no lo muestra, y sin la barra de separación el diff se pegaría a la ayuda y se leería como una nota
+         más. Que los dos signos no se intercambien es lo primero que este golden vigila
+ref:     TestRenderHuman/fixit_replacement_diff
+
+[T07.41] diag.render_human_fixit_insertion_diff             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    una inserción se muestra con la línea ya parcheada, y la edición va donde dice su span y no donde está la etiqueta primaria
+input:   "fn c() -> Int { (1 }\n" con un E0201 hecho a mano y `Insert` de `)` detrás del `1`
+expect:  el diagnóstico tiene la primaria «expected `)` here» bajo la `}`, la secundaria «unclosed `(` opened here» bajo la `(`, la ayuda «close it with `)`», y el diff `1 - fn c() -> Int { (1 }` seguido de `1 + fn c() -> Int { (1) }`: el `)` queda justo detrás del `1` (golden `fixit_insertion_diff.golden`)
+why:     la edición de un paréntesis que falta no se hace en la `}` que el parser encontró, sino donde la expresión
+         se quedó. Aquí la primaria, la secundaria y el diff caen en la misma línea y cada uno tiene que quedar en su
+         sitio
+ref:     TestRenderHuman/fixit_insertion_diff
+
+[T07.42] diag.render_human_fixit_deletion_diff              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    una edición que borra deja una línea `+` vacía, y una línea vacía no lleva espacio al final
+input:   "#[inline]\nfn f() {}\n" y un E0305 sobre `#[inline]` con la ayuda «remove it» y `Delete` de ese span
+expect:  el diff acaba exactamente en `1 - #[inline]` y `1 +` (sin nada después del `+`, ni un espacio), y el resto coincide con el golden `fixit_deletion_diff.golden`
+why:     el renderizador no deja espacios al final de ninguna línea, y la línea `+` de un borrado completo es la
+         prueba más fácil de olvidar: se escribiría `1 + ` con un espacio, que no se ve y que el diff de una terminal
+         pinta distinto
+ref:     TestRenderHuman/fixit_deletion_diff
+
+[T07.43] diag.render_human_two_fixits_one_line              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    dos ediciones sobre la misma línea se aplican cada una sobre las posiciones de la línea original, así que ninguna desplaza a la otra, sea cual sea el orden en que se añadieron; y de dos ediciones que empiezan en el mismo sitio se escribe primero la que va detrás en la lista, que es lo que da aplicarlas de derecha a izquierda
+input:   "x = fibb + gammaa\n" con dos `Replace`, en los dos órdenes; "f(x)\n" con dos `Insert` en el mismo byte; y la misma línea con un `Replace` de la `x` y, detrás en la lista, un `Insert` en su primer byte
+expect:  con la izquierda más corta (`fibb` por `f`) y la derecha más larga que su span (`gammaa` por `a_longer_name`), la línea nueva es `x = f + a_longer_name` tanto si se añade primero la izquierda como si se añade primero la derecha; dos inserciones en el mismo byte (`a, ` y `b, `, en ese orden de la lista) dan `f(b, a, x)`; y el `Replace` de la `x` por `y` seguido de un `Insert` de `a, ` en el byte de la `x` da `f(a, y)`
+why:     si se aplicaran en el orden de la lista sobre el texto que va cambiando, la primera edición correría la
+         segunda y el diff mostraría un parche que no es el que se ofrece. Se prueban los dos órdenes porque un
+         renderizador que solo aplicara de derecha a izquierda la lista tal como llega, o solo de izquierda a
+         derecha, acertaría en uno y fallaría en el otro. Y el orden en un mismo byte es el contrario al de la
+         lista porque es el que da el `--fix` del ejercicio 5 del capítulo, que aplica las ediciones de derecha a
+         izquierda: si el diff dijera `f(a, b, x)` y el `--fix` escribiera `f(b, a, x)`, el parche que se enseña no
+         sería el que se aplica. La fila del `Replace` y el `Insert` impide que esa regla valga solo para dos
+         inserciones
+ref:     TestRenderHuman/two_fixits_one_line_right_to_left
+
+[T07.44] diag.render_human_fixit_on_a_later_line            level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    la edición puede estar en otra línea que la primaria: el diff solo enseña la línea de la edición
+input:   un fichero de cinco líneas con `fibb` en la 2 y en la 5, y la edición sobre la de la línea 5
+expect:  la primaria cae en la línea 2 y la edición en la 5; la parte de código enseña solo la línea 2, el diff solo `5 - let z = fibb` y `5 + let z = fib`, y el margen es de una cifra (golden `fixit_on_a_later_line.golden`)
+why:     la línea de la edición no tiene por qué ser la del error, y el diff no repite lo que ya se ha mostrado ni
+         muestra las líneas del medio
+ref:     TestRenderHuman/fixit_on_a_later_line
+
+[T07.45] diag.render_human_fixit_widens_margin              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    el margen tiene el ancho del mayor número de línea que se muestra en todo el diagnóstico, sea el de una etiqueta o el de una edición
+input:   diez líneas, con `fibb` en la 9 y en la 10; primero la primaria en la 9 y la edición sobre la de la 10, y luego la primaria en la 10 y la edición sobre la de la 9
+expect:  en las dos direcciones todo el diagnóstico va con margen de dos cifras. Con la primaria en la línea 9 y la edición en la 10: `  --> test.ki:9:9`, ` 9 | …` y `10 - …` (golden `fixit_widens_line_number_width.golden`). Con la primaria en la 10 y la edición en la 9: `  --> test.ki:10:9`, `10 | …`, ` 9 - …` y ` 9 + …` (golden `label_widens_line_number_width.golden`)
+why:     si el ancho se calculara antes de mirar las ediciones, el diff tendría una columna más que el código que lo
+         precede y la barra vertical quedaría torcida en el paso de la línea 9 a la 10. Y al revés: si saliera
+         solo de las líneas de las ediciones, el `10` del código no cabría en un margen de una cifra, y esa es la
+         situación del cierre que se escribe al final de la línea anterior a la del error
+ref:     TestRenderHuman/fixit_widens_line_number_width
+
+[T07.46] diag.render_human_fixits_in_line_order             level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    las líneas del diff salen en orden creciente aunque las ediciones lleguen desordenadas, y una línea con dos ediciones tiene una sola pareja `-`/`+`
+input:   "a\nfibb\nc\nfibb fibb\n" con tres `Replace`, en la línea 4, en la 2 y otra vez en la 4
+expect:  con las ediciones añadidas en el orden línea 4, línea 2, línea 4, el diff es `2 - fibb`, `2 + y`, `4 - fibb fibb`, `4 + x z`
+why:     quien añade las ediciones no sabe en qué orden las verá quien las lee: ordenar por línea y agrupar es cosa
+         del renderizador. Sin el orden, el diff saltaría hacia atrás; sin agrupar, la línea 4 saldría dos veces, con
+         una edición en cada una y ninguna con las dos
+ref:     TestRenderHuman/fixits_on_two_lines_in_line_order
+
+[T07.47] diag.render_human_fixit_display_rules              level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    las líneas del diff se pintan con la misma función que las líneas de código: tabuladores hasta la siguiente columna múltiplo de 4, la «picture» de un carácter de control y U+FFFD por cada byte inválido
+input:   una línea con un tabulador, `ab`, otro tabulador, `x`, un byte 0x01 y un byte 0xFF antes de `fibb`
+expect:  para "\tab\tx\x01\xff = fibb" las dos líneas del diff empiezan con cuatro espacios, `ab`, dos espacios (el tabulador tras la columna 6 llega a la 8), `x`, `␁` y `U+FFFD`, y luego ` = fibb` y ` = fib` (golden `fixit_diff_uses_display_rules.golden`)
+why:     el diff y el código del diagnóstico tienen que mostrar lo mismo: si el diff pintara el texto en bruto, un
+         tabulador o un byte inválido saldrían de otra forma que unas líneas más arriba, y quien compara las dos lo
+         vería como una diferencia que no existe
+ref:     TestRenderHuman/fixit_diff_uses_display_rules
+
+[T07.48] diag.render_human_fixit_diff_windows_long_lines    level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    el diff de una línea larga se corta como el de una línea con etiquetas: una ventana alrededor de las ediciones, con `...` en cada extremo cortado, en la línea vieja y en la nueva, y varias ediciones de una línea comparten ventana; también cuando la línea no es la primera del fichero; y la marca del principio sale en cuanto la ventana oculta un solo byte; y las dos líneas del diff se cortan juntas, con una sola regla: si cualquiera de las dos pasa de 200 bytes se cortan las dos, de modo que una edición que lleva una línea de 200 bytes a 201 (o de 201 a 200) no deja una entera junto a la otra cortada
+input:   la línea `fn fib() {}` y detrás "a" ×100 000, `fibb`, "b" ×100 000 con `Replace` por `fib`; y la misma línea de cabecera y detrás 1000 `a`, `fibb`, 96 `b`, `fibb`, 1000 `c` con dos `Replace`; y la cabecera con 40, 41 y 42 `a`, `fibb` y 300 `b`, con un `Replace` en cada una; y la cabecera con una línea `fn main() { NAME() } // xxx…` de 200 bytes con `fi` por `fib` (201 después), de 201 con `fib` por `fi` (200), de 200 con `fi` por `fx` (200), de 200 con `fib` por `fi` (199) y de 201 con `fib` por `fix` (201)
+expect:  con una línea de 200 004 bytes, la segunda del fichero, y una edición en medio: la línea `2 -` es `...`, 40 `a`, `fibb`, 40 `b` y `...`, la línea `2 +` es lo mismo con `fib`, y el diagnóstico entero no pasa de 2000 bytes; con dos ediciones separadas por 96 bytes, también en la segunda línea, las dos líneas incluyen las dos ediciones entre sus `...`: 40 `a`, las dos ediciones con los 96 `b` de en medio y 40 `c`; con 40 `a` delante de la edición, la ventana empieza en el byte 0 y las dos líneas no llevan `...` al principio, y con 41 y con 42, donde empieza en el 1 y en el 2, sí: `...`, 40 `a`, la edición, 40 `b` y `...`; con la línea de 200 bytes que pasa a 201 y con la de 201 que pasa a 200, las dos líneas, `2 -` y `2 +`, llevan ventana: el principio de la línea (la edición está en el byte 12), el nombre, 40 bytes detrás y `...`; con la de 200 que sigue en 200 y con la de 200 que baja a 199, las dos se ven enteras y sin `...`; y con la de 201 que sigue en 201, las dos con ventana
+why:     el tamaño de un diagnóstico no puede depender del tamaño del fichero: un fichero minificado es una sola
+         línea de megas, y un diff que la repitiera dos veces entera sería lo único que quedaría sin cortar. Con las
+         dos ediciones se ve que la ventana va de la primera a la última y no solo hasta el final de la primera.
+         Y la línea larga va detrás de otra porque en la primera del fichero la posición en el fichero y la
+         posición en la línea son la misma, y confundirlas no se nota: con una línea delante, una ventana
+         calculada con la posición en el fichero queda descentrada. Y la ventana empieza 40 bytes antes de la
+         edición, de modo que con 41 `a` delante oculta exactamente un byte: una comprobación de «hay algo oculto»
+         escrita `> 1` en vez de `> 0` se come la marca justo ahí, y las filas de arriba, que empiezan en el byte 0
+         o a miles de bytes, no la ven; la de 40 `a` impide arreglarlo poniendo la marca siempre. Y las dos líneas
+         del diff se cortan por una sola regla, no cada una por la suya: con la suya, una línea de exactamente 200
+         bytes se ve entera y la nueva, de 201, cortada, y parece que desaparece en el parche texto que la vieja
+         enseña. Las filas de 200 y de 201 bytes ponen el límite de las dos maneras, la que crece y la que mengua,
+         de modo que arreglar solo una no basta; y las de 200 que no pasan de 200 impiden arreglarlo cortando
+         siempre las dos
+ref:     TestRenderHuman/fixit_diff_windows_long_lines
+
+[T07.49] diag.render_human_fixit_end_of_crlf_line           level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    una edición puede acabar donde acaba el texto de su línea, antes del `\r` de un CRLF: una inserción ahí y el borrado del último carácter
+input:   "ab\r\ncd\r\n" con `Insert` de `!` en el byte 2 y `Delete` del byte 1
+expect:  con "ab\r\ncd\r\n", una inserción de `!` en el byte 2 y el borrado de la `b` dan el diff `1 - ab` y `1 + a!`, sin pánico
+why:     el cierre de una cadena sin terminar va justo ahí, antes del retorno de carro, y el texto de la línea no
+         incluye el `\r`: si el límite de la línea se calculara con él, esa edición sería «cruzar un salto de línea»
+         y el programa moriría en una situación cotidiana en los ficheros de Windows
+ref:     TestRenderHuman/fixit_at_the_end_of_a_crlf_line
+
+[T07.50] diag.render_human_fixit_without_help_panics        level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    un diagnóstico con ediciones y sin línea de ayuda no se pinta: panic con el texto exacto
+input:   un E0301 con `Replace` y sin `WithHelp`
+expect:  el valor del `panic` es exactamente `diag: fix-its without a help line`
+why:     una edición sin la frase que dice qué hace es un parche mudo: el diff enseñaría un cambio sin motivo. Es un
+         fallo del pase que construyó el diagnóstico, no del programa del usuario, y por eso es un `panic` y no un
+         error
+ref:     TestRenderHuman/fixit_without_help_panics
+
+[T07.51] diag.render_human_fixit_across_lines_panics        level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    una edición cuyo span cubre un salto de línea (el `\n`, o el `\r` de un CRLF, o que empieza entre el `\r` y el `\n`) no se pinta: panic con el texto exacto
+input:   "let y = fibb\nlet z = 1\n" con `Delete` de [8,13) y de [8,17); "ab\r\ncd\r\n" con `Delete` de [1,3) e `Insert` en el byte 3
+expect:  cuatro spans, uno que llega al `\n`, uno que cruza dos líneas, uno que cubre el `\r` de un CRLF y una inserción entre el `\r` y el `\n`, dan todos el `panic` `diag: fix-it spans a line break`
+why:     el diff enseña una línea de código por cada línea tocada; una edición que contiene un salto de línea no cabe
+         en esa forma. Los dos casos de CRLF fijan el límite exacto: el texto de la línea acaba antes del `\r`, de
+         modo que cubrirlo ya es cruzar
+ref:     TestRenderHuman/fixit_across_lines_panics
+
+[T07.52] diag.render_human_fixit_other_file_panics          level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    una edición en otro fichero que la primaria no se pinta: panic con el texto exacto
+input:   un E0301 en el fichero 0 y un `Delete` sobre el fichero 1
+expect:  el valor del `panic` es exactamente `diag: fix-it in file 1, primary in file 0`
+why:     un diff con el texto de otro fichero enseñaría líneas que no son las del error. Es la misma regla que ya
+         tienen las etiquetas secundarias
+ref:     TestRenderHuman/fixit_in_another_file_panics
+
+[T07.53] diag.render_human_overlapping_fixits_panic         level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    dos ediciones de una línea que se solapan no se pintan (panic); si solo se tocan, valen
+input:   "let y = fibb\n" con dos `Delete`
+expect:  los spans [8,11) y [10,12) dan el `panic` `diag: overlapping fix-its`; los spans [8,10) y [10,12) dan el diff `1 - let y = fibb` y `1 + let y =`
+why:     aplicar a la vez dos ediciones que se pisan no tiene un resultado correcto, y la línea que el diff enseñaría
+         sería un texto que ninguna de las dos pide. Que tocarse no sea solaparse evita rechazar un par de ediciones
+         seguidas, que es lo normal al borrar dos trozos contiguos
+ref:     TestRenderHuman/overlapping_fixits_panic
+
+[T07.54] diag.render_json_fixits                            level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    el JSON lleva la clave `fixits` tras `help`: un array de objetos con `line`, `col`, `end_line`, `end_col` y `replacement`
+input:   "let y = fibb\n" con un E0301 sobre `fibb`, la ayuda «did you mean `fib`?» y `Replace` por `fib`
+expect:  la línea es exactamente `{"severity":"error","code":"E0301","message":"unknown name `fibb`","path":"test.ki","line":1,"col":9,"labels":[…],"notes":[],"help":"did you mean `fib`?","fixits":[{"line":1,"col":9,"end_line":1,"end_col":13,"replacement":"fib"}]}`
+why:     las herramientas leen el JSON para aplicar las ediciones, y la clave tiene que estar siempre, vacía si no
+         hay nada: una clave que a veces falta o es `null` obliga a cada lector a tratar tres casos. Las posiciones
+         son las de las etiquetas, y el final es exclusivo
+ref:     TestRenderJSON/fixits
+
+[T07.55] diag.render_json_fixits_order_and_columns          level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    las ediciones salen en el orden de la lista y no en el del fichero, las columnas cuentan puntos de código, una inserción tiene el mismo principio y final, el final es exclusivo, el texto se escapa como cualquier cadena JSON, y las posiciones son las del fichero de la edición aunque no sea el primero del gestor
+input:   un fichero de relleno y después "é = fibb\nxx\n"; un E0301 con `Insert`, `Replace` y `Delete`
+expect:  con "é = fibb\nxx\n" como segundo fichero, las tres ediciones (inserción de `"<`, `Replace` de `fibb`, borrado de `xx`) salen en ese orden con `{"line":2,"col":1,"end_line":2,"end_col":1,"replacement":"\"<"}`, `{"line":1,"col":5,"end_line":1,"end_col":9,"replacement":"fib"}` y `{"line":2,"col":1,"end_line":2,"end_col":3,"replacement":""}`
+why:     la `é` ocupa dos bytes y una columna, así que `fibb` empieza en la columna 5 y no en la 6; con el fichero en
+         segundo lugar se ve que las posiciones se leen en el fichero de cada edición. Que `<` no se escriba como
+         `\u003c` importa porque las ayudas y los reemplazos hablan de tipos y operadores
+ref:     TestRenderJSON/fixits_keep_order_and_count_code_points
+
+[T07.56] syntax.check_source_note_and_help_E0101            level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    el E0101 lleva la nota «Ki source files are UTF-8» y la ayuda «save the file as UTF-8, or delete the byte», y ninguna edición ni etiqueta secundaria
+input:   "let x = \xff"
+expect:  exactamente un E0101 con `Notes == ["Ki source files are UTF-8"]`, `Help` igual al texto y sin `Fixits` ni `Secondary`
+why:     borrar un byte suelto parchearía la mitad de un carácter, y recodificar el fichero no es una edición de su
+         texto: por eso la ayuda dice las dos cosas y no ofrece ninguna. Un test que mirase solo el texto dejaría
+         pasar una edición ofrecida de más
+ref:     TestCheckSource/e0101_note_and_help
+
+[T07.57] syntax.check_source_help_and_fixit_E0102           level: core
+kind:    unit (go test)      file: internal/syntax/source_check_test.go
+case:    el E0102 lleva la nota de los controles que sí se admiten, la ayuda con el escape del byte en hexadecimal y una edición que borra exactamente ese byte
+input:   "a\x01b", "a\x1f" y "ab\x7fc"
+expect:  para 0x01, 0x1F y 0x7F: la nota «Ki allows only `\t`, `\n` and `\r` as raw control characters; the others are invisible in an editor», la ayuda «write it as the escape `\u{1}` inside a string, or delete it» (`\u{1f}`, `\u{7f}`) y un solo `Delete` del byte, en el fichero del diagnóstico
+why:     el escape de la ayuda lleva el valor del byte en hexadecimal, y borrar es una edición mecánica, de modo que
+         se ofrece. Las tres filas matan un valor fijo en la ayuda y un borrado que tomara el byte siguiente
+ref:     TestCheckSource/e0102_help_and_fixit
+
+[T07.58] lexer.fixit_closes_the_comment_E0103               level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    el E0103 lleva la ayuda «close the comment with `*/`» y una inserción de `*/` al final del fichero, tantas veces como niveles quedan abiertos, y con la edición aplicada el comentario queda cerrado, también cuando el fichero acaba en una `/` que es parte del texto del comentario
+input:   "/* x", "/* x\n", "a /* b /* c */ d", "/*", "/* /* x", "/* a /* b /* c */", "/* a/", "/* a//", "/* /* a/", "/*/", "/* a/*" y "/* a*"
+expect:  exactamente un E0103 sin nota ni secundaria, con un `Insert` de `*/` en el último byte del fichero (también cuando el fichero acaba en salto de línea, y entonces cae en la última línea, vacía) y de `*/*/` si quedan dos niveles abiertos. Si el fichero acaba en una `/` que no es la de un `*/` ni la de un `/*` (`/* a/`, `/* a//`, `/* /* a/`, `/*/`), el texto insertado empieza por un espacio (` */`, ` */*/`); sin él la `/` y el `*` formarían un `/*` y abrirían un nivel más. Al aplicar la edición y volver a leer el fichero ya no hay E0103, en ninguna de las fuentes
+why:     el comentario llega hasta el final del fichero, de modo que ahí es donde se cierra; con comentarios
+         anidados, cerrar uno solo dejaría el mismo error, y una edición que no arregla lo que anuncia es peor que
+         ninguna. El espacio existe por el comentario que acaba en una dirección o en una ruta (`/* ver a/b/`): sin él
+         la edición abre otro comentario en lugar de cerrar el primero, y `ki check` vuelve a dar E0103
+ref:     TestLexer/e0103_fixit_closes_the_comment
+
+[T07.59] lexer.help_and_fixit_E0104                         level: core
+kind:    unit (go test)      file: internal/syntax/lexer_test.go
+case:    el E0104 lleva la ayuda «remove it» y una edición que borra todos los bytes del carácter; la nota sobre el ASCII solo se da a una letra
+input:   "a " seguido de cada carácter y " b"
+expect:  para `$`, `€`, `😀`, un espacio de no separación y un dígito árabe: ayuda y `Delete` de todos los bytes del carácter, sin nota; para `é` y `λ`: lo mismo y la nota «identifiers and operators are ASCII in Ki»
+why:     la nota es para quien escribió una letra con acento y no entiende por qué un nombre no vale; a un símbolo la
+         etiqueta le basta. La condición es «es una letra» y no «se imprime» ni «es un número», y los casos del
+         dígito y del espacio matan esas dos variantes
+ref:     TestLexer/e0104_help_and_fixit
+
+[T07.60] numbers.help_names_the_minimum_E0105               level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    el E0105 lleva siempre la ayuda que dice cómo escribir el menor `Int`, y ninguna edición
+input:   los tres literales
+expect:  para `9223372036854775808`, `0x8000_0000_0000_0000` y `99999999999999999999`: exactamente un diagnóstico con `Help` «the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`» y sin `Fixits`
+why:     la forma más probable de dar con este error es querer escribir el menor entero, cuyo valor absoluto es uno
+         más del máximo, y la ayuda enseña que se escribe como una resta. No hay edición porque el signo menos queda
+         fuera del span del literal. La ayuda sale con cualquier literal demasiado grande: el diseño no
+         distingue
+ref:     TestNumbers/e0105_help_names_the_minimum
+
+[T07.61] numbers.trailing_underscore_fixit_E0107            level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un `_` final de una tirada de dígitos tiene la ayuda «remove the `_`» y una edición que borra todos los `_` que cierran cada tirada, aunque no sean lo último del literal
+input:   los doce literales
+expect:  para `1_`, `1__`, `1_000_`, `0xFF_`, `0b1_`, `1_.5`, `1.5_`, `1e5_`, `1_e5`, `1.5_e3`, `1_.5_` y `1_.5_e3_`: un E0107 con la ayuda y un `Delete` por tirada con subrayados al final (por ejemplo [1,3) para `1__` y [1,2), [4,5), [7,8) para el último), y con las ediciones aplicadas el literal se lee sin ningún diagnóstico
+why:     el subrayado de `1_.5` está en medio del literal y el de `1_e5` antes del exponente: borrar «el último byte»
+         arreglaría una y estropearía la otra. Borrar todos los de la tirada importa porque `1__` con un solo `_`
+         menos seguiría mal. Que el resultado se lea limpio es lo que hace de la edición un arreglo
+ref:     TestNumbers/e0107_trailing_underscore_fixit
+
+[T07.62] numbers.missing_digits_help_E0107                  level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    un literal hexadecimal o binario sin dígitos tiene la ayuda con el prefijo escrito y dígitos de su base, y ninguna edición
+input:   los seis literales
+expect:  para `0x`, `0x_`, `0xg`: «write the digits after the prefix: `0xFF`»; para `0b`, `0b_`, `0b2`: «…`0b1010`»; ninguna lleva `Fixits`
+why:     solo quien escribe sabe qué número quería, así que no hay edición posible; la ayuda enseña la forma con un
+         ejemplo de la base que se usó, y no el de otra
+ref:     TestNumbers/e0107_missing_digits_help
+
+[T07.63] numbers.note_and_help_E0109                        level: core
+kind:    unit (go test)      file: internal/syntax/numbers_test.go
+case:    el E0109 lleva la nota con el mayor `Float` finito y una ayuda, sin edición: «use a smaller exponent» cuando el literal tiene un exponente y es él lo que no cabe, y «use a smaller value» cuando no lo tiene o cuando lo que no cabe son sus dígitos
+input:   cinco literales: `1e999`, `1E999`, `1.5e999`, un `1` seguido de 400 ceros y `.0`, y ese mismo con `e1` detrás
+expect:  en los cinco, exactamente un diagnóstico E0109 con `Notes == ["the largest finite `Float` is 1.7976931348623157e308"]` y sin `Fixits`; `Help` «use a smaller exponent» en los tres primeros y «use a smaller value» en los dos últimos
+why:     el mensaje dice que el número no cabe, y la nota da el límite para que se vea cuánto hay que bajar. La ayuda
+         habla del exponente porque es lo que casi siempre sobra, pero solo cuando el literal tiene uno y los dígitos
+         de delante caben por sí solos: a quien escribió cuatrocientos ceros no le sirve que le digan que baje un
+         exponente que no escribió, ni a quien escribió `e1` detrás. Las dos últimas filas matan a la ayuda que
+         siempre habla del exponente y a la que lo hace en cuanto hay una `e`
+ref:     TestNumbers/e0109_note_and_help
+
+[T07.64] strings.label_and_fixit_E0106                      level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un escape inválido tiene la primaria «unknown escape», la ayuda «to write a backslash, double it: `\\`» y, en una cadena, una edición que antepone una barra al escape entero; en un carácter no hay edición
+input:   las seis cadenas y el carácter
+expect:  para `"\q"`, `"a\wb"`, `"\é"`, `"\u{110000}"`, `"\u0041"` y `'a' "\q"`: la etiqueta, la ayuda y un `Replace` del escape por la barra seguida del escape, y con la edición aplicada no queda ningún diagnóstico; para `'\q'` la etiqueta y la ayuda pero ningún `Fixits`
+why:     doblar la barra convierte el escape en una barra seguida de texto, y eso vale para cualquier escape malo, un
+         `\u{…}` que no es válido incluido. En un carácter el resultado, `'\\q'`, tendría dos caracteres y daría otro
+         error, y una edición que cambia un error por otro no arregla nada. La última fila de cadena sigue a un
+         carácter y muestra que esa regla no se queda activada
+ref:     TestStrings/e0106_label_and_fixit
+
+[T07.65] strings.empty_char_help_E0108                      level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un carácter vacío tiene la ayuda «write the character between the quotes» y ninguna edición
+input:   ''
+expect:  para `''`: exactamente un diagnóstico con ese `Help` y sin `Fixits`
+why:     no hay carácter que proponer, así que no hay edición; sin esta fila, la ayuda del caso de «dos o más
+         caracteres» podría aplicarse también al vacío
+ref:     TestStrings/e0108_empty_help
+
+[T07.66] strings.text_help_and_fixit_E0108                  level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un carácter con dos o más caracteres tiene la ayuda que propone la cadena con el mismo texto y una edición que reemplaza el literal por ella, con el texto como está escrito; la ayuda enseña la marca que no se ve (de dirección o de ancho cero) como `<U+XXXX>` y deja de enseñar la cadena cuando el texto pasa de 80 bytes, mientras que la edición lleva siempre todo el texto tal cual; si el texto lleva una comilla doble o un `${` sin escapar, la ayuda que dice qué escapar y ninguna edición; una comilla o un `${` que ya llevan su escape no cuentan, y la edición los deja como están
+input:   los catorce literales sin comilla ni `${` sueltos (`'ab'`, `'a\nb'`, `'aé'`, `'😀😀'`, `'$a{'`, `'{$'`, `'a\"'`, `'ab\"'`, `'a\${b}'`, uno con una U+202E entre dos letras, uno con una U+200B entre dos letras, uno con 80 `a`, uno con 81 y uno con 41 `é`) y los nueve con comilla, con `${` o con las dos cosas sueltas
+expect:  para los catorce primeros: «for text, write a string: `"ab"`» (con el texto escrito del fichero, escape incluido) y un `Replace` de todo el literal por la cadena, y con la edición aplicada no queda ningún diagnóstico; en `'a\"'`, `'ab\"'` y `'a\${b}'`, que ya traen el escape que la cadena necesita, la cadena lo conserva (`"a\""`, `"ab\""` y `"a\${b}"`). Con la U+202E y con la U+200B la ayuda escribe `<U+202E>` y `<U+200B>` donde el fichero tiene la marca, y la edición lleva la marca tal cual. Con 80 bytes entre las comillas la ayuda enseña la cadena, y con 81 es solo «for text, write a string», sin ejemplo; con 41 `é`, que son 41 caracteres pero 82 bytes, también es la corta; en los tres la edición es un `Replace` de todo el literal. Para `'a"b'`, `'"a'` y `'a\\"b'` (una barra escapada y después una comilla suelta) y `'a"\${b}'` (una comilla suelta y un `${` escapado): «for text, write a string, and write each `"` in it as `\"`». Para `'a${b}x'`, `'${'`, `'a\\${b}'` y `'a\"${b}'` (una comilla escapada y un `${` suelto): «for text, write a string, and write each `${` in it as `\${`». Para `'a"${b}'`: las dos frases unidas por «and». En los nueve, ningún `Fixits`; y las cadenas que piden las ayudas (`"a\"b"`, `"\"a"`, `"a\${b}x"`, `"\${"`, `"a\"\${b}"`, `"a\\\"b"` y `"a\\\${b}"`) no dan diagnósticos y su primer token es una `String` con el texto del literal
+why:     la cadena tiene los mismos caracteres que el literal, con los escapes como están escritos (si se usara el
+         texto ya decodificado, `\n` se convertiría en un salto de línea real dentro de la cadena). Una comilla
+         dentro acabaría la cadena antes de tiempo y un `${` abriría una interpolación: `'a${b}x'` pasaría a leer
+         la variable `b` en lugar de ser texto, y la edición cambiaría el significado en vez de arreglar el error.
+         Por eso ahí la ayuda explica cómo escribirlos y no se ofrece edición. Un `$` o una `{` solos son texto,
+         y las filas `'$a{'` y `'{$'` impiden que la regla se vuelva más ancha que la pareja. Y lo que ya está
+         escapado no hay que escaparlo: si la ayuda mandara escapar la comilla de `'ab\"'`, quien la sigue
+         escribiría `"ab\\""` y el compilador no ofrecería la edición que sí lo arreglaba, `"ab\""`. Pero una
+         barra escapa solo el byte que tiene detrás: en `'a\\"b'` la comilla está suelta, y una regla que se
+         fijara solo en que haya una barra delante la daría por escapada. La ayuda enseña como `<U+XXXX>` tanto la
+         marca que cambia el orden de lo que se lee como la que no se ve (la de ancho cero): saldrían tal cual en
+         la ayuda y quien la lee no sabría que están ahí. La línea de código de arriba hace lo mismo con las de
+         dirección y deja las de ancho cero como están, de modo que la ayuda es más estricta que ella; en la edición
+         van tal cual, porque es lo que el fichero tiene.
+         Y pasados 80 bytes la ayuda ya no repite el literal: con uno de cinco millones de bytes la ayuda daba una
+         línea de otros cinco millones, aunque el código y el diff se acortan. La edición sigue llevando el texto
+         entero, y las filas de 80 y de 81 bytes fijan dónde está el límite, que se cuenta en bytes y no en
+         caracteres: la fila de 41 `é` mide 82 bytes y solo 41 caracteres, y un límite sobre los caracteres
+         enseñaría la cadena
+ref:     TestStrings/e0108_text_help_and_fixit
+
+[T07.67] strings.unclosed_help_and_fixit_E0108              level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    un carácter sin cerrar con exactamente un carácter detrás de la comilla de apertura tiene la ayuda «close it with `'`» y una inserción de la comilla donde el lexer se detuvo, el final de la línea, que lo deja como un carácter; con ninguno o con varios no hay edición (la ayuda es «write the character between the quotes» con ninguno, y no hay ninguna con varios); si la línea acaba en una barra que no escapa nada, la ayuda y ninguna edición
+input:   ocho fuentes con edición, ocho sin ella y tres con barra al final
+expect:  la comilla va en el byte 2 para `'a\n`, `'a\r\n`, `'a` y `' `, en el 3 para `'é` (una letra de dos bytes), para el escape `'\n` (barra y `n`) y para `'\\`, y en el 7 para `'\u{41}`; con la edición aplicada no queda ningún diagnóstico y el primer token es un `Char`. Para `'`, para `'` seguida de un salto de línea y para `'` seguida de CRLF la ayuda es «write the character between the quotes» y no hay `Fixits`; para `'a b\nx`, `'a\r` (un `\r` suelto al final del fichero es contenido, así que son dos caracteres), `'ab`, `'éa` y `let c = 'a   // the letter a` no hay ni ayuda ni `Fixits`. Para `'\`, `'a\` y una barra impar al final, la ayuda «close it with `'`» y ningún `Fixits`
+why:     una comilla al final de la línea solo cierra un carácter si había uno: tras `'a b` daría un literal de tres
+         caracteres, tras una `'` sola uno de ninguno, y tras `'a   // la letra a` caería después del comentario,
+         que el literal se traga. En los tres el lexer volvería a dar E0108, y una edición que no arregla lo que
+         anuncia es peor que ninguna. Una comilla detrás de una barra que no escapa nada se leería como el escape
+         `\'` y el carácter seguiría sin cerrar, por la misma razón. La barra doble sí está completa, y la fila
+         `'\\` la distingue de la impar
+ref:     TestStrings/e0108_unclosed_help_and_fixit
+
+[T07.68] strings.fixit_closes_the_string_E0110              level: core
+kind:    unit (go test)      file: internal/syntax/strings_test.go
+case:    una cadena sin terminar tiene la ayuda «close the string with `"` at the end of the line» y una inserción de la comilla donde la línea se rompe (antes del `\r` de un CRLF, o al final del fichero), también cuando lo que sigue a la comilla de apertura es código que no era parte de la cadena; no hay edición, y la ayuda es «close the string with `"`», si la línea acaba dentro de la expresión de una interpolación o tras una barra que no escapa nada
+input:   las nueve fuentes con edición y las cuatro sin ella
+expect:  la comilla va en el byte 4 para `"abc` seguida de `\n`, de `\r\n` o del fin del fichero, en el 5 si el fichero acaba en `\r` suelto, y también tras una interpolación cerrada (`"a ${b} c`) y tras una barra doble, y en el 13 para `print("abc) }`, al final de la línea y detrás de la `}`; con la edición aplicada no queda E0110; para `"a ${ b`, `"${`, `"abc\` y tres barras al final: la ayuda «close the string with `"`» y ningún `Fixits`
+why:     la comilla cierra la cadena solo si la línea se rompe en su texto. Dentro del código de una interpolación
+         abierta empezaría otra cadena, y tras una barra solitaria quedaría escapada: en los dos casos la edición
+         dejaría el fichero con el mismo error. Cuando sí cierra, la ayuda dice dónde la pone, el final de la línea,
+         porque el compilador no sabe dónde debía acabar la cadena: en `print("abc) }` el resto de la línea es código
+         y la edición deja la cadena cerrada y la llamada sin cerrar. Con el sitio en la ayuda, quien lee el parche
+         sabe qué está aceptando
+ref:     TestStrings/e0110_fixit_closes_the_string
+
+[T07.69] stmt.primary_names_the_expected_word_E0201         level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    la etiqueta primaria del E0201 dice qué hacía falta, con la misma palabra que el mensaje, en cada uno de los sitios de la tabla `e0201Sites`
+input:   las filas de `e0201Sites`, las mismas que usa `e0201_sites`
+expect:  en cada fila de `e0201_sites` (expresión, identificador, tipo, `=`, `)`, `{`, newline, ítem, `(`, `[`, `]` y cadena), `Primary.Message` es «expected <palabra> here»
+why:     una etiqueta vacía deja al subrayado sin voz: el mensaje está arriba y lo que se señala abajo es solo un
+         trozo de texto. Cada sitio de la tabla tiene su fila, así que uno que se quedara con la etiqueta vacía se
+         vería; un sitio nuevo del parser necesita su propia fila
+ref:     TestParseStmt/e0201_primary_names_the_expected_word
+
+[T07.70] stmt.closer_names_the_opener_E0201                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    cuando falta un `)` o un `]` y el token que se encontró dice que el cierre es lo que falta, el E0201 señala el delimitador que se abrió, ayuda a cerrarlo y ofrece escribir el cierre justo detrás del último token leído, no donde está el token que se encontró
+input:   tres fuentes y "fn f() {\n  (1\n}\n"
+expect:  para tres fuentes (`(1 }`, `#[a fn f() {}` y `(1` seguido de un comentario y un `}`): el primer diagnóstico es exactamente el E0201 con la secundaria «unclosed `(` opened here» (o `[`) sobre el delimitador, la ayuda «close it with `)`» (o `]`) y un `Insert` del cierre en el final del último token leído; y con `(1` en una línea y el `}` en la siguiente, el cierre va tras el `1`, en la primera, y el diagnóstico completo se pinta con `2 -   (1` y `2 +   (1)`
+why:     si el cierre se escribiera en el token encontrado, `(1 }` pasaría a `(1 })` y no se arreglaría. Con el salto
+         de línea entre medias (dentro de un paréntesis no es un token) se ve que lo que cuenta es el último token
+         leído y no la línea del token siguiente
+ref:     TestParseStmt/e0201_closer_names_the_opener
+
+[T07.71] stmt.let_without_name_help_E0201                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    un `let` sin nombre tiene la ayuda «write the name of the variable: `let x = …`» y ninguna edición
+input:   los tres `let`
+expect:  para `let = 1`, `let 1` y `let }`: el E0201 «expected identifier, found …» con esa ayuda y sin `Fixits`, secundaria ni notas
+why:     el nombre de una variable no se puede adivinar, así que se enseña la forma y no se ofrece edición. La ayuda
+         es solo para el `let`: los demás sitios que piden un identificador no tienen ninguna acción que proponer
+ref:     TestParseStmt/e0201_let_without_name_help
+
+[T07.72] stmt.other_words_have_no_help_E0201                level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el E0201 de una expresión, un tipo, un ítem, un newline, un `=`, un `{`, un `(` o `[` de la firma o un atributo, una cadena y un identificador que no es el nombre de un `let` no tiene ayuda, edición, secundaria ni nota
+input:   las doce fuentes
+expect:  doce fuentes, una por palabra (y el identificador de la función, de un parámetro y de un atributo): el primer diagnóstico es el E0201 con su mensaje y `Help == ""`, sin `Fixits`, `Secondary` ni `Notes`
+why:     una ayuda genérica es peor que ninguna: «check your syntax» no dice qué hacer y le quita peso a las que sí
+         lo dicen. Donde no hay una acción concreta, el parser calla
+ref:     TestParseStmt/e0201_other_words_have_no_help
+
+[T07.73] recover.fixit_closes_at_eof_E0202                  level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    el E0202 lleva la ayuda con el cierre del delimitador y una inserción de ese cierre al final del fichero, que en un fichero con salto de línea final es la última línea, la vacía. Si el fichero acaba dentro de un comentario que nada cierra (un `//` sin ningún salto de línea detrás o un `/*` sin su `*/`), el final del fichero es parte del comentario y la inserción va justo detrás del último token que se leyó, delante del comentario. Si el sitio donde iría la inserción (el final del fichero o, cuando un comentario acaba el fichero, el final del último token leído) está dentro de una cadena o de un carácter que no se cierran, o justo en su final, lo que se escribiera allí pasaría a ser parte del literal: el E0202 lleva la ayuda y ninguna inserción. Y toda inserción que lleva, aplicada sola, escribe un cierre que se lee como código y deja ese delimitador cerrado
+input:   las treinta y cinco fuentes; `fn f() {` con su salto de línea, para la salida humana; y las trescientas combinaciones de 3 principios (`fn f() {` con un salto de línea, `fn f() { (1 + ` y `fn f() { "x" y `), 10 literales que no se cierran (ocho cadenas, algunas con `${` abierto o con un `/*` dentro, y dos caracteres) y 10 finales (nada; un salto de línea; un `//` o un `/*` sin cerrar, en la misma línea o en la siguiente; un `1` en la línea siguiente, solo, con un `//` detrás o con un `/*` en la otra; y un CR LF con un `/*`)
+expect:  para `fn f() {`, el mismo con salto de línea final, `(`, `[` y un argumento sin cerrar: el E0202 de siempre con la ayuda «close it with `}`» (`)`, `]`) y un `Insert` del cierre en el último byte del fichero. Para las nueve que acaban dentro de un comentario sin cerrar: seis con `//` (`fn f() {` y un comentario en la línea siguiente o en la misma, `fn main() {` con `print(1)` y un comentario debajo, `fn f() { (1 // x`, `#[a` con un comentario debajo, y `fn f() { // x` con un CR suelto detrás, que no acaba el comentario) y tres con `/*` (`fn f() {` con el comentario debajo, `fn f() { (1 /* x` y `fn main() {` con `print(1)` y un `/*` que se traga la `}` de la última línea): el mismo diagnóstico, pero el `Insert` va justo detrás de la `{`, de `print(1)`, de la `1` o de la `a`, es decir, delante del comentario y no al final del fichero; en las tres con `/*` el diagnóstico anterior es el E0103, y su inserción, la de `*/`, no está en el mismo sitio que la del E0202. Para las cuatro que no acaban dentro de un comentario sin cerrar (uno de `//` que acaba en un salto de línea, uno que acaba en CR LF, uno con una línea de código detrás y un comentario `/* */` cerrado): el `Insert` sigue al final del fichero. Para las cuatro que acaban dentro de una cadena sin cerrar y sin salto de línea detrás (`fn f() {` con `"abc` debajo, la misma detrás de `1 +`, una con `"a ${ x` y esa con un `/* y` sin cerrar dentro de la interpolación): el mismo diagnóstico con la ayuda y sin ningún `Fixits`, después del E0110 (y del E0103 en la última). Para las tres que se parecen a las anteriores y no tienen el problema (una cadena que un salto de línea cierra, la misma con la interpolación abierta, y `fn f() { @`, cuyo E0104 deja un token de error hasta el final del fichero): el `Insert` sigue al final del fichero. Para las cinco cuyo sitio de la inserción cae dentro de un literal sin cerrar aunque el fichero no acabe en él (`fn f() {` con `"abc`, un salto de línea y un `/* x` sin cerrar; con `"a ${/* x } b"`, donde el `/*` de la interpolación se traga el resto del fichero y el salto de línea que acaba la cadena queda dentro del comentario; con `"a ${ x /* y` y una línea más, donde el último token es la `x` de la interpolación, dentro del `Error` de la cadena; con dos cadenas sin cerrar, una por línea, y un `/* x` detrás; y `fn f() { "x" y 'a`, con un carácter sin cerrar al final y el E0201 de la cadena delante): el mismo diagnóstico con la ayuda y sin ningún `Fixits`, después del E0110, del E0103, del E0108 y del E0201 que cada una tenga. Para las cuatro que se les parecen y no tienen el problema (la cadena sin cerrar con un `1` en la línea siguiente y un `/* x` detrás; la de la interpolación con un `1` y un `// x`; `#[a("x" // c`, cuya cadena está completa; y `fn f() { @ // x`): el `Insert` va justo detrás del `1`, de `"x"` o de la `@`, delante del comentario. En las veintiséis con inserción, con la edición aplicada, ese delimitador deja de estar sin cerrar. En las trescientas combinaciones, cada E0202 con inserción, con la edición aplicada, tiene un token `}`, `)` o `]` (el del cierre) justo donde se escribió y deja de estar sin cerrar, y entre todas hay E0202 con inserción y E0202 sin ella. Y la salida humana de `fn f() {\n` es exactamente el diagnóstico de nueve líneas, con `^` bajo la `{`, «this `{` is never closed», la ayuda y el diff `2 -` (sin nada detrás, ni un espacio) y `2 + }`
+why:     el parser se da cuenta al llegar al final del fichero, que es donde se cierra; la etiqueta sigue sobre el
+         delimitador, que es dónde está el error. Cada tipo de delimitador tiene su cierre, y la comprobación de que
+         el delimitador del que se habla deja de estar abierto evita que la edición cierre otro. Un comentario `//`
+         llega hasta el salto de línea, y si el fichero acaba antes el final del fichero es parte del comentario: una
+         `}` escrita ahí no cierra nada y el mismo E0202 sale otra vez, de modo que un `--fix` como el del ejercicio 5
+         del capítulo, que aplica todas las ediciones, escribiría un fichero que sigue roto. Con un `/*` sin su `*/`
+         pasa lo mismo, y es el modo más corriente de llegar ahí: un comentario que se traga la `}` que cerraba la
+         función. Allí el E0103 escribe su `*/` en el último byte, así que la `}` no puede ir también allí: según el
+         orden en que se aplicaran las dos ediciones quedaría `}*/` o `*/}`, y la primera no cierra nada. Una cadena
+         o un carácter sin cerrar se traga lo que se escriba dentro o justo en su final igual que un comentario, y
+         dónde va el cierre depende de cómo se quería acabar el literal, de modo que no se ofrece edición: es mejor no
+         ofrecer nada que una edición que deja el mismo error. Y ese sitio no es siempre el final del fichero. Si lo
+         acaba un comentario, la `}` iría detrás del último token que se leyó, y ese token puede ser el `Error` de una
+         cadena que un salto de línea acabó (saldría `"abc}`), o el código de su interpolación, que el `Error` de la
+         cadena cubre (saldría `"a ${ x}`, que cierra la interpolación y no la función), o ese `Error` cuando el
+         salto de línea que acaba la cadena está dentro de un comentario (la `}` quedaría dentro del comentario, y ni
+         aplicada junto con la edición del E0103 cerraría nada). Por eso la pregunta no es de qué clase es el último
+         token sino si el sitio de la edición cae dentro de un literal sin cerrar. Las nueve filas con comentario
+         matan al parser que escribe siempre al final del fichero; las cuatro siguientes, al que se fija en que haya
+         un comentario en vez de en que el fichero acabe dentro de él, y mueve la `}` delante de cualquier
+         comentario; las cuatro de cadenas, al que escribe la `}` dentro de la cadena, también cuando hay un
+         comentario sin cerrar dentro de la interpolación; y las tres que no tienen el problema, al que quita la
+         edición a cualquier fichero que acaba en un token de error o a cualquier cadena sin cerrar en lugar de a la
+         que no tiene salto de línea detrás. De las cinco nuevas, la de la `x` y la del carácter matan al que solo
+         mira si el último token es el `Error` de una cadena, la de las dos cadenas al que recuerda solo la
+         primera, y las tres del comentario al que mira solo si el fichero acaba dentro de la cadena. De las
+         cuatro que se les parecen, las dos primeras matan al que quita la edición en cuanto hay un literal sin
+         cerrar en el fichero, aunque no sea lo último que se leyó; la de `#[a("x" // c`, al que la quita detrás de
+         cualquier cadena; y la de `@ // x`, al que la quita detrás de cualquier `Error`. Y las trescientas
+         combinaciones miran la edición aplicada y no el sitio donde se escribe, de modo que una combinación que
+         ninguna fila nombra y que dejara la `}` dentro de un literal o de un comentario también falla
+ref:     TestRecover/e0202_fixit_closes_at_eof
+
+[T07.74] recover.label_and_help_E0204                       level: core
+kind:    unit (go test)      file: internal/syntax/recover_test.go
+case:    el E0204 tiene la primaria «nesting level 257 starts here», la nota del límite y la ayuda de partir la expresión, y ninguna edición
+input:   "fn f() { " + 257 «(» + "1" + 257 «)» + " }"
+expect:  con 257 paréntesis anidados: exactamente un diagnóstico con la primaria «nesting level 257 starts here», `Notes == ["the limit is 256"]`, `Help` «split the expression with `let` bindings» y sin `Fixits`
+why:     el nivel que se señala es el primero que sobra, y decirlo con el número le da al mensaje de límite un sitio
+         donde mirar. Partir una expresión con `let` no es una edición mecánica: hay que elegir dónde y cómo se
+         llaman las partes
+ref:     TestRecover/e0204_label_and_help
+
+[T07.75] expr.labels_help_and_fixit_E0203                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el E0203 señala el segundo operador («second comparison here»), tiene como secundaria el primero («first comparison here»), la ayuda con los operandos y operadores reales cuando son un token cada uno, y una edición que inserta `&& ` y el operando central justo antes del segundo operador
+input:   las cinco expresiones
+expect:  para `a < b < c`, `x < y <= z`, `alpha >= beta == gamma`, `1 != n < 20` y `true == flag != false`: el diagnóstico completo, con la ayuda «use `&&`: `x < y && y <= z`» (por ejemplo) y el `Insert` de «&& y » en el inicio del segundo operador; con la edición aplicada el parser no da ningún diagnóstico
+why:     con `a`, `b` y `c` la ayuda real es idéntica a la genérica, y un compilador que escribiera siempre la
+         genérica pasaría ese caso: las otras filas tienen otros nombres y operadores para que no pase. Que la
+         edición deje una expresión limpia es lo que la hace una edición
+ref:     TestParseExpr/e0203_labels_help_and_fixit
+
+[T07.76] expr.compound_middle_operand_E0203                 level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    cuando el operando central es más de un token no hay edición mecánica: el E0203 lleva la ayuda genérica y ningún fix-it
+input:   las seis expresiones
+expect:  para `a < f(x) < c`, `a < -b < c`, `a < (b) < c`, `a < b + 1 < c`, `a < { b } < c` y un `if` como operando: el primer diagnóstico es un E0203 con `Help` «use `&&`: `a < b && b < c`» y sin `Fixits`
+why:     repetir el operando central a la derecha de un `&&` solo es seguro si copiarlo no cambia nada; con una
+         llamada o un bloque, copiarlo haría que se evaluara dos veces, con sus efectos. Por eso solo se ofrece la edición
+         cuando es un token, y las seis filas matan a quien mire solo el primer y el último operando
+ref:     TestParseExpr/e0203_compound_middle_operand
+
+[T07.77] expr.label_and_help_E0205                          level: core
+kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
+case:    el E0205 tiene la primaria «operator or call number 1025 of this chain» y la ayuda de partir la expresión, tanto si el que sobra es un operador como si es una llamada, y ninguna edición
+input:   `1` seguido de 1025 veces ` + 1`, y `f` seguido de 1025 veces `()`
+expect:  con una suma de 1025 operadores y con 1025 llamadas seguidas: exactamente un diagnóstico, con esa primaria, `Help` «split the expression with `let` bindings» y sin `Fixits`
+why:     el número le dice a quien lo lee por qué esa posición y no otra, y la ayuda es la misma porque la solución
+         es la misma. Como en el E0204, partir la expresión no es mecánico
+ref:     TestParseExpr/e0205_label_and_help
+
+[T07.78] parser.cursor_prev_skips_newlines                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_internal_test.go
+case:    `prev` es el último token que `advance` consumió sin contar los Newline, y es el token cero antes del primero
+input:   cuatro tokens construidos a mano y cuatro llamadas a `advance`
+expect:  con los tokens identificador, Newline, entero y Eof: antes de avanzar `prev` es el token cero; tras el primer avance es el identificador; tras consumir el Newline sigue siendo el identificador; tras el entero es el entero, con el span [2,3); y el Eof no se consume, así que sigue siendo el entero
+why:     el cierre que falta se escribe detrás del último token de la línea y no al principio de la siguiente: si
+         `prev` contara los saltos de línea, la edición de `(1\n` caería en el byte donde empieza la línea siguiente
+ref:     TestParserCursor/prev_skips_newlines
+
+[T07.79] parser.attr_name_span_and_lines                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un atributo guarda el span de su nombre, esté donde esté respecto al `#` y al `[`, y dice si todo él cabe en una línea, también cuando el salto está en un comentario
+input:   los once atributos
+expect:  once fuentes: `NameSpan` es exactamente el nombre y `Span` va del `#` al `]` en todas; `OneLine` es verdadero si no hay salto de línea entre el `#` y el `]` (con espacios, con un comentario de una línea, y el salto entre dos atributos no cuenta) y falso con un salto antes del `]`, tras la `(`, entre `#` y `[`, con un CRLF y con un comentario de bloque que lo contiene
+why:     el reemplazo de `extrn` por `extern` necesita el span del nombre, que no se puede deducir del atributo
+         porque el parser no exige que `#`, `[` y el nombre vayan juntos; y borrar un atributo es una edición de una
+         línea, que un atributo repartido en varias no puede ser
+ref:     TestParser/attr_name_span_and_lines
+
+[T07.80] scopes.let_in_own_init_names_the_let               level: core
+kind:    unit (go test)      file: internal/sema/scope_test.go
+case:    el nombre desconocido que es el que su propio `let` está ligando lleva una etiqueta secundaria sobre el nombre del `let` y una nota con la regla; cualquier otro nombre desconocido no
+input:   cuatro fuentes con la autorreferencia y cuatro sin ella
+expect:  para `let total = total`, `let total = g(total)` y un `let` dentro del inicializador de otro: el E0301 con la secundaria «`total` is bound by this `let`, which cannot see itself» sobre el nombre de ese `let` y la nota «a `let` is visible only after its own statement»; con dos `let` anidados que ligan el mismo nombre, la secundaria está en el de dentro; para `let total = totl`, un `let` ya cerrado, un `let` de otra función y un nombre que solo se parece, ni secundaria ni nota
+why:     quien escribe `let x = x` cree que habla del `x` que está definiendo, y el mensaje «unknown name» le parece
+         falso: la etiqueta y la nota le explican por qué. La regla es sobre el `let` que sigue abierto, y las filas
+         sin etiqueta fijan que acabar un `let` o cambiar de función la cierra
+ref:     TestScopes/let_in_own_init_names_the_let
+
+[T07.81] suggestions.suggestion_comes_with_fixit            level: core
+kind:    unit (go test)      file: internal/sema/suggest_test.go
+case:    el «did you mean…?» del E0301 viene con una edición que reemplaza el nombre entero por el sugerido; sin sugerencia no hay edición
+input:   los tres programas
+expect:  para `fibb` (de `fib`) y `prnt` (de `print`): exactamente un `Replace` sobre los bytes del nombre con el nombre sugerido; para `zzzzzz`: ni ayuda ni `Fixits`
+why:     la ayuda dice qué cambiar y la edición lo cambia: el libro muestra el diff de la primera, y si el reemplazo
+         cubriera menos o más bytes que el nombre, el diff saldría con un nombre partido. Los nombres de este test
+         están escritos a mano y no sacados de la ayuda
+ref:     TestSuggestions/suggestion_comes_with_fixit
+
+[T07.82] resolve.duplicate_definition_help                  level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    cada E0302 tiene la ayuda «rename one of them, or delete the second» y ninguna edición
+input:   "fn f() {}\nfn f() {}\nfn f() {}\n"
+expect:  con tres `fn f() {}`: los dos E0302 llevan esa ayuda y `Fixits` vacío
+why:     cuál de las dos funciones sobra no lo puede decidir el compilador, así que ofrecer una edición sería
+         apostar. La ayuda nombra las dos salidas
+ref:     TestResolve/duplicate_definition_help
+
+[T07.83] resolve.extern_only_in_std_help_and_fixit          level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    el E0304 tiene la primaria «not allowed outside the standard library», la nota de por qué, la ayuda «remove the attribute» y una edición que borra el atributo entero si cabe en una línea; si la función no tiene cuerpo, la ayuda es «remove the attribute, and write a body for the function» y no hay edición
+input:   `#[extern("ki_x")] fn g() {}` con un `main` que la llama, y `#[extern(\n  "ki_x"\n)]\nfn g() {}`; y la función `fn g()` sin cuerpo con el atributo en una línea y en tres
+expect:  para `#[extern("ki_x")] fn g() {}`: primaria sobre los bytes 0 a 17, la nota «extern functions are declared by the standard library and implemented by the runtime; a program calls them through the prelude», la ayuda, un `Delete` de [0,17), y el programa sin el atributo no da error; para el atributo repartido en tres líneas: la ayuda, ningún `Fixits` y el diagnóstico se pinta sin pánico. Para la función sin cuerpo, con el atributo en una línea y en tres: exactamente un E0304 con la nota, la ayuda «remove the attribute, and write a body for the function», ningún `Fixits` y el diagnóstico se pinta sin pánico; y `fn g()` sin el atributo da un E0201
+why:     antes la primaria decía «remove the attribute», que es una ayuda en el sitio de una etiqueta. Un atributo de
+         varias líneas no admite una edición de una línea, y un `Delete` de ese span haría que el renderizador
+         muriera con una entrada que el usuario puede escribir. Y borrar el atributo de una función sin cuerpo la
+         deja como una que el parser rechaza (E0201): la edición llevaría de un error al siguiente, así que la ayuda
+         pide las dos cosas y no se ofrece una edición que hace solo una
+ref:     TestResolve/extern_only_in_std_help_and_fixit
+
+[T07.84] resolve.unknown_attribute_suggests_extern          level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    el E0305 tiene la primaria «not an attribute Ki knows» y, según el módulo: en la biblioteca estándar, la nota con los atributos que Ki conoce y, o bien «did you mean `extern`?» con la edición que reemplaza el nombre, o bien «remove it» con la que borra el atributo; en el fichero del usuario, donde `extern` no se puede escribir, la nota «a program cannot use attributes yet» y siempre «remove it» con la edición que borra el atributo
+input:   siete atributos de una línea, escritos en cada uno de los dos módulos; y dos de tres líneas: un `inline` en el fichero del usuario y un `extrn` en los dos
+expect:  en la biblioteca, para `extrn`, `intern`, `extern2` y `# [  extrn ]` (nombre separado del `#[`): la ayuda «did you mean `extern`?» y un `Replace` de los bytes del nombre por `extern`; para `inline`, `ext` e `inline("a")`: «remove it» y un `Delete` del atributo entero; y en todos la nota «the attributes Ki knows: `extern`». En el fichero del usuario, para los siete: la nota «a program cannot use attributes yet», la ayuda «remove it» y un `Delete` del atributo entero. Con la edición aplicada ni la biblioteca ni el fichero dan ningún error. Para el `inline` y el `extrn` repartidos en tres líneas: en el fichero del usuario, sin `Fixits` los dos y pintados sin pánico; en la biblioteca, el `extrn` con la ayuda «did you mean `extern`?» y el `Replace` del nombre
+why:     antes la primaria hablaba del libro y no del lenguaje. La sugerencia usa la misma distancia que los nombres,
+         con `extern` como único candidato, y por eso `ext` queda lejos. Un `Replace` de todo el atributo y no del
+         nombre se llevaría la `#[` por delante. En el fichero del usuario `extern` no se puede escribir (es el
+         E0304), así que sugerirlo llevaría de un error al siguiente, y la nota no lo cuenta entre lo que Ki
+         conoce: lo único que ofrece es borrar el atributo
+ref:     TestResolve/unknown_attribute_suggests_extern
+
+[T07.85] errordocs.catalog_matches_the_codes_in_the_source  level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    cada código que el fuente construye con `diag.E(n)` o `diag.W(n)` tiene su fichero en `docs/errors` y cada fichero tiene su código en el fuente; y una llamada cuyo argumento no es un literal entero, que no dice qué código construye, hace fallar el test
+input:   las llamadas `diag.E(n)` y `diag.W(n)` que `go/parser` encuentra en los ficheros Go de `internal/`, y la lista de `docs/errors`
+expect:  los códigos de las llamadas `diag.E(n)` y `diag.W(n)` en los ficheros que no son de test bajo `internal/` son exactamente los de los ficheros `docs/errors/EXXXX.md`, uno por código: ni falta el fichero de un código ni sobra un fichero sin código. Se leen del árbol sintáctico: un código que solo nombra un comentario o una cadena no es una llamada y no cuenta, y una llamada con una variable, una constante o una suma por argumento es un error y no una llamada que se salta (esa lectura se prueba en T07.89)
+why:     un código que nace sin explicación no cumple el listón: el test falla en la sesión que lo introduce, no tres
+         capítulos después. Y un fichero cuyo código ya no existe se queda describiendo un error que nadie puede ver.
+         La comprobación solo cuenta si el escaneo del fuente encuentra algo, por eso falla si no encuentra ningún
+         código. Y el escaneo lee las llamadas y no el texto: un código quitado del compilador cuyo nombre un
+         comentario sigue escribiendo mantendría vivo su fichero, contra «en los dos sentidos». Y exige que el
+         argumento sea un literal entero: un código que naciera de `diag.E(codigo)`, con una constante, no tendría
+         fichero y ninguna comprobación lo notaría, contra «un código nace completo»
+ref:     TestErrorDocs/catalog_matches_the_codes_in_the_source
+
+[T07.86] errordocs.documents_have_the_fixed_shape           level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    cada fichero del catálogo empieza por `# EXXXX: <mensaje>`, tiene un texto antes del primer encabezado, al menos un ejemplo erróneo bajo `## Erroneous example` y al menos uno corregido bajo `## Corrected`
+input:   los ficheros de `docs/errors`
+expect:  todos cumplen las reglas; las palabras de la valla son `erroneous` o `corrected` y, tras ellas, solo `escaped`, `run` y `also=`
+why:     el catálogo lo incrusta `ki explain` más adelante, y una forma fija es lo que le deja leerlo sin adivinar.
+         El test se prueba a sí mismo en `checks_catch_bad_catalogs`, que escribe catálogos malos y exige que cada
+         comprobación los rechace
+ref:     TestErrorDocs/documents_have_the_fixed_shape
+
+[T07.87] errordocs.erroneous_examples_report_their_code     level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    cada ejemplo erróneo, ejecutado con `ki check --diagnostics=json`, da al menos un diagnóstico con el código de su fichero, y ningún otro código que no esté en la lista `also=` de su valla; y cada código de esa lista aparece de verdad
+input:   los ejemplos erróneos de los ficheros de `docs/errors`
+expect:  todos los ejemplos erróneos (con `escaped` decodificados con `strconv.Unquote`); los de E0106, E0108 y E0109 declaran `also=E0201`
+why:     un ejemplo que no falla con su código enseña un error que no es: se prueba en cada CI. La palabra `also`
+         existe porque hoy una cadena, un carácter o un flotante no pueden estar en una expresión y `ki check` añade
+         un E0201 al literal; como cada código de la lista tiene que aparecer, la palabra se borra sola, a la fuerza,
+         el día que el compilador deje de dar ese E0201
+ref:     TestErrorDocs/erroneous_examples_report_their_code
+
+[T07.88] errordocs.corrected_examples_check_clean           level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    cada ejemplo corregido sale con 0 y stderr vacío; si su valla lleva `also=`, no da el código de su fichero y da exactamente los de la lista
+input:   los ejemplos corregidos de los ficheros de `docs/errors`
+expect:  todos los ejemplos corregidos: los de E0106, E0108, E0109 y E0110 que llevan literales declaran `also=E0201` y los demás salen limpios
+why:     un ejemplo corregido que sigue dando error le dice a quien lo lee que arreglar no es esto. La excepción de `also`
+         es la del test anterior, y también se comprueba que el código del fichero ya no aparece
+ref:     TestErrorDocs/corrected_examples_check_clean
+
+[T07.89] errordocs.checks_catch_bad_catalogs                level: core
+kind:    unit (go test)      file: tests/errors_docs_test.go
+case:    cada comprobación de `TestErrorDocs` rechaza el catálogo malo que le toca, y acepta el bueno
+input:   los ficheros y los ejemplos escritos en el propio test
+expect:  once ficheros con la forma rota y tres bien hechos (sin código en el título, sin explicación, sin ejemplo de un tipo, bajo el encabezado equivocado, con una palabra desconocida, con la valla sin cerrar; entre los buenos, uno con una valla que no es de Ki cuyas líneas parecen un encabezado y el principio de un ejemplo, y no se leen), y catorce ejemplos, nueve malos y cinco buenos (que no da su código, que da otro, con un `also` que sobra, `escaped` que no es una cadena de Go, corregido que sigue dando su código, que da otro error o que, con ese otro error, sale con 1 y escribe en stderr); la palabra `run` de la valla llega al ejemplo y solo a él, y el comando es `check`, o `run` con esa palabra; lo que `ki` escribe en stderr: una línea que no es JSON (el texto de uso de un comando que no conoce) es un error y no un ejemplo sin diagnósticos, y dos líneas JSON dan sus dos códigos, en orden; cuándo un resultado está en silencio (`quiet`), que es salir con 0 y no escribir nada en stderr: cuatro resultados, y solo el de salida 0 sin texto lo está, no el de salida 0 con un aviso en stderr ni los dos de salida 1; la lectura de los códigos del fuente, que en un fichero Go de prueba encuentra, en orden, `diag.E(301)` (dentro de otra llamada), `diag.W(702)` y `diag.E(0x12D)` (un literal en hexadecimal) con su letra y su número, y no `diag.X(5)`, `other.E(6)` ni `E(7)`, ni los códigos que solo nombran un comentario (de documentación, de bloque y al final de una línea) o una cadena (entre comillas dobles o entre acentos graves); que `diag.E(70000)`, que no cabe en un código, es un error; que una llamada `diag.E` o `diag.W` cuyo argumento no es un literal entero (una variable, una constante, una suma, una conversión, una cadena, ninguno o dos argumentos) es un error que empieza por el fichero, la línea y la columna de la llamada y dice cuál de las dos es, y no una llamada que se salta; que en un árbol de directorios lee los ficheros `.go` de los subdirectorios y no los `_test.go` ni los que no son Go (`E0301` y `W0702`, y no el `E0901` de un comentario, el `E0902` de un test ni el `E0903` de un `.txt`); que un fichero `.go` que no se puede leer como Go es un error que nombra el fichero; y dos conjuntos de códigos que no coinciden en ninguno de los dos sentidos
+why:     un test que solo mira catálogos buenos pasa aunque la comprobación no compruebe nada. Cada fila rota está
+         escrita aquí y la comprobación tiene que nombrar su problema, con lo que borrar una comprobación, o dejarla
+         a medias, se nota. La fila de la lectura del fuente con `diag.W(702)` existe porque todavía no hay ningún aviso
+         (`W`): sin ella, una lectura que solo viera la `E` pasaría, y el primer aviso nacería sin su fichero. Las
+         filas que nombran un código en un comentario o en una cadena existen porque un escaneo del texto con una
+         expresión regular los contaría: un código quitado del compilador cuyo nombre un comentario sigue
+         escribiendo mantendría vivo su fichero del catálogo, contra «en los dos sentidos». Las del árbol de
+         directorios, porque leer bien un fichero no dice qué ficheros se leen: un `_test.go` o un subdirectorio
+         mal tratados cambian el conjunto sin que ninguna fila de un solo fichero lo note. Y `diag.E(70000)`, la llamada
+         cuyo argumento no es un literal entero y el fichero que no es Go son errores y no ficheros sin códigos,
+         porque una lectura que se callara dejaría un código sin su fichero sin avisar; las siete llamadas se
+         escriben con las dos letras, con cero y con dos argumentos y con una cadena, de modo que no basta con
+         comprobar una de ellas. Cuatro comprobaciones no tenían ninguna fila que las exigiera, y se
+         podía borrar cualquiera sin que nada se notara: la palabra `run`
+         (todavía ningún ejemplo del catálogo la usa), la valla que no es de Ki, el texto plano en stderr y la
+         salida de un corregido, que el aviso de «da otro error» disimulaba. Cada una tiene ahora su fila. Y la
+         condición de que un corregido esté en silencio pide las dos cosas, el código 0 y nada en stderr: un aviso
+         sale con 0 y escribe, y un fallo que no escribe nada sale con otro código. Ningún ejemplo del catálogo da
+         hoy ninguno de los dos, así que sin las cuatro filas de `quiet` bastaba con comprobar una mitad, y
+         cambiar la otra no se notaba
+ref:     TestErrorDocs/checks_catch_bad_catalogs
+
+[T07.90] check.unclosed_paren_render                        level: core
+kind:    diag                file: tests/errors/ch07/unclosed_paren_render.ki
+case:    `ki check` sobre un `)` que falta enseña el E0201 con la etiqueta de lo que hacía falta, el paréntesis abierto y el cierre escrito justo detrás del `1`
+input:   `fn c() -> Int { (1 }`, tras la cabecera
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 10 líneas, con `^` bajo la `}` y «expected `)` here», `-` bajo la `(` y «unclosed `(` opened here», la ayuda «close it with `)`» y el diff `15 - fn c() -> Int { (1 }` y `15 + fn c() -> Int { (1) }`
+why:     es el error de sintaxis más corriente y el que más gana con la forma de rustc: lo que se esperaba, el
+         paréntesis que quedó abierto y el parche. La primaria cae en la columna 20 y la secundaria en la 17, en la
+         misma línea, y el parche detrás del `1`, no de la `}`
+ref:     tests/errors/ch07/unclosed_paren_render.ki
+
+[T07.91] stmt.closer_only_when_it_is_missing_E0201          level: core
+kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
+case:    el E0201 de un `)` o un `]` que falta ofrece la ayuda y la edición del cierre solo cuando el token encontrado dice que el cierre es lo que falta: un `}`, un `]`, un `;`, un `let` o el comienzo de un item; con cualquier otro token conserva la secundaria que señala el delimitador y no tiene ayuda ni edición
+input:   seis fuentes en las que se ofrece el cierre (con un `;`, un `let` en la línea siguiente, un `]`, un `fn`, un `pub` y un `#` detrás del último token) y trece en las que no (`(1 2)`, `g(1 2)`, `(1`, un comentario y `2`, `(1 true)`, `(1 !x)`, `(1 { 2 })`, `g(1` y un `h(2)` en la línea siguiente, `(1, 2)`, `fn f(x y)`, `fn f(x Int)`, `fn f(x = 1)`, `-> (Int)` y un segundo argumento de atributo); y los tipos de token de `KwFn` a `Error`
+expect:  en las seis primeras, el primer diagnóstico es exactamente el E0201 con la secundaria, la ayuda de cerrar con el cierre que falta y un `Insert` de ese cierre detrás del último token leído; en las trece siguientes, el primer diagnóstico es exactamente el E0201 con la secundaria «unclosed `(` opened here» y sin `Help` ni `Fixits`; y `closerIsMissing` es verdadera para `}`, `]`, `;`, `let`, `fn`, `pub`, `#`, `type`, `trait`, `impl`, `effect` e `import`, y falsa para todos los demás tipos de token
+why:     un `)` escrito detrás del último token solo arregla la línea si el `)` era lo que faltaba. Donde faltaba una
+         coma o un operador el parche la deja peor: `print(1 2)` pasaría a `print(1) 2)`, `fn f(x y)` a `fn f(x) y)` y
+         `fn g() -> (Int)`, que ni siquiera tiene un paréntesis sin cerrar, a `fn g() -> ()Int)`. Una edición que no
+         arregla lo que anuncia es peor que ninguna: quien la acepta sin mirar se queda con otro error. La secundaria
+         se queda porque dice dónde está el paréntesis abierto sea cual sea el error. Cuando el token siguiente podría
+         ser el comienzo de otro argumento o de otra sentencia en la línea de abajo (`g(1` y luego `h(2)`) el parser no
+         puede saber si faltaba un `)` o una coma, y no apuesta
+ref:     TestParseStmt/e0201_closer_only_when_it_is_missing
+
+[T07.92] resolve.broken_signature_keeps_its_name            level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    una función cuya firma no se puede leer (le falta el `:` a un parámetro o el `(`, o su nombre lleva una letra que no es ASCII) sigue existiendo para la resolución de nombres: sus llamadas no dan un E0301 que se sume al error de la firma
+input:   nueve ficheros: `fn add(a Int, b Int) -> Int { a + b }` con dos llamadas a `add` en `main` y con una; `fn add -> Int { 1 }`; `fn café() {}` con una llamada a `café()`; `fn print(x Int) {}`; `fn f(a Int) {}` antes y después de `fn f() {}`; `fn add(a Int) {}` con un `let add = 1` y un `print(add)`; y `fn add(a Int) {}` con una llamada a `sub(1)`
+expect:  en las cinco primeras, solo el error de la firma (un E0201, o los dos E0104 de la `é` en `café`) y todas las llamadas son `ResError`, sin ningún E0301, y la `print` rota tampoco se resuelve al `print` del preludio; con `fn f(a Int) {}` antes o después de `fn f() {}` solo sale el E0201 (ni un E0302) y la llamada es `ResDef`; con el `let add = 1` la `add` que se pasa a `print` es `ResLocal`; con la llamada a `sub`, que no es de ninguna función, salen el E0201 y además un E0301. En las nueve, la función rota no es una `Def`: el fichero tiene `main` y nada más, o `main` y la `f` que sí se leyó
+why:     un `:` olvidado en un parámetro es de los errores más corrientes de una firma, y sin este test cada llamada a
+         la función daría además un «unknown name `add`»: el usuario iría a buscar una definición que está ahí y
+         el error verdadero quedaría enterrado entre los falsos. Que la función rota no sea una `Def` es lo que
+         mantiene a salvo a los pases siguientes: no tiene firma con la que comprobar las llamadas. Cada fila
+         mata una resolución distinta: la que no recuerda el nombre (las cinco primeras), la que busca la función
+         rota después de las del preludio (`print`), la que la prefiere a una definición que sí se leyó (`f`, en
+         los dos órdenes) o a una variable (`add`), y la que con un item roto en el fichero deja de informar de
+         los nombres desconocidos (`sub`)
+ref:     TestResolve/broken_signature_keeps_its_name
+
+[T07.93] suggest.skips_names_over_the_cap                   level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    `suggest` no mide un nombre desconocido de más de 128 bytes y no le da ninguna sugerencia, por cerca que esté un candidato; uno de exactamente 128 sí se mide; el límite es del nombre y no de los candidatos
+input:   `a` repetida 128 veces con un candidato igual salvo la última letra (`b`); `a` repetida 129 veces con uno igual salvo la última letra; `a` repetida 128 veces con un candidato de 129; y `a` repetida 129 veces con uno de 128
+expect:  `suggest` devuelve el candidato y `true` para el nombre de 128 bytes, con el candidato de su mismo largo y con el de 129; y la cadena vacía y `false` para el de 129 bytes, también con un candidato de 128, que está dentro del umbral
+why:     la distancia de edición tarda lo que el producto de los dos largos: un nombre desconocido de 60 000 bytes
+         contra una función de otros 60 000 tardaba unos cuatro segundos en dar un E0301, y cada uno de los cien
+         primeros errores pagaba lo mismo. Un identificador de miles de bytes no es un despiste de dedo, así que
+         no merece sugerencia. El umbral de un tercio del largo no sirve de freno (para ese nombre deja pasar
+         veinte mil ediciones), y el descarte por largo, que ya existe, tampoco: el candidato tiene el mismo largo.
+         El límite está en el nombre y no en los candidatos porque es el nombre lo que el usuario escribe; las
+         dos filas con largos distintos fijan eso. La salida de un nombre dentro del límite no cambia. Los largos
+         del test son los números 128 y 129 y no la constante del código: con otra constante, la fila del nombre
+         de 128 bytes (o la del de 129) falla, y el 128 del libro y el del código no se separan sin que un test lo diga
+ref:     TestSuggest/skips_names_over_the_cap
+
+[T07.94] sema.fuzz_analyze_properties                       level: core
+kind:    prop                file: internal/sema/analyze_fuzz_test.go
+case:    para cualquier entrada, los pases que `Analyze` ejecuta después del parser no hacen panic, todo span de los diagnósticos (las etiquetas y las ediciones) está dentro de su fichero y cada diagnóstico se puede dibujar en los tres formatos
+input:   las doce semillas: `fn main() {}`; `fib` que llama a `fibb`; `let x = x`; `f` definida dos veces; un `#[extern("k")]` en una línea, en tres líneas y en una función sin cuerpo; lo mismo con un `#[inline]` (el E0305), una firma rota seguida de una llamada, y `fn main() { if true { () } }`
+expect:  con `go test`, las doce semillas cumplen las propiedades (`go test -json` las lista como `FuzzAnalyze/seed#0` a `FuzzAnalyze/seed#11`): ningún span de una etiqueta primaria, secundaria o de una edición empieza después de acabar ni pasa del final del fichero al que pertenece, y `RenderHuman`, `RenderShort` y `RenderJSON` vuelven con cada diagnóstico. `go test ./internal/sema -run=^$ -fuzz=FuzzAnalyze -fuzztime=10s` busca entradas que las rompan
+why:     las ediciones del lexer y del parser ya las vigila `FuzzParse`, pero las del E0301 (que reemplaza un nombre),
+         el E0304 y el E0305 (que borran un atributo o le cambian el nombre) las construye la resolución de nombres,
+         y `RenderHuman` hace panic con una edición que cruza un salto de línea o que está en otro fichero. Un
+         atributo escrito en tres líneas es el caso que lo provoca si la edición olvida que el atributo ocupa
+         varias, y por eso hay una semilla de cada forma. Sin este fuzzer, los pases que vienen detrás del parser
+         podían construir una edición que el renderizador rechaza y nada, salvo los tests de cada caso, lo notaría.
+         La última semilla lleva `true`, `()` y un `if` sin `else`: el recorrido de la resolución hace panic en una
+         clase de expresión que no conoce, y estas son las más corrientes
+ref:     FuzzAnalyze
+
+[T07.95] resolve.leaves_and_if_without_else                 level: core
+kind:    unit (go test)      file: internal/sema/resolve_test.go
+case:    la resolución recorre las expresiones que no tienen nombres dentro (`true`, `false` y `()`) y un `if` sin `else` sin hacer pánico y sin resolver nada de más: no informa de nada y cada nombre se queda con lo que es
+input:   `fn a(p: Int) -> Int { p }` y, debajo, `fn b(c: Bool)` con un `if c { () }` y, cada una en su línea, las sentencias `false`, `true` y `()`
+expect:  ningún diagnóstico; el único nombre `p` (el de `a`) se resuelve exactamente a la variable que liga el parámetro de `a`, con el span de su nombre, y el único `c` (la condición del `if`), a la que liga el parámetro de `b`
+why:     el recorrido de la resolución es un `switch` con un `case` por clase de expresión y un `panic` en el `default`.
+         `true`, `false` y `()` no tienen nombres que resolver, pero tienen que estar en la lista del `case` que no
+         hace nada: quien se olvide de uno hace que `ki check` muera con un pánico de Go en `let a = true`, y el
+         test de las clases con hijos (T07.11) no los incluye. Con el `if` pasa lo contrario: sin `else`, el campo
+         `Else` vale 0, que es la primera expresión del fichero, y un recorrido que entra en él aunque no haya
+         `else` resuelve esa expresión otra vez dentro de la función que tiene el `if`. Por eso `a` va primero: su
+         `p` es la expresión 0, en `b` no hay ninguna `p`, y el recorrido daría un E0301 falso en una función
+         correcta. Cada una de las dos faltas muere con este test: el pánico, con `true` y con `()`, y el
+         E0301, con el `if` sin `else`
+ref:     TestResolve/leaves_and_if_without_else
+
+[T07.96] diag.render_human_window_follows_the_primary_label level: core
+kind:    unit (go test)      file: internal/diag/render_test.go
+case:    la ventana de una línea larga se centra en la etiqueta principal, que se ve entera con su marca si cabe en 120 bytes (200 menos 40 de contexto a cada lado), y solo se ensancha a otra etiqueta de la línea si todas las que rodea caben en esos 120 bytes; una etiqueta que no entra queda marcada en el borde de la ventana, a la izquierda bajo el último punto de los `...` y a la derecha bajo el primero; en una línea que no tiene la etiqueta principal la ventana se centra en su primera etiqueta
+input:   un fichero de una línea con un `zz` principal y, a su izquierda, un `yy` secundario: a 300 bytes de distancia, con 116 bytes entre los dos (juntos cubren 120 bytes) y con 117 (cubren 121); y, en lugar del `yy`, una etiqueta ancha que acaba justo donde empieza la ventana y otra que acaba un byte después; y un principal de 120 `z` con un secundario de dos bytes 300 bytes antes; y un fichero con `zz` en la línea 1 y, en la línea 2, de más de 2 000 bytes, un `yy` y, con 148 bytes entre los dos, un `xx`
+expect:  con el `yy` a 300 bytes, la línea se muestra como `...`, 40 `a`, `zz`, 40 `b` y `...`, con el `^^` bajo el `zz` y un solo `-` del `yy` tras dos espacios, bajo el último punto del primer `...`. Con 116 bytes entre los dos, la ventana es de 200 bytes con las dos etiquetas (`...`, 40 `a`, `yy`, 116 `a`, `zz`, 40 `b` y `...`) y cada marca está bajo su texto. Con 117, la ventana es la del `zz` solo (`...`, 40 `a`, `zz`, 40 `b` y `...`) y el `-` va tras dos espacios. Con el principal de 120 `z`, la ventana es de 200 bytes (`...`, 40 `a`, las 120 `z`, 40 `b` y `...`) con 120 `^` bajo ellas y el `-` del secundario tras dos espacios. La etiqueta ancha que acaba donde empieza la ventana se marca con un `-` tras dos espacios, y la que acaba un byte después con un `-` tras tres, bajo el primer carácter que se ve. En la línea 2 de dos etiquetas sin principal, la ventana es `...`, 40 `a`, `yy`, 40 `a` y `...`, con `--` bajo el `yy` y un `-` bajo el primer punto del `...` final por el `xx`
+why:     una etiqueta secundaria que dice «aquí se abrió» o «aquí se definió» cae casi siempre a la izquierda del
+         error. Con la ventana anclada en la etiqueta más a la izquierda, en un fichero minificado (una sola línea
+         de megas), un paréntesis abierto 300 bytes antes enseñaba el paréntesis y dibujaba el `^` del error en el
+         borde, bajo los `...`, sobre un texto que no era el suyo, y las posiciones de la cabecera eran lo único
+         que decía dónde estaba el error. Ahora la ventana va en la etiqueta principal, que es el error, y las demás
+         la ensanchan solo mientras quepan con su contexto. Las filas de 116 y de 117 bytes ponen el límite de las
+         dos maneras, la que cabe y la que no, de modo que escribir `<` por `<=` o 119 por 120 no pasa; y como la
+         cuenta del test no usa la constante del renderizador, también la vigila. La marca del borde izquierdo va
+         bajo el último punto del `...` como la del derecho va bajo el primero: sin eso quedaría bajo el primer
+         carácter que se ve, como si lo señalara; las dos filas anchas fijan dónde acaba «fuera» (en el byte donde
+         empieza la ventana y un byte más allá). La fila de la línea sin etiqueta principal fija que entonces manda
+         la primera etiqueta, y que otra más lejos que no cabe con ella no mueve la ventana
+ref:     TestRenderHuman/window_is_built_around_the_primary_label

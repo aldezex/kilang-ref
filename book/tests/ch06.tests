@@ -113,9 +113,9 @@ ref:     TestParser/empty_module
 
 [T06.12] parser.spans                                      level: core
 kind:    unit (go test)      file: internal/syntax/parser_test.go
-case:    los spans de cada nodo: el item, su nombre, el atributo, los parámetros, los tipos y el cuerpo; y los de los nodos de error
+case:    los spans de cada nodo: el item, su nombre, el atributo, los parámetros, los tipos y el cuerpo; y los de los nodos de error, que conservan el nombre de la función cuando ya lo habían leído
 input:   "\n  #[ext(\"sym\")] pub fn fib(n: Int, zed) -> Bool {}\n" (con saltos de línea reales); "fn g() -> () {}"; "#[extern(\"h\")] fn h(x: Int)\n"; "fn f(x: ) {}"; "fn f() -> (Int) {}"; "fn f(x"; "  1 fn g() {}"; "#[a]\n1"; y "#[a fn f() {}", "fn 1" y "fn f x) {}"
-expect:  para la primera, `Module.File` es el fichero, que no es el primero de su `SourceManager` (su id es 1, no 0); el item cubre desde el `#` hasta la `}`; el nombre es `fib`; el atributo es `#[ext("sym")]` con `Args` igual a ["sym"]; los parámetros son `n: Int` y `zed`; el tipo del primero es `Int`, el de retorno `Bool` y el cuerpo `{}`, un bloque sin sentencias ni cola; y `Pub`, `HasRet` y `HasBody` son verdaderos. En `fn g() -> () {}` el tipo de retorno cubre los dos caracteres de su `()`, no los de `g()`; en `#[extern("h")] fn h(x: Int)` más un salto de línea, el item cubre desde el `#` hasta el `)`, sin el salto de línea. En `fn f(x: ) {}` el tipo que falta tiene un span vacío justo en el `)`; en `fn f() -> (Int) {}`, el tipo de error cubre solo el `(`; `fn f(x` es un `ItemError` (y nada más: sin nombre ni listas) que cubre sus seis bytes; en `  1 fn g() {}` el primer item es un `ItemError` que cubre solo el `1`; en `#[a]` seguido de un salto de línea y un `1`, el primer item es un `ItemError` que cubre `#[a]`, sin el salto de línea; y en `#[a fn f() {}`, `fn 1` y `fn f x) {}`, donde falta el `]` del atributo, el nombre y el `(`, el primer item es un `ItemError` (y nada más) que cubre lo leído hasta entonces, `#[a`, `fn` y `fn f` respectivamente, y no el token que aparece en su lugar
+expect:  para la primera, `Module.File` es el fichero, que no es el primero de su `SourceManager` (su id es 1, no 0); el item cubre desde el `#` hasta la `}`; el nombre es `fib`; el atributo es `#[ext("sym")]` con `Args` igual a ["sym"]; los parámetros son `n: Int` y `zed`; el tipo del primero es `Int`, el de retorno `Bool` y el cuerpo `{}`, un bloque sin sentencias ni cola; y `Pub`, `HasRet` y `HasBody` son verdaderos. En `fn g() -> () {}` el tipo de retorno cubre los dos caracteres de su `()`, no los de `g()`; en `#[extern("h")] fn h(x: Int)` más un salto de línea, el item cubre desde el `#` hasta el `)`, sin el salto de línea. En `fn f(x: ) {}` el tipo que falta tiene un span vacío justo en el `)`; en `fn f() -> (Int) {}`, el tipo de error cubre solo el `(`; `fn f(x` es un `ItemError` que cubre sus seis bytes y lleva el nombre `f`, con su `NameSpan` (el byte 3 al 4), y ninguna lista; en `  1 fn g() {}` el primer item es un `ItemError` que cubre solo el `1`; en `#[a]` seguido de un salto de línea y un `1`, el primer item es un `ItemError` que cubre `#[a]`, sin el salto de línea; y en `#[a fn f() {}`, `fn 1` y `fn f x) {}`, donde falta el `]` del atributo, el nombre y el `(`, el primer item es un `ItemError` que cubre lo leído hasta entonces, `#[a`, `fn` y `fn f` respectivamente, y no el token que aparece en su lugar; los dos primeros no llevan nada más y el tercero, que ya había leído el nombre, lleva `f` y su `NameSpan` (el byte 3 al 4)
 why:     los volcados no muestran los spans, así que ningún otro test los vigila, y de ellos dependen los
          diagnósticos: la resolución de nombres señalará el nombre (`NameSpan`) y el atributo, no la
          función entera. Un span que acabara un byte antes, que empezara en el nombre en vez de en el
@@ -123,7 +123,9 @@ why:     los volcados no muestran los spans, así que ningún otro test los vigi
          item roto marcaría el sitio equivocado en cada error. Las tres últimas fuentes fijan que un item
          roto cubre lo leído hasta que dejó de tener sentido, también cuando lo que falta es el `]` de un
          atributo, el nombre o el `(`: un parser que midiera el span desde el token que encontró en su
-         lugar daría un span vacío donde debería subrayar `#[a`, `fn` o `fn f`. Y el fichero no es el primero del
+         lugar daría un span vacío donde debería subrayar `#[a`, `fn` o `fn f`. El nombre que el item roto
+         conserva es lo que le dice a la resolución de nombres que la función existe, y que solo lo lleve el que lo
+         leyó evita que un item sin nombre defina uno. Y el fichero no es el primero del
          `SourceManager` a propósito: un parser que olvidara copiar el fichero a un span o a `Module` dejaría el
          valor cero, que con el id 0 sería justo el esperado y ningún test lo notaría
 ref:     TestParser/spans
@@ -392,13 +394,18 @@ ref:     TestParseExpr/primary_forms
 
 [T06.38] expr.chained_comparison_forms                     level: core
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
-case:    cualquier pareja de comparaciones seguidas es una cadena, tres seguidas son un solo error, y el parser sigue leyendo después de la cadena
-input:   13 filas: `a == b != c`, `a < b == c`, `a <= b > c`, `a >= b <= c`, `a != b < c`, `a < b < c + 1`, `a < b < c && d`, `a < b < c < d`, `a < b < c == d != e`, `x && a < b < c && y`, `a + b < c * d < e`, `f(a < b < c, d)` y `-1 < x < 2`
-expect:  en cada fila exactamente un diagnóstico, el E0203 de siempre, con el primario en el segundo operador (la posición de cada fila, de uno o dos bytes); el texto `(error)` para la cadena, `(&& (error) d)` y `(&& (&& x (error)) y)` cuando detrás de la cadena hay otro operador, `(call f (error) d)` cuando está dentro de una llamada; y el cursor en el `Eof`
+case:    cualquier pareja de comparaciones seguidas es una cadena, tres seguidas son un solo error, y el parser sigue leyendo después de la cadena; la ayuda y la edición dependen de los operandos
+input:   20 filas: `a == b != c`, `a < b == c`, `a <= b > c`, `a >= b <= c`, `a != b < c`, `a < b < c + 1`, `x < y <= z + 1`, `x < y <= z && w`, `x < y <= z || w`, `x < y <= f(z)`, `x < y <= -z`, `a < b < c && d`, `a < b < c < d`, `a < b < c == d != e`, `x < y <= z < w`, `a < Foo < c`, `x && a < b < c && y`, `a + b < c * d < e`, `f(a < b < c, d)` y `-1 < x < 2`
+expect:  en cada fila exactamente un diagnóstico, el E0203 de siempre, con el primario «second comparison here» en el segundo operador (la posición de cada fila, de uno o dos bytes) y el secundario «first comparison here» en el primero; la ayuda «use `&&`: …» con los operandos reales (`x < y && y <= z` para `x < y <= z && w` y para `x < y <= z < w`, y `a < Foo && Foo < c` para `a < Foo < c`) cuando los tres primeros son un solo token cada uno y detrás del tercero no sigue nada que lo continúe, y la ayuda genérica «use `&&`: `a < b && b < c`» cuando no (`a < b < c + 1`, `x < y <= z + 1`, `x < y <= f(z)`, `x < y <= -z`, `-1 < x < 2`, `a + b < c * d < e`); la edición que escribe `&& ` y el operando del medio justo antes del segundo operador, salvo cuando el del medio no es un solo token (`a + b < c * d < e`); el texto `(error)` para la cadena, `(&& (error) d)` y `(&& (&& x (error)) y)` cuando detrás de la cadena hay otro operador, `(call f (error) d)` cuando está dentro de una llamada; y el cursor en el `Eof`
 why:     las seis comparaciones son un solo nivel, así que el chequeo no puede mirar solo `<`. Tres seguidas
          son un solo error, no dos, porque lo que hay que arreglar es una cosa. Los operandos de la cadena
          se leen enteros (`c + 1`, `c * d`), y el parser sigue con los operadores que vienen detrás (`&& d`),
-         o lo que viene detrás quedaría sin leer
+         o lo que viene detrás quedaría sin leer. La ayuda genérica es el texto de la de `a < b < c`, así que
+         las filas con esos nombres no distinguen una ayuda hecha con los operandos reales de la genérica; con
+         `x < y <= z < w`, cuyo tercer operando lo sigue otra comparación, sí. Un nombre en mayúscula es un
+         operando como otro cualquiera, porque el parser lo lee como un valor (`Foo`): sin la fila `a < Foo < c`,
+         un parser que lo dejara fuera de los operandos de un solo token perdería la edición y la ayuda de esa
+         cadena y ninguna otra fila lo notaría
 ref:     TestParseExpr/chained_comparison_forms
 
 [T06.39] expr.comparison_not_chained_ok                    level: core

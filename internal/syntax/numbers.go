@@ -3,6 +3,7 @@ package syntax
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/diag"
@@ -45,8 +46,10 @@ func isBinDigit(c byte) bool { return c == '0' || c == '1' }
 
 // digitRun consumes the digits that satisfy isDigit and the underscores
 // between and after them, appends the digits (without underscores) to text and
-// reports whether the run ends in an underscore.
-func (lx *lexer) digitRun(text []byte, isDigit func(byte) bool) (_ []byte, trailing bool) {
+// reports where the underscores that end the run are: the span of all of them,
+// which is empty if the run does not end in an underscore.
+func (lx *lexer) digitRun(text []byte, isDigit func(byte) bool) (_ []byte, trailing base.Span) {
+	underscores := 0 // how many '_' end the run so far
 	for lx.pos < len(lx.src) {
 		c := lx.src[lx.pos]
 		if c != '_' && !isDigit(c) {
@@ -54,11 +57,13 @@ func (lx *lexer) digitRun(text []byte, isDigit func(byte) bool) (_ []byte, trail
 		}
 		if c != '_' {
 			text = append(text, c)
+			underscores = 0
+		} else {
+			underscores++
 		}
-		trailing = c == '_'
 		lx.pos++
 	}
-	return text, trailing
+	return text, base.Span{File: lx.id, Lo: uint32(lx.pos - underscores), Hi: uint32(lx.pos)}
 }
 
 // number lexes the Int or Float literal that starts at the current position,
@@ -81,11 +86,14 @@ func (lx *lexer) number() {
 	// part is read before the lexer knows whether the literal is an Int or a
 	// Float, so the underscores are dropped once, here, for both. (ParseFloat
 	// would take a single '_' between digits, but where a '_' may stand is
-	// digitRun's rule, not strconv's.) trailing is set when any run of digits
-	// (integer part, fraction or exponent) ends in an underscore.
+	// digitRun's rule, not strconv's.) trailing collects the underscores that
+	// end a run of digits (integer part, fraction or exponent), one span for
+	// each run that ends in some.
 	var text []byte
-	var trailing, t bool
-	text, trailing = lx.digitRun(text, isDecDigit)
+	var trailing []base.Span
+	var t base.Span
+	text, t = lx.digitRun(text, isDecDigit)
+	trailing = addTrailing(trailing, t)
 
 	isFloat := false
 	// A dot belongs to the number only when a digit follows it: `1..2` is a
@@ -95,7 +103,7 @@ func (lx *lexer) number() {
 		text = append(text, '.')
 		lx.pos++
 		text, t = lx.digitRun(text, isDecDigit)
-		trailing = trailing || t
+		trailing = addTrailing(trailing, t)
 	}
 	// An `e` belongs to the number only when digits follow it, with an
 	// optional sign in between: `1e` is the Int 1 and the name `e`.
@@ -110,13 +118,13 @@ func (lx *lexer) number() {
 				lx.pos++
 			}
 			text, t = lx.digitRun(text, isDecDigit)
-			trailing = trailing || t
+			trailing = addTrailing(trailing, t)
 		}
 	}
 
 	switch {
-	case trailing:
-		lx.malformed(start, "trailing `_`", isFloat)
+	case len(trailing) > 0:
+		lx.malformed(start, "trailing `_`", trailingHelp, isFloat, deleteAll(trailing)...)
 	case isFloat:
 		lx.emitFloat(start, string(text))
 	default:
@@ -128,14 +136,20 @@ func (lx *lexer) number() {
 // start.
 func (lx *lexer) radixInt(start, radix int, isDigit func(byte) bool) {
 	prefix := string(lx.src[start : start+2])
+	// The help shows digits of the base that was written.
+	example := "FF"
+	if radix == 2 {
+		example = "1010"
+	}
 	lx.pos += 2
 	digits, trailing := lx.digitRun(nil, isDigit)
 	switch {
 	case len(digits) == 0:
 		// `0x_` has underscores but no digits, which is the worse problem.
-		lx.malformed(start, "missing digits after `"+prefix+"`", false)
-	case trailing:
-		lx.malformed(start, "trailing `_`", false)
+		// There is no fix-it: the user has to choose the digits.
+		lx.malformed(start, "missing digits after `"+prefix+"`", "write the digits after the prefix: `"+prefix+example+"`", false)
+	case trailing.Lo != trailing.Hi:
+		lx.malformed(start, "trailing `_`", trailingHelp, false, diag.Delete(trailing))
 	default:
 		lx.emitInt(start, string(digits), radix)
 	}
@@ -154,7 +168,8 @@ func (lx *lexer) emitInt(start int, text string, radix int) {
 		}
 		lx.sink.Report(diag.NewError(diag.E(105), "integer literal is too large",
 			diag.Label{Span: lx.span(start), Message: "does not fit in a 64-bit `Int`"}).
-			WithNote("the largest `Int` is 9223372036854775807"))
+			WithNote("the largest `Int` is 9223372036854775807").
+			WithHelp("the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`"))
 		v = 0
 	}
 	lx.pushInt(start, v)
@@ -171,18 +186,61 @@ func (lx *lexer) emitFloat(start int, text string) {
 			panic("unreachable: " + err.Error())
 		}
 		lx.sink.Report(diag.NewError(diag.E(109), "float literal is out of range",
-			diag.Label{Span: lx.span(start), Message: "does not fit in a 64-bit `Float`"}))
+			diag.Label{Span: lx.span(start), Message: "does not fit in a 64-bit `Float`"}).
+			WithNote("the largest finite `Float` is 1.7976931348623157e308").
+			WithHelp(outOfRangeHelp(text)))
 		v = 0
 	}
 	lx.pushFloat(start, v)
 }
 
+// outOfRangeHelp is the help of an E0109 for the float literal text, as `number`
+// builds it: no underscores, and the exponent mark is a lowercase e whichever
+// the file has. If the literal has an exponent and the part in front of it
+// fits, the exponent is what does not, and the help says so. In any other case,
+// with no exponent or with one that is not the cause (a mantissa of 400 digits),
+// the value is what is too large.
+func outOfRangeHelp(text string) string {
+	if i := strings.IndexByte(text, 'e'); i >= 0 {
+		if _, err := strconv.ParseFloat(text[:i], 64); err == nil {
+			return "use a smaller exponent"
+		}
+	}
+	return "use a smaller value"
+}
+
+// trailingHelp is the help of an E0107 whose literal has an underscore where a
+// run of digits ends.
+const trailingHelp = "remove the `_`"
+
+// addTrailing adds the span of the underscores that end a run of digits to
+// list, if there are any (see digitRun).
+func addTrailing(list []base.Span, trailing base.Span) []base.Span {
+	if trailing.Lo == trailing.Hi {
+		return list
+	}
+	return append(list, trailing)
+}
+
+// deleteAll returns a fix-it that deletes each of spans.
+func deleteAll(spans []base.Span) []diag.FixIt {
+	fixits := make([]diag.FixIt, len(spans))
+	for i, sp := range spans {
+		fixits[i] = diag.Delete(sp)
+	}
+	return fixits
+}
+
 // malformed reports E0107 on the literal that goes from start to the current
-// position and emits its token (a Float if isFloat, else an Int) with the
-// value 0.
-func (lx *lexer) malformed(start int, label string, isFloat bool) {
-	lx.sink.Report(diag.NewError(diag.E(107), "malformed number literal",
-		diag.Label{Span: lx.span(start), Message: label}))
+// position, with the given label, help and fix-its (the help says what they
+// do), and emits its token (a Float if isFloat, else an Int) with the value 0.
+func (lx *lexer) malformed(start int, label, help string, isFloat bool, fixits ...diag.FixIt) {
+	d := diag.NewError(diag.E(107), "malformed number literal",
+		diag.Label{Span: lx.span(start), Message: label}).WithHelp(help)
+	for _, f := range fixits {
+		d = d.WithFixIt(f)
+	}
+	lx.sink.Report(d)
 	if isFloat {
 		lx.pushFloat(start, 0)
 		return

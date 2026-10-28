@@ -209,23 +209,23 @@ func (p *parser) pratt(minBP int) ExprID {
 		}
 		lhs = p.m.Exprs.Push(Expr{Kind: ExprBinary, Span: p.spanFrom(start), Op: op, OpSpan: t.Span, Lhs: lhs, Rhs: rhs})
 		if bp == bpCompare && isComparison(p.tok().Kind) {
-			lhs = p.chainedComparison(start)
+			lhs = p.chainedComparison(start, t.Span)
 		}
 	}
 	return lhs
 }
 
 // chainedComparison deals with a comparison operator that comes right after a
-// comparison (`a < b < c`), the cursor being at the second operator. The
-// comparisons do not associate, so it reports E0203 at that operator, once for
-// the whole chain, and reads the rest of the chain, so that the parser goes on
-// after it. It returns one error node for the whole chain, which starts at
-// start: a tree of comparisons would make a type error out of a mistake that the
-// parser has already reported.
-func (p *parser) chainedComparison(start base.Span) ExprID {
-	p.report(diag.NewError(diag.E(203), "comparison operators cannot be chained",
-		diag.Label{Span: p.tok().Span}).
-		WithHelp("use `&&`: `a < b && b < c`"))
+// comparison (`a < b < c`), the cursor being at the second operator. start is
+// where the chain begins (the first token of its first operand) and first is
+// the span of the first operator. The comparisons do not associate, so it
+// reports E0203 at the second operator, once for the whole chain, with the
+// first operator as its secondary label, and reads the rest of the chain, so
+// that the parser goes on after it. It returns one error node for the whole
+// chain, which starts at start: a tree of comparisons would make a type error
+// out of a mistake that the parser has already reported.
+func (p *parser) chainedComparison(start, first base.Span) ExprID {
+	p.report(p.chainedDiag(start, first))
 	for isComparison(p.tok().Kind) {
 		if !p.countChain(p.tok().Span) {
 			break
@@ -234,6 +234,63 @@ func (p *parser) chainedComparison(start base.Span) ExprID {
 		p.pratt(bpCompare + 1)
 	}
 	return p.errorExpr(start)
+}
+
+// chainedDiag builds the E0203 for the chain that chainedComparison deals with.
+//
+// The fix-it writes `&& ` and the middle operand just before the second
+// operator, which turns `a < b < c` into `a < b && b < c`. That is mechanical
+// only when the middle operand is a single token, so it is the only case that
+// gets one. The help shows the three operands and the two operators as they
+// are written when each operand is a single token, and the general form
+// otherwise. The operands are looked up in the tokens around the cursor,
+// without reading the rest of the chain, so that the diagnostic is reported in
+// its place among the others.
+func (p *parser) chainedDiag(start, first base.Span) diag.Diagnostic {
+	toks, at := p.tb.Tokens, p.pos
+	second := toks[at]
+	d := diag.NewError(diag.E(203), "comparison operators cannot be chained",
+		diag.Label{Span: second.Span, Message: "second comparison here"}).
+		WithSecondary(diag.Label{Span: first, Message: "first comparison here"})
+	help := "use `&&`: `a < b && b < c`"
+
+	// The middle operand is one token when the first operator is the token
+	// before it.
+	if at >= 2 && toks[at-2].Span == first && isOperandToken(toks[at-1].Kind) {
+		mid := p.tb.text(toks[at-1])
+		d = d.WithFixIt(diag.Insert(second.Span, "&& "+mid+" "))
+
+		// The first operand is one token when it is the token before the first
+		// operator and the one that begins the chain. The third is one token
+		// when nothing after it would continue it (see continuesOperand).
+		firstOK := at >= 3 && isOperandToken(toks[at-3].Kind) && toks[at-3].Span.Lo == start.Lo
+		thirdOK := at+2 < len(toks) && isOperandToken(toks[at+1].Kind) && !continuesOperand(toks[at+2].Kind, bpCompare+1)
+		if firstOK && thirdOK {
+			help = "use `&&`: `" + p.tb.text(toks[at-3]) + " " + p.tb.text(toks[at-2]) + " " + mid +
+				" && " + mid + " " + p.tb.text(second) + " " + p.tb.text(toks[at+1]) + "`"
+		}
+	}
+	return d.WithHelp(help)
+}
+
+// isOperandToken reports whether a token of kind k is by itself an operand: an
+// integer, a boolean or a name, the expressions that primary reads from a
+// single token.
+func isOperandToken(k TokenKind) bool {
+	switch k {
+	case Int, KwTrue, KwFalse, LowerIdent, UpperIdent:
+		return true
+	}
+	return false
+}
+
+// continuesOperand reports whether a token of kind k, right after an operand,
+// is part of the expression that pratt reads with minimum binding power minBP:
+// a `(` (a call) or a binary operator at least that strong. It is the test
+// that the loop of pratt applies to the token after each operand.
+func continuesOperand(k TokenKind, minBP int) bool {
+	_, bp, ok := binaryOp(k)
+	return k == LParen || ok && bp >= minBP
 }
 
 // countChain adds the operator or call at span at to the count of the
@@ -252,8 +309,10 @@ func (p *parser) countChain(at base.Span) bool {
 		return true
 	}
 	p.chain.abandoned = true
-	p.report(diag.NewError(diag.E(205), "expression chain is too long", diag.Label{Span: at}).
-		WithNote("the limit is " + strconv.Itoa(MaxChain) + " operators and calls in one expression"))
+	p.report(diag.NewError(diag.E(205), "expression chain is too long",
+		diag.Label{Span: at, Message: "operator or call number " + strconv.Itoa(MaxChain+1) + " of this chain"}).
+		WithNote("the limit is " + strconv.Itoa(MaxChain) + " operators and calls in one expression").
+		WithHelp("split the expression with `let` bindings"))
 	return false
 }
 

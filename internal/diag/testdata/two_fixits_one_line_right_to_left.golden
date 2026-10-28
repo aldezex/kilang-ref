@@ -1,0 +1,9 @@
+error[E0301]: unknown name `fibb`
+ --> test.ki:1:5
+  |
+1 | x = fibb + gammaa
+  |     ^^^^ not found in this scope
+  = help: rename both
+  |
+1 - x = fibb + gammaa
+1 + x = f + a_longer_name

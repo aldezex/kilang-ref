@@ -1,0 +1,9 @@
+error[E0301]: unknown name `fibb`
+ --> test.ki:1:11
+  |
+1 |     ab  x␁� = fibb
+  |               ^^^^ not found in this scope
+  = help: did you mean `fib`?
+  |
+1 -     ab  x␁� = fibb
+1 +     ab  x␁� = fib

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/internal/diag"
 	"github.com/aldezex/kilang/internal/syntax"
 )
 
@@ -14,7 +15,11 @@ import (
 // within the file, and PrintModule can walk the tree it built. The spans are
 // those of the tree (items, attributes, parameters, types, statements and
 // expressions, with their name and operator spans) and those of the labels of
-// the diagnostics. PrintModule follows every id and every list range from the
+// the diagnostics, fix-its included, and every diagnostic can be rendered in
+// the three formats: RenderHuman panics for a fix-it that crosses a line break
+// or that is in another file, and no input may make the lexer or the parser
+// build one. (FuzzAnalyze, in internal/sema, does the same for the passes after
+// the parser.) PrintModule follows every id and every list range from the
 // items down, so it panics on an id that names no node or on a range that runs
 // past the end of its pool; the span checks walk each pool by itself and would
 // not notice either. The text PrintModule returns is not examined here.
@@ -42,7 +47,13 @@ func FuzzParse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, src string) {
 		// The file is not the first of its SourceManager (see lexFile), so a
 		// span that lost its File does not pass for one that is within the file.
-		m, id, in, sink := parseFile(t, src)
+		var sm base.SourceManager
+		sm.Add("pad.ki", nil)
+		id := sm.Add("fuzz.ki", []byte(src))
+		in := base.NewInterner()
+		sink := &diag.Sink{}
+		tb := syntax.Lex(&sm, id, in, sink)
+		m := syntax.Parse(&tb, id, in, sink)
 
 		// A panic inside PrintModule fails the property; its result is not examined.
 		_ = syntax.PrintModule(m, in)
@@ -85,6 +96,14 @@ func FuzzParse(f *testing.F) {
 			for _, l := range d.Secondary {
 				check("secondary label of diagnostic", i, l.Span)
 			}
+			for _, f := range d.Fixits {
+				check("fix-it of diagnostic", i, f.Span)
+			}
+			// None of them panics: a fix-it over a line break or in another
+			// file would, and so would a fix-it without a help line.
+			_ = diag.RenderHuman(d, &sm)
+			_ = diag.RenderShort(d, &sm)
+			_ = diag.RenderJSON(d, &sm)
 		}
 	})
 }

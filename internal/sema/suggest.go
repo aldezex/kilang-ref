@@ -7,6 +7,12 @@ import (
 	"github.com/aldezex/kilang/internal/base"
 )
 
+// maxSuggestLen is the longest unknown name that suggest measures. The distance
+// of two names takes time in the product of their lengths, and a name of
+// thousands of bytes is not a slip of the finger, so a longer name gets no
+// help line instead of making its error cost seconds.
+const maxSuggestLen = 128
+
 // suggest returns the name in candidates that is nearest to name, for the help
 // line `did you mean …?` of an unknown name. The nearest is the one with the
 // smallest base.EditDistance, and a name is only near enough if that distance is
@@ -18,8 +24,12 @@ import (
 //
 // A candidate whose length differs from the name's by more than the limit is
 // out of reach and is skipped without measuring it: each edit changes the length
-// by one at most, so the distance is at least the difference.
+// by one at most, so the distance is at least the difference. A name longer than
+// maxSuggestLen is not measured against any candidate: it has no suggestion.
 func suggest(name string, candidates []string) (string, bool) {
+	if len(name) > maxSuggestLen {
+		return "", false
+	}
 	limit := max(1, len(name)/3)
 	best, bestDistance, found := "", 0, false
 	for _, c := range candidates {

@@ -244,11 +244,12 @@ case:    pintar un error cuyo span empieza a mitad de la línea 1 y acaba en la 
 input:   "fn f() { let a = 1\n  2\n}\n" y un E0202 con el span desde la `{` hasta el final del fichero; compara con `testdata/multiline_span_marks_first_line.golden`. Después, líneas de 100 000 bytes con `zz` en medio, al principio y al final, con un span de toda la línea, con una "é" cada dos bytes y con una segunda etiqueta al final de la línea, lejos de la primera; una línea de "a" y 50 000 "é" con una etiqueta que cubre casi todo; una línea de 1000 "a", `zz` y 30 espacios con la etiqueta en `zz`; líneas de 200 y de 201 bytes; y dos líneas de 1000 bytes sueltos de continuación (`\x80`, sin byte inicial): una "a" seguida de ellos con la etiqueta en la "a", y solo ellos con la etiqueta en medio
 expect:  solo la línea 1, con once marcas `^` desde la `{` hasta el final de la línea ("{ let a = 1") y su mensaje; las líneas 2 y 3 no aparecen.
          Con líneas largas (hasta 100 000 bytes): una línea de 200 bytes se pinta entera; una de 201 o más, como una
-         ventana de 40 bytes de contexto antes de la primera etiqueta y después de la última (como mucho 200 bytes más
+         ventana de 40 bytes de contexto antes y después de la etiqueta principal (como mucho 200 bytes más
          lo que falte para acabar el carácter en que cae el corte: con "é", 201), con `...` en el extremo cortado y las
          marcas bajo los mismos caracteres, sin partir un carácter de dos bytes; los espacios del final de la línea no se
          pintan, tampoco cuando la ventana está cortada por la izquierda; una etiqueta más ancha que la ventana llega
-         hasta su borde, una etiqueta fuera de ella se marca en el borde y la salida no pasa de 2000 bytes en ningún caso.
+         hasta su borde, la segunda etiqueta de la línea, lejos de la principal, no entra en la ventana y se marca en
+         el borde, bajo los `...` (cuándo entra una etiqueta lo cuenta el capítulo 7), y la salida no pasa de 2000 bytes en ningún caso.
          Los bytes de continuación sueltos no son el resto de un carácter: el extremo de la ventana avanza como mucho tres
          bytes para llegar a un inicio de carácter y no recorre la tirada entera (ventana de 44 bytes con la etiqueta en la
          "a"; de 82, con contexto a los dos lados, con la etiqueta en medio)

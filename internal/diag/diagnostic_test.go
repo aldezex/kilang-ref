@@ -101,4 +101,45 @@ func TestDiagnostic(t *testing.T) {
 			t.Errorf("the receiver changed: Notes = %q, Secondary = %v", spare.Notes, spare.Secondary)
 		}
 	})
+
+	t.Run("with_fixit_returns_copy", func(t *testing.T) {
+		d := NewError(E(301), "unknown name `fibb`", Label{Span: base.Span{File: 1, Lo: 4, Hi: 8}})
+		f := Replace(base.Span{File: 1, Lo: 4, Hi: 8}, "fib")
+		d2 := d.WithFixIt(f)
+		if len(d.Fixits) != 0 {
+			t.Errorf("WithFixIt changed the receiver: Fixits = %v", d.Fixits)
+		}
+		if !slices.Equal(d2.Fixits, []FixIt{f}) {
+			t.Errorf("WithFixIt copy: Fixits = %v, want [%v]", d2.Fixits, f)
+		}
+
+		// Two copies made from the same diagnostic must not share the spare
+		// room of its slice, as with the notes and the secondary labels.
+		g := Delete(base.Span{File: 1, Lo: 0, Hi: 1})
+		h := Insert(base.Span{File: 1, Lo: 2, Hi: 3}, ")")
+		spare := d
+		spare.Fixits = make([]FixIt, 1, 4)
+		spare.Fixits[0] = f
+		a, b := spare.WithFixIt(g), spare.WithFixIt(h)
+		if !slices.Equal(a.Fixits, []FixIt{f, g}) || !slices.Equal(b.Fixits, []FixIt{f, h}) {
+			t.Errorf("Fixits of two copies = %v and %v, want [f g] and [f h]", a.Fixits, b.Fixits)
+		}
+		if len(spare.Fixits) != 1 {
+			t.Errorf("the receiver changed: Fixits = %v", spare.Fixits)
+		}
+
+		// The three constructors. Insert puts the text at the start of the span
+		// it is given and makes an empty span there, in the same file; Delete
+		// keeps the span and has no replacement.
+		at := base.Span{File: 3, Lo: 7, Hi: 11}
+		if got, want := Insert(at, "&& b "), (FixIt{Span: base.Span{File: 3, Lo: 7, Hi: 7}, Replacement: "&& b "}); got != want {
+			t.Errorf("Insert = %+v, want %+v", got, want)
+		}
+		if got, want := Delete(at), (FixIt{Span: at}); got != want {
+			t.Errorf("Delete = %+v, want %+v", got, want)
+		}
+		if got, want := Replace(at, "x"), (FixIt{Span: at, Replacement: "x"}); got != want {
+			t.Errorf("Replace = %+v, want %+v", got, want)
+		}
+	})
 }

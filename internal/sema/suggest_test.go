@@ -1,6 +1,7 @@
 package sema_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,9 +35,15 @@ func wantSuggestion(t *testing.T, row string, sink *diag.Sink, file base.FileID,
 	if d.Help != help {
 		t.Errorf("%s: help %q, want %q", row, d.Help, help)
 	}
-	// The suggestion is a line of help, nothing else: no edit is offered.
-	if len(d.Fixits) != 0 {
-		t.Errorf("%s: fixits %+v, want none", row, d.Fixits)
+	// A suggestion comes with the edit that follows it, over the name that is
+	// written and with the name that is suggested; no suggestion, no edit.
+	var wantFixits []diag.FixIt
+	if help != "" {
+		best := strings.TrimSuffix(strings.TrimPrefix(help, "did you mean `"), "`?")
+		wantFixits = []diag.FixIt{diag.Replace(base.Span{File: file, Lo: uint32(lo), Hi: uint32(lo + len(unknown))}, best)}
+	}
+	if !slices.Equal(d.Fixits, wantFixits) {
+		t.Errorf("%s: fixits %+v, want %+v", row, d.Fixits, wantFixits)
 	}
 }
 
@@ -83,6 +90,35 @@ func TestSuggestions(t *testing.T) {
 		const prelude = "fn helper() {}\nfn broken() { helpr() }\n"
 		_, mods, _, sink := resolveSources(t, prelude, "fn main() {}\n")
 		wantSuggestion(t, "unknown name in the prelude", sink, mods[0].File, prelude, "{ helpr()", "helpr", didYouMean("helper"))
+	})
+
+	t.Run("suggestion_comes_with_fixit", func(t *testing.T) {
+		// The fix-it replaces the unknown name, all of it, by the suggested one,
+		// and nothing else. The names are written out here and not taken from
+		// the help line, which is what wantSuggestion does.
+		const fib = "fn fib(n: Int) -> Int {\n  if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }\n}\nfn main() {\n  print(fib(20))\n}\n"
+		p := testsupport.Analyze(t, fib)
+		d := p.Session.Sink.All()[0]
+		at := uint32(strings.Index(fib, "fibb"))
+		if want := []diag.FixIt{diag.Replace(base.Span{File: userFile(p), Lo: at, Hi: at + 4}, "fib")}; !slices.Equal(d.Fixits, want) {
+			t.Errorf("fibb: fixits %+v, want %+v", d.Fixits, want)
+		}
+
+		// A shorter name is replaced by a longer one, and a name in another
+		// place of the line works the same.
+		const short = "fn main() {\n  prnt(1)\n}\n"
+		p = testsupport.Analyze(t, short)
+		d = p.Session.Sink.All()[0]
+		at = uint32(strings.Index(short, "prnt"))
+		if want := []diag.FixIt{diag.Replace(base.Span{File: userFile(p), Lo: at, Hi: at + 4}, "print")}; !slices.Equal(d.Fixits, want) {
+			t.Errorf("prnt: fixits %+v, want %+v", d.Fixits, want)
+		}
+
+		// Nothing to suggest, nothing to replace.
+		p = testsupport.Analyze(t, "fn main() {\n  zzzzzz\n}\n")
+		if d = p.Session.Sink.All()[0]; len(d.Fixits) != 0 || d.Help != "" {
+			t.Errorf("zzzzzz: help %q and fixits %+v, want none", d.Help, d.Fixits)
+		}
 	})
 
 	t.Run("suggests_prelude_name", func(t *testing.T) {

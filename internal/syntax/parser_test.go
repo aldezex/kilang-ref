@@ -104,6 +104,64 @@ func TestParser(t *testing.T) {
 		wantModule(t, "two", "#[a]\n#[b(\"1\")]\nfn f() {}\n",
 			"(fn f (attrs (a) (b \"1\")) (params) (ret _) (block))\n")
 	})
+	t.Run("attr_name_span_and_lines", func(t *testing.T) {
+		// NameSpan is the name itself, wherever the `#`, the `[` and the name
+		// are in relation to each other, and OneLine says whether the text from
+		// the `#` to the `]` is on one line: a line break inside the brackets or
+		// the parentheses is only a space for the parser, and it takes a comment
+		// that holds one too. The break between two attributes is not inside
+		// either of them.
+		rows := []struct {
+			src            string
+			nameLo, nameHi uint32 // of each attribute in the source, in order
+			spanLo, spanHi uint32
+			oneLine        bool
+			second         bool // the source has a second attribute: #[b]
+		}{
+			{"#[extern] fn f()", 2, 8, 0, 9, true, false},
+			{"#[extern(\"x\")] fn f()", 2, 8, 0, 14, true, false},
+			{"# [  foo ] fn f() {}", 5, 8, 0, 10, true, false},
+			{"#[foo\n] fn f() {}", 2, 5, 0, 7, false, false},
+			{"#[foo\r\n] fn f() {}", 2, 5, 0, 8, false, false},
+			{"#\n[foo] fn f() {}", 3, 6, 0, 7, false, false},
+			{"#[foo(\n\"a\"\n)] fn f() {}", 2, 5, 0, 13, false, false},
+			{"#[foo /* \n */] fn f() {}", 2, 5, 0, 14, false, false},
+			{"#[foo /* \n */ ] fn f() {}", 2, 5, 0, 15, false, false},
+			{"#[foo /* one line */] fn f() {}", 2, 5, 0, 21, true, false},
+			{"#[a]\n#[b]\nfn f() {}", 2, 3, 0, 4, true, true},
+		}
+		for _, row := range rows {
+			m, id, _, sink := parseFile(t, row.src)
+			if n := len(sink.All()); n != 0 {
+				t.Errorf("%q: %d diagnostics, want none: %v", row.src, n, sink.All())
+				continue
+			}
+			want := 1
+			if row.second {
+				want = 2
+			}
+			if len(m.AttrPool) != want {
+				t.Errorf("%q: %d attributes, want %d", row.src, len(m.AttrPool), want)
+				continue
+			}
+			a := m.AttrPool[0]
+			if wantName := (base.Span{File: id, Lo: row.nameLo, Hi: row.nameHi}); a.NameSpan != wantName {
+				t.Errorf("%q: NameSpan %+v, want %+v", row.src, a.NameSpan, wantName)
+			}
+			if wantSpan := (base.Span{File: id, Lo: row.spanLo, Hi: row.spanHi}); a.Span != wantSpan {
+				t.Errorf("%q: Span %+v, want %+v", row.src, a.Span, wantSpan)
+			}
+			if a.OneLine != row.oneLine {
+				t.Errorf("%q: OneLine %v, want %v", row.src, a.OneLine, row.oneLine)
+			}
+			if row.second {
+				b := m.AttrPool[1]
+				if wantName := (base.Span{File: id, Lo: 7, Hi: 8}); b.NameSpan != wantName || !b.OneLine {
+					t.Errorf("%q: second attribute has NameSpan %+v and OneLine %v, want %+v and true", row.src, b.NameSpan, b.OneLine, wantName)
+				}
+			}
+		}
+	})
 	t.Run("extern_then_item", func(t *testing.T) {
 		// A function has a body when a `{` follows on the same line. Without
 		// one, which only an `#[extern]` function may do, it ends at the line
@@ -163,9 +221,9 @@ func TestParser(t *testing.T) {
 				t.Errorf("%s: %q reported %d diagnostics %v, want exactly 1", row.name, row.src, len(diags), diags)
 			} else {
 				d := diags[0]
-				wantLabel := diag.Label{Span: base.Span{File: id, Lo: row.lo, Hi: row.hi}}
+				wantLabel := diag.Label{Span: base.Span{File: id, Lo: row.lo, Hi: row.hi}, Message: "expected `{` here"}
 				if d.Code != diag.E(201) || d.Message != row.msg || d.Primary != wantLabel ||
-					len(d.Secondary) != 0 || len(d.Notes) != 0 || d.Help != "" {
+					len(d.Secondary) != 0 || len(d.Notes) != 0 || d.Help != "" || len(d.Fixits) != 0 {
 					t.Errorf("%s: %q reported %+v, want E0201 %q with the primary label %+v and nothing else",
 						row.name, row.src, d, row.msg, wantLabel)
 				}
@@ -188,7 +246,7 @@ func TestParser(t *testing.T) {
 	})
 	t.Run("spans", func(t *testing.T) {
 		const src = "\n  #[ext(\"sym\")] pub fn fib(n: Int, zed) -> Bool {}\n"
-		m, id, _, sink := parseFile(t, src)
+		m, id, in, sink := parseFile(t, src)
 		if sink.HasErrors() || len(m.Items) != 1 {
 			t.Fatalf("got %d items and diagnostics %v, want 1 item and none", len(m.Items), sink.All())
 		}
@@ -275,9 +333,13 @@ func TestParser(t *testing.T) {
 		if got, want := m.Types.Get(it.Ret).Span, spanAt(parenType, "(Int", 1); got != want {
 			t.Errorf("type that starts with a parenthesis: span %v, want %v", got, want)
 		}
+		// An item that goes wrong after its name keeps the name and its span,
+		// which name resolution needs to know that the function exists.
 		const cut = "fn f(x"
-		m, id, _, _ = parseFile(t, cut)
-		if got, want := m.ItemNodes.Get(m.Items[0]), (syntax.Item{Kind: syntax.ItemError, Span: spanAt(cut, "fn f(x", len(cut))}); got != want {
+		m, id, in, _ = parseFile(t, cut)
+		if got, want := m.ItemNodes.Get(m.Items[0]), (syntax.Item{
+			Kind: syntax.ItemError, Span: spanAt(cut, "fn f(x", len(cut)), Name: in.InternString("f"), NameSpan: spanAt(cut, "f(", 1),
+		}); got != want {
 			t.Errorf("item cut short: %+v, want %+v", got, want)
 		}
 		// The Newline after an attribute is skipped to find the item, but it
@@ -295,18 +357,24 @@ func TestParser(t *testing.T) {
 		// The rest of the places where a signature stops making sense: the
 		// attributes, the name and the `(`. In each the item covers every token
 		// read until then, from the first to the last one consumed, and not
-		// the token found instead of the one that was needed.
-		for _, row := range []struct{ name, src, covers string }{
-			{"attribute without its `]`", "#[a fn f() {}", "#[a"},
-			{"no name", "fn 1", "fn"},
-			{"no `(`", "fn f x) {}", "fn f"},
+		// the token found instead of the one that was needed. It has the name
+		// if one was read, and only then.
+		for _, row := range []struct{ name, src, covers, fnName string }{
+			{"attribute without its `]`", "#[a fn f() {}", "#[a", ""},
+			{"no name", "fn 1", "fn", ""},
+			{"no `(`", "fn f x) {}", "fn f", "f"},
 		} {
-			m, id, _, _ = parseFile(t, row.src)
+			m, id, in, _ = parseFile(t, row.src)
 			if len(m.Items) == 0 {
 				t.Errorf("%s: %q has no items", row.name, row.src)
 				continue
 			}
 			want := syntax.Item{Kind: syntax.ItemError, Span: spanAt(row.src, row.covers, len(row.covers))}
+			if row.fnName != "" {
+				// The name is the word after "fn ".
+				want.Name, want.NameSpan = in.InternString(row.fnName), spanAt(row.src, "fn "+row.fnName, 3+len(row.fnName))
+				want.NameSpan.Lo += 3
+			}
 			if got := m.ItemNodes.Get(m.Items[0]); got != want {
 				t.Errorf("%s: %q: first item %+v, want %+v", row.name, row.src, got, want)
 			}

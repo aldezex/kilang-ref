@@ -160,6 +160,38 @@ func TestSuggest(t *testing.T) {
 		}
 	})
 
+	t.Run("skips_names_over_the_cap", func(t *testing.T) {
+		// The distance takes time in the product of the two lengths, so a name
+		// longer than maxSuggestLen is not measured at all: it gets no
+		// suggestion, however near a candidate is, and the cap is on the name
+		// and not on the candidates. A name of exactly the cap is measured.
+		// The cap is 128 (the card and the book say so), and the lengths are
+		// written as numbers and not as maxSuggestLen: names built from the
+		// constant would follow it wherever it went, and the cap would be
+		// pinned only in being there. The names are long, so the failures say
+		// their lengths.
+		at := strings.Repeat("a", 128)
+		over := strings.Repeat("a", 129)
+		for _, row := range []struct {
+			what, name, candidate string
+			suggested             bool
+		}{
+			{"name at the cap", at, at[:len(at)-1] + "b", true},
+			{"name over the cap", over, over[:len(over)-1] + "b", false},
+			// The candidates may be longer than the cap, or shorter than the
+			// name by less than the threshold (a third of the name): only the
+			// name counts.
+			{"name at the cap, a longer candidate", at, over, true},
+			{"name over the cap, a shorter candidate", over, at, false},
+		} {
+			best, ok := suggest(row.name, []string{row.candidate})
+			if ok != row.suggested || (ok && best != row.candidate) {
+				t.Errorf("%s: suggest(a name of %d bytes, one candidate of %d bytes) = (a name of %d bytes, %v), want found = %v",
+					row.what, len(row.name), len(row.candidate), len(best), ok, row.suggested)
+			}
+		}
+	})
+
 	t.Run("no_suggestions_after_the_error_cap", func(t *testing.T) {
 		// A resolver set up by hand, with an empty scope and a user module (module
 		// 1) that defines `fib` and 300 other functions. `fibb` is not defined and

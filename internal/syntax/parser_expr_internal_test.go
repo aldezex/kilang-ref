@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,15 +148,27 @@ func wantOnlyDiag(t *testing.T, what string, sink *diag.Sink, want diag.Diagnost
 // The two diagnostics of this file, written out here in full and not built
 // from the parser's constants, so that a change of text or of limit is noticed.
 
-// chainedDiag is the E0203 that a second comparison operator at [lo, hi) gets.
-func chainedDiag(file base.FileID, lo, hi uint32) diag.Diagnostic {
-	return diag.Diagnostic{
-		Severity: diag.Error,
-		Code:     diag.E(203),
-		Message:  "comparison operators cannot be chained",
-		Primary:  diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}},
-		Help:     "use `&&`: `a < b && b < c`",
+// genericChainHelp is the help of an E0203 whose operands are not all one token
+// each.
+const genericChainHelp = "use `&&`: `a < b && b < c`"
+
+// chainedDiag is the E0203 of a chain of comparisons whose first operator is at
+// [flo, fhi) and the second at [lo, hi). help is its help line; insert is what
+// the one fix-it writes just before the second operator ("" if the chain gets
+// no fix-it).
+func chainedDiag(file base.FileID, flo, fhi, lo, hi uint32, help, insert string) diag.Diagnostic {
+	d := diag.Diagnostic{
+		Severity:  diag.Error,
+		Code:      diag.E(203),
+		Message:   "comparison operators cannot be chained",
+		Primary:   diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}, Message: "second comparison here"},
+		Secondary: []diag.Label{{Span: base.Span{File: file, Lo: flo, Hi: fhi}, Message: "first comparison here"}},
+		Help:      help,
 	}
+	if insert != "" {
+		d.Fixits = []diag.FixIt{{Span: base.Span{File: file, Lo: lo, Hi: lo}, Replacement: insert}}
+	}
+	return d
 }
 
 // tooLongDiag is the E0205 that the operator or call parenthesis at [lo, hi)
@@ -165,9 +178,24 @@ func tooLongDiag(file base.FileID, lo, hi uint32) diag.Diagnostic {
 		Severity: diag.Error,
 		Code:     diag.E(205),
 		Message:  "expression chain is too long",
-		Primary:  diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}},
+		Primary:  diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}, Message: "operator or call number 1025 of this chain"},
 		Notes:    []string{"the limit is 1024 operators and calls in one expression"},
+		Help:     "split the expression with `let` bindings",
 	}
+}
+
+// applyFixes returns src with the fix-its of d applied, each at its offsets in
+// the original text, from the right: of two edits at one offset the later one in
+// d.Fixits is written first, as FixIt in package diag says. (The tests of
+// package syntax_test have their own applyFixits: the two packages cannot share
+// a helper.)
+func applyFixes(src string, d diag.Diagnostic) string {
+	fixits := slices.Clone(d.Fixits)
+	slices.SortStableFunc(fixits, func(a, b diag.FixIt) int { return int(b.Span.Lo) - int(a.Span.Lo) })
+	for _, f := range fixits {
+		src = src[:f.Span.Lo] + f.Replacement + src[f.Span.Hi:]
+	}
+	return src
 }
 
 // plusChain returns "1" followed by n times " + 1": n binary operators in a row.
@@ -212,7 +240,7 @@ func TestParseExpr(t *testing.T) {
 		// The diagnostic sits on the second operator, `<` at byte 6, and has
 		// the help that suggests `&&`. The whole chain is one error node that covers
 		// all three operands, and the parser has read all of them.
-		wantOnlyDiag(t, src, r.sink, chainedDiag(r.file, 6, 7))
+		wantOnlyDiag(t, src, r.sink, chainedDiag(r.file, 2, 3, 6, 7, genericChainHelp, "&& b "))
 		wantText(t, src, r.sexpr(e), "(error)")
 		if got, want := r.node(e).Span, r.span(0, 9); got != want {
 			t.Errorf("%s: the error node spans %v, want %v", src, got, want)
@@ -401,37 +429,141 @@ func TestParseExpr(t *testing.T) {
 	})
 
 	t.Run("chained_comparison_forms", func(t *testing.T) {
+		// first and second are the spans of the first and of the second
+		// comparison operator; help and insert are the help line and the text
+		// of the fix-it (see chainedDiag).
 		rows := []struct {
-			src    string
-			lo, hi uint32 // the second comparison operator
-			want   string
+			src           string
+			first, second [2]uint32
+			help, insert  string
+			want          string
 		}{
 			// Every pair of comparison operators is a chain: they are one level.
-			{"a == b != c", 7, 9, "(error)"},
-			{"a < b == c", 6, 8, "(error)"},
-			{"a <= b > c", 7, 8, "(error)"},
-			{"a >= b <= c", 7, 9, "(error)"},
-			{"a != b < c", 7, 8, "(error)"},
-			// The operand after the second operator is read in full.
-			{"a < b < c + 1", 6, 7, "(error)"},
+			{"a == b != c", [2]uint32{2, 4}, [2]uint32{7, 9}, "use `&&`: `a == b && b != c`", "&& b ", "(error)"},
+			{"a < b == c", [2]uint32{2, 3}, [2]uint32{6, 8}, "use `&&`: `a < b && b == c`", "&& b ", "(error)"},
+			{"a <= b > c", [2]uint32{2, 4}, [2]uint32{7, 8}, "use `&&`: `a <= b && b > c`", "&& b ", "(error)"},
+			{"a >= b <= c", [2]uint32{2, 4}, [2]uint32{7, 9}, "use `&&`: `a >= b && b <= c`", "&& b ", "(error)"},
+			{"a != b < c", [2]uint32{2, 4}, [2]uint32{7, 8}, "use `&&`: `a != b && b < c`", "&& b ", "(error)"},
+			// The operand after the second operator is read in full. It is not
+			// one token here, so the help is the generic one, but the middle
+			// operand is one token and the fix-it stays.
+			{"a < b < c + 1", [2]uint32{2, 3}, [2]uint32{6, 7}, genericChainHelp, "&& b ", "(error)"},
+			{"x < y <= z + 1", [2]uint32{2, 3}, [2]uint32{6, 8}, genericChainHelp, "&& y ", "(error)"},
+			{"x < y <= z && w", [2]uint32{2, 3}, [2]uint32{6, 8}, "use `&&`: `x < y && y <= z`", "&& y ", "(&& (error) w)"},
+			{"x < y <= z || w", [2]uint32{2, 3}, [2]uint32{6, 8}, "use `&&`: `x < y && y <= z`", "&& y ", "(|| (error) w)"},
+			{"x < y <= f(z)", [2]uint32{2, 3}, [2]uint32{6, 8}, genericChainHelp, "&& y ", "(error)"},
+			{"x < y <= -z", [2]uint32{2, 3}, [2]uint32{6, 8}, genericChainHelp, "&& y ", "(error)"},
 			// The loop that reads the operators goes on after the chain.
-			{"a < b < c && d", 6, 7, "(&& (error) d)"},
+			{"a < b < c && d", [2]uint32{2, 3}, [2]uint32{6, 7}, "use `&&`: `a < b && b < c`", "&& b ", "(&& (error) d)"},
 			// Three in a row are one mistake, reported at the second operator,
-			// and the rest of the chain is read.
-			{"a < b < c < d", 6, 7, "(error)"},
-			{"a < b < c == d != e", 6, 7, "(error)"},
-			// The operators around the chain go on being read.
-			{"x && a < b < c && y", 11, 12, "(&& (&& x (error)) y)"},
-			{"a + b < c * d < e", 14, 15, "(error)"},
-			{"f(a < b < c, d)", 8, 9, "(call f (error) d)"},
-			{"-1 < x < 2", 7, 8, "(error)"},
+			// and the rest of the chain is read. The help and the fix-it are
+			// about the first three operands.
+			{"a < b < c < d", [2]uint32{2, 3}, [2]uint32{6, 7}, "use `&&`: `a < b && b < c`", "&& b ", "(error)"},
+			{"a < b < c == d != e", [2]uint32{2, 3}, [2]uint32{6, 7}, "use `&&`: `a < b && b < c`", "&& b ", "(error)"},
+			// The three rows above use the names a, b and c, whose help is the
+			// text of the generic one: only other names tell a help made of the
+			// real operands from the generic help when a third comparison
+			// follows the third operand.
+			{"x < y <= z < w", [2]uint32{2, 3}, [2]uint32{6, 8}, "use `&&`: `x < y && y <= z`", "&& y ", "(error)"},
+			// A name that starts with a capital is an operand like any other:
+			// the parser reads it as a value (nothing defines one yet).
+			{"a < Foo < c", [2]uint32{2, 3}, [2]uint32{8, 9}, "use `&&`: `a < Foo && Foo < c`", "&& Foo ", "(error)"},
+			// The operators around the chain go on being read, and the first
+			// operand is the one that starts the chain, not the whole `x && a`.
+			{"x && a < b < c && y", [2]uint32{7, 8}, [2]uint32{11, 12}, "use `&&`: `a < b && b < c`", "&& b ", "(&& (&& x (error)) y)"},
+			// Operands that are not one token: no help of its own and, when the
+			// middle one is not one token, no fix-it.
+			{"a + b < c * d < e", [2]uint32{6, 7}, [2]uint32{14, 15}, genericChainHelp, "", "(error)"},
+			{"f(a < b < c, d)", [2]uint32{4, 5}, [2]uint32{8, 9}, "use `&&`: `a < b && b < c`", "&& b ", "(call f (error) d)"},
+			{"-1 < x < 2", [2]uint32{3, 4}, [2]uint32{7, 8}, genericChainHelp, "&& x ", "(error)"},
 		}
 		for _, row := range rows {
 			r := newExprRun(t, row.src)
 			e := r.p.expr(0)
-			wantOnlyDiag(t, row.src, r.sink, chainedDiag(r.file, row.lo, row.hi))
+			wantOnlyDiag(t, row.src, r.sink,
+				chainedDiag(r.file, row.first[0], row.first[1], row.second[0], row.second[1], row.help, row.insert))
 			wantText(t, row.src, r.sexpr(e), row.want)
 			r.wantAt(t, row.src, Eof, uint32(len(row.src)))
+		}
+	})
+	t.Run("e0203_labels_help_and_fixit", func(t *testing.T) {
+		// The primary label is on the second operator and the secondary on the
+		// first; the help quotes the real operands and operators when each
+		// operand is one token (so a different chain gets a different help); the
+		// one fix-it writes `&& ` and the middle operand just before the second
+		// operator. With the fix-it applied, the chain is gone.
+		rows := []struct {
+			src           string
+			first, second [2]uint32 // the two operators
+			help, insert  string
+		}{
+			{"a < b < c", [2]uint32{2, 3}, [2]uint32{6, 7}, "use `&&`: `a < b && b < c`", "&& b "},
+			{"x < y <= z", [2]uint32{2, 3}, [2]uint32{6, 8}, "use `&&`: `x < y && y <= z`", "&& y "},
+			{"alpha >= beta == gamma", [2]uint32{6, 8}, [2]uint32{14, 16}, "use `&&`: `alpha >= beta && beta == gamma`", "&& beta "},
+			{"1 != n < 20", [2]uint32{2, 4}, [2]uint32{7, 8}, "use `&&`: `1 != n && n < 20`", "&& n "},
+			{"true == flag != false", [2]uint32{5, 7}, [2]uint32{13, 15}, "use `&&`: `true == flag && flag != false`", "&& flag "},
+		}
+		for _, row := range rows {
+			r := newExprRun(t, row.src)
+			r.p.expr(0)
+			diags := r.sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%s: %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			want := chainedDiag(r.file, row.first[0], row.first[1], row.second[0], row.second[1], row.help, row.insert)
+			if !reflect.DeepEqual(d, want) {
+				t.Errorf("%s: diagnostic\n%+v\nwant\n%+v", row.src, d, want)
+				continue
+			}
+			fixed := applyFixes(row.src, d)
+			r2 := newExprRun(t, fixed)
+			r2.p.expr(0)
+			if n := len(r2.sink.All()); n != 0 {
+				t.Errorf("%s: after the fix-it, %q reports %d diagnostics: %+v", row.src, fixed, n, r2.sink.All())
+			}
+		}
+	})
+	t.Run("e0203_compound_middle_operand", func(t *testing.T) {
+		// When the middle operand is more than one token there is nothing
+		// mechanical to write before the second operator: the generic help and
+		// no fix-it. The first and the last operand being one token each does
+		// not change that.
+		for _, src := range []string{"a < f(x) < c", "a < -b < c", "a < (b) < c", "a < b + 1 < c", "a < { b } < c", "a < if b { c } else { d } < e"} {
+			r := newExprRun(t, src)
+			r.p.expr(0)
+			diags := r.sink.All()
+			if len(diags) < 1 || diags[0].Code != diag.E(203) {
+				t.Errorf("%s: diagnostics %+v, want an E0203 first", src, diags)
+				continue
+			}
+			if d := diags[0]; d.Help != genericChainHelp || len(d.Fixits) != 0 {
+				t.Errorf("%s: help %q and fixits %+v, want the generic help and no fix-it", src, d.Help, d.Fixits)
+			}
+		}
+	})
+	t.Run("e0205_label_and_help", func(t *testing.T) {
+		// The label counts the operator or call that went over the limit, and
+		// the help is the same whether it was an operator or a call.
+		for _, row := range []struct{ name, src string }{
+			{"operators", plusChain(1025)},
+			{"calls", "f" + strings.Repeat("()", 1025)},
+		} {
+			r := newExprRun(t, row.src)
+			r.p.expr(0)
+			diags := r.sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%s: %d diagnostics, want exactly 1: %+v", row.name, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if want := "operator or call number 1025 of this chain"; d.Primary.Message != want {
+				t.Errorf("%s: primary label %q, want %q", row.name, d.Primary.Message, want)
+			}
+			if want := "split the expression with `let` bindings"; d.Help != want || len(d.Fixits) != 0 {
+				t.Errorf("%s: help %q and fixits %+v, want %q and none", row.name, d.Help, d.Fixits, want)
+			}
 		}
 	})
 	t.Run("comparison_not_chained_ok", func(t *testing.T) {
@@ -727,7 +859,7 @@ func TestParseExpr(t *testing.T) {
 		r = newExprRun(t, src)
 		e = r.p.expr(0)
 		lo = lastIndex(t, src, "<")
-		want := []diag.Diagnostic{chainedDiag(r.file, 6, 7), tooLongDiag(r.file, lo, lo+1)}
+		want := []diag.Diagnostic{chainedDiag(r.file, 2, 3, 6, 7, genericChainHelp, "&& b "), tooLongDiag(r.file, lo, lo+1)}
 		if got := r.sink.All(); !reflect.DeepEqual(got, want) {
 			t.Errorf("operand of a chained comparison: diagnostics\n%+v\nwant\n%+v", got, want)
 		}
@@ -779,7 +911,7 @@ func TestParseExpr(t *testing.T) {
 		e := r.p.expr(0)
 		base := uint32(len(plusChain(1021)))
 		want := []diag.Diagnostic{
-			chainedDiag(r.file, base+5, base+6),
+			chainedDiag(r.file, base+1, base+2, base+5, base+6, genericChainHelp, "&& 1 "),
 			tooLongDiag(r.file, base+13, base+14),
 		}
 		if got := r.sink.All(); !reflect.DeepEqual(got, want) {

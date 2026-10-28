@@ -2,6 +2,7 @@ package syntax_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aldezex/kilang/internal/base"
@@ -315,6 +316,122 @@ func TestNumbers(t *testing.T) {
 		wantKindList(t, src, tb, syntax.Float, syntax.Eof)
 		if got := floatValues(tb); !slices.Equal(got, []float64{0}) {
 			t.Errorf("%s: values %v, want [0]", src, got)
+		}
+	})
+	t.Run("e0105_help_names_the_minimum", func(t *testing.T) {
+		// The most likely way to hit E0105 is to write the smallest Int, whose
+		// magnitude is one too many; the help shows the way to spell it. The
+		// same text goes with every literal that is too large, in decimal and
+		// in hexadecimal. There is no fix-it: the rewritten expression needs
+		// the minus sign in front of the literal, which the literal's span
+		// does not cover.
+		const help = "the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`"
+		for _, src := range []string{"9223372036854775808", "0x8000_0000_0000_0000", "99999999999999999999"} {
+			_, sink := lexAll(t, src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%s: got %d diagnostics, want exactly 1: %+v", src, len(diags), diags)
+				continue
+			}
+			if d := diags[0]; d.Help != help || len(d.Fixits) != 0 {
+				t.Errorf("%s: help %q and fixits %+v, want help %q and no fix-it", src, d.Help, d.Fixits, help)
+			}
+		}
+	})
+	t.Run("e0107_trailing_underscore_fixit", func(t *testing.T) {
+		// The fix-it deletes the underscores that end a run of digits, all of
+		// them (`1__` has two), in every run that ends in one, and nothing else:
+		// the underscore is not always the last byte of the literal (`1_.5`,
+		// `1_e5`). Applied, the fix-its leave a literal with no mistake.
+		for _, row := range []struct {
+			src   string
+			spans [][2]uint32 // the underscores to delete
+		}{
+			{"1_", [][2]uint32{{1, 2}}},
+			{"1__", [][2]uint32{{1, 3}}},
+			{"1_000_", [][2]uint32{{5, 6}}},
+			{"0xFF_", [][2]uint32{{4, 5}}},
+			{"0b1_", [][2]uint32{{3, 4}}},
+			{"1_.5", [][2]uint32{{1, 2}}},
+			{"1.5_", [][2]uint32{{3, 4}}},
+			{"1e5_", [][2]uint32{{3, 4}}},
+			{"1_e5", [][2]uint32{{1, 2}}},
+			{"1.5_e3", [][2]uint32{{3, 4}}},
+			{"1_.5_", [][2]uint32{{1, 2}, {4, 5}}},
+			{"1_.5_e3_", [][2]uint32{{1, 2}, {4, 5}, {7, 8}}},
+		} {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%s: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if want := "remove the `_`"; d.Help != want {
+				t.Errorf("%s: help %q, want %q", row.src, d.Help, want)
+			}
+			var want []diag.FixIt
+			for _, sp := range row.spans {
+				want = append(want, diag.Delete(base.Span{File: id, Lo: sp[0], Hi: sp[1]}))
+			}
+			if !slices.Equal(d.Fixits, want) {
+				t.Errorf("%s: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			_, again := lexAll(t, applyFixits(row.src, d))
+			wantNoDiags(t, "after the fix-it of "+row.src, again)
+		}
+	})
+	t.Run("e0107_missing_digits_help", func(t *testing.T) {
+		// No digits, no edit: the user has to choose them. The help shows the
+		// prefix that was written, with digits of its base.
+		for _, row := range []struct{ src, help string }{
+			{"0x", "write the digits after the prefix: `0xFF`"},
+			{"0x_", "write the digits after the prefix: `0xFF`"},
+			{"0xg", "write the digits after the prefix: `0xFF`"},
+			{"0b", "write the digits after the prefix: `0b1010`"},
+			{"0b_", "write the digits after the prefix: `0b1010`"},
+			{"0b2", "write the digits after the prefix: `0b1010`"},
+		} {
+			_, sink := lexAll(t, row.src)
+			diags := sink.All()
+			if len(diags) < 1 || diags[0].Code != diag.E(107) {
+				t.Errorf("%s: diagnostics %+v, want an E0107 first", row.src, diags)
+				continue
+			}
+			if d := diags[0]; d.Help != row.help || len(d.Fixits) != 0 {
+				t.Errorf("%s: help %q and fixits %+v, want help %q and no fix-it", row.src, d.Help, d.Fixits, row.help)
+			}
+		}
+	})
+	t.Run("e0109_note_and_help", func(t *testing.T) {
+		// The help names the exponent when the literal has one and the part in
+		// front of it fits: it is the exponent that does not. Otherwise the
+		// value is what is too large, with no exponent or with one that is not
+		// the cause.
+		huge := "1" + strings.Repeat("0", 400)
+		for _, row := range []struct{ what, src, help string }{
+			{"exponent", "1e999", "use a smaller exponent"},
+			{"capital E", "1E999", "use a smaller exponent"},
+			{"fraction and exponent", "1.5e999", "use a smaller exponent"},
+			{"no exponent", huge + ".0", "use a smaller value"},
+			{"huge value, small exponent", huge + ".0e1", "use a smaller value"},
+		} {
+			_, sink := lexAll(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 || diags[0].Code != diag.E(109) {
+				t.Errorf("%s: got diagnostics %+v, want exactly one E0109", row.what, diags)
+				continue
+			}
+			d := diags[0]
+			if want := []string{"the largest finite `Float` is 1.7976931348623157e308"}; !slices.Equal(d.Notes, want) {
+				t.Errorf("%s: notes %q, want %q", row.what, d.Notes, want)
+			}
+			if d.Help != row.help {
+				t.Errorf("%s: help %q, want %q", row.what, d.Help, row.help)
+			}
+			if len(d.Fixits) != 0 {
+				t.Errorf("%s: fixits %+v, want none", row.what, d.Fixits)
+			}
 		}
 	})
 	t.Run("float_underflow_is_zero", func(t *testing.T) {

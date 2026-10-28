@@ -121,8 +121,20 @@ func e0201(file base.FileID, lo, hi uint32, message string) diag.Diagnostic {
 		Severity: diag.Error,
 		Code:     diag.E(201),
 		Message:  message,
-		Primary:  diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}},
+		Primary:  diag.Label{Span: base.Span{File: file, Lo: lo, Hi: hi}, Message: expectedHere(message)},
 	}
+}
+
+// expectedHere is the text of the primary label of an E0201 whose whole message
+// is "expected <what>, found <token>": "expected <what> here", with the same
+// word as the message. (recover_test.go, in package syntax_test, has its own
+// copy, primaryOf: the two test packages cannot share a helper.)
+func expectedHere(message string) string {
+	what, _, ok := strings.Cut(strings.TrimPrefix(message, "expected "), ", found ")
+	if !ok {
+		panic("not the message of an E0201: " + message)
+	}
+	return "expected " + what + " here"
 }
 
 // nth returns the byte offset of the n-th occurrence (counting from 0) of text
@@ -151,6 +163,155 @@ func after(t *testing.T, file base.FileID, src, prefix, text string) base.Span {
 	}
 	lo := uint32(i + len(prefix))
 	return base.Span{File: file, Lo: lo, Hi: lo + uint32(len(text))}
+}
+
+// e0201Opened is the E0201 for a closer that is not there, when the token found
+// does not say that the closer is what is missing: the closer is found at
+// [lo, hi), and the delimiter open (`(` or `[`) at openLo is named by the
+// secondary label. There is no help and no fix-it. Like e0201 it is written out
+// in full.
+func e0201Opened(file base.FileID, lo, hi uint32, message string, openLo uint32, open string) diag.Diagnostic {
+	d := e0201(file, lo, hi, message)
+	d.Secondary = []diag.Label{{
+		Span:    base.Span{File: file, Lo: openLo, Hi: openLo + 1},
+		Message: "unclosed `" + open + "` opened here",
+	}}
+	return d
+}
+
+// e0201Close is e0201Opened for a token that says that the closer is missing
+// (see closerIsMissing): it also has the help, and the fix-it writes the closer
+// at insertAt, right after the last token that was read. (recover_test.go, in
+// package syntax_test, has its own copies, recE0201Opened and recE0201Close:
+// the two test packages cannot share a helper.)
+func e0201Close(file base.FileID, lo, hi uint32, message string, openLo uint32, open string, insertAt uint32) diag.Diagnostic {
+	closer := map[string]string{"(": ")", "[": "]"}[open]
+	d := e0201Opened(file, lo, hi, message, openLo, open)
+	d.Help = "close it with `" + closer + "`"
+	d.Fixits = []diag.FixIt{{Span: base.Span{File: file, Lo: insertAt, Hi: insertAt}, Replacement: closer}}
+	return d
+}
+
+// closerRow is a source in which a closer is missing. found is the token that
+// is there instead (its foundN-th occurrence, from 0) and message the whole
+// E0201 message; open is the delimiter that is not closed (its openN-th
+// occurrence) and last the last token read before found (its lastN-th), which
+// is where a closer would be written.
+type closerRow struct {
+	src, found, message string
+	foundN              int
+	open                string
+	openN               int
+	last                string
+	lastN               int
+}
+
+// wantCloser fails the test unless the first diagnostic of row.src is the E0201
+// that row describes: with the help and the fix-it of the closer if offered is
+// true, and with only the secondary label if it is false.
+func wantCloser(t *testing.T, row closerRow, offered bool) {
+	t.Helper()
+	r, d := firstDiag(t, row.src)
+	foundLo := nth(t, row.src, row.found, row.foundN)
+	openLo := nth(t, row.src, row.open, row.openN)
+	want := e0201Opened(r.file, foundLo, foundLo+uint32(len(row.found)), row.message, openLo, row.open)
+	if offered {
+		insertAt := nth(t, row.src, row.last, row.lastN) + uint32(len(row.last))
+		want = e0201Close(r.file, foundLo, foundLo+uint32(len(row.found)), row.message, openLo, row.open, insertAt)
+	}
+	if !reflect.DeepEqual(d, want) {
+		t.Errorf("%s: first diagnostic\n%+v\nwant\n%+v", show(row.src), d, want)
+	}
+}
+
+// firstDiag parses src as a file without lexical errors and returns the module
+// run and its first diagnostic, which must exist.
+func firstDiag(t *testing.T, src string) (*moduleRun, diag.Diagnostic) {
+	t.Helper()
+	r := parseModule(t, src)
+	diags := r.sink.All()
+	if len(diags) == 0 {
+		t.Fatalf("%s: no diagnostics", show(src))
+	}
+	return r, diags[0]
+}
+
+// e0201Sites has a row for each place where the parser needs a token it does
+// not find, as far as the tests know them (a new place needs its own row): the
+// source, the token that is found instead (the n-th occurrence, from 0, of at
+// in the source, the line feed for "\n" or the end of the file for "<eof>") and
+// the whole message of the E0201.
+var e0201Sites = []struct {
+	src, at string
+	n       int
+	want    string
+}{
+	// expression
+	{"fn f() { 1 + }", "}", 0, "expected expression, found `}`"},
+	{"fn f() { ; }", ";", 0, "expected expression, found `;`"},
+	{"fn f() { g(,) }", ",", 0, "expected expression, found `,`"},
+	{"fn f() { - }", "}", 0, "expected expression, found `}`"},
+	{"fn f() { let x = }", "}", 0, "expected expression, found `}`"},
+	{"fn f() { if }", "}", 0, "expected expression, found `}`"},
+	{"fn f() { 1 + else }", "else", 0, "expected expression, found `else`"},
+	// identifier
+	{"fn 1", "1", 0, "expected identifier, found `1`"},
+	{"fn f(1) {}", "1", 0, "expected identifier, found `1`"},
+	{"fn f(a, ) {}", ")", 0, "expected identifier, found `)`"},
+	{"#[1] fn f() {}", "1", 0, "expected identifier, found `1`"},
+	{"fn f() { let 1 }", "1", 0, "expected identifier, found `1`"},
+	// type
+	{"fn f(x: ) {}", ")", 0, "expected type, found `)`"},
+	{"fn f() -> {}", "{", 0, "expected type, found `{`"},
+	{"fn f(x: 1) {}", "1", 0, "expected type, found `1`"},
+	{"fn f() { let x: = 1 }", "=", 0, "expected type, found `=`"},
+	// `=`
+	{"fn f() { let x 5 }", "5", 0, "expected `=`, found `5`"},
+	{"fn f() { let x: Int }", "}", 0, "expected `=`, found `}`"},
+	// What is found is the end of the file: the label is the empty span
+	// right after the last byte, and not the last token. Only the first
+	// diagnostic is compared, as in every row.
+	{"fn f() { let x", "<eof>", 0, "expected `=`, found end of file"},
+	// `)`
+	{"fn f(x y) {}", "y", 0, "expected `)`, found `y`"},
+	{"fn f() { (1 2) }", "2", 0, "expected `)`, found `2`"},
+	{"fn f() { g(1 2) }", "2", 0, "expected `)`, found `2`"},
+	{"fn f() -> (Int) {}", "Int", 0, "expected `)`, found `Int`"},
+	{"#[a(\"x\" \"y\")] fn f() {}", "\"y\"", 0, "expected `)`, found `\"y\"`"},
+	// `{`
+	{"fn f() { if a }", "}", 0, "expected `{`, found `}`"},
+	{"fn f() { if a\n{ 1 } }", "\n", 0, "expected `{`, found newline"},
+	{"fn f() { if a { 1 } else 2 }", "2", 0, "expected `{`, found `2`"},
+	// a function with no body and no `#[extern]`
+	{"fn f()\nfn g() {}", "\n", 0, "expected `{`, found newline"},
+	// newline
+	{"fn f() { f() x }", "x", 0, "expected newline, found `x`"},
+	{"fn f() { let a = 1 b }", "b", 0, "expected newline, found `b`"},
+	{"fn f() { 1 2 }", "2", 0, "expected newline, found `2`"},
+	// item
+	{"1", "1", 0, "expected item, found `1`"},
+	{"#[a] 1", "1", 0, "expected item, found `1`"},
+	{"pub 1", "1", 0, "expected item, found `1`"},
+	{"fn f() {} )", ")", 1, "expected item, found `)`"},
+	{"}", "}", 0, "expected item, found `}`"},
+	{"let x = 1", "let", 0, "expected item, found `let`"},
+	// the punctuation of the signature and of the attributes
+	{"# fn f() {}", "fn", 0, "expected `[`, found `fn`"},
+	{"#[a fn f() {}", "fn", 0, "expected `]`, found `fn`"},
+	{"fn f x) {}", "x", 0, "expected `(`, found `x`"},
+	{"#[a(1)] fn f() {}", "1", 0, "expected string, found `1`"},
+	{"#[a(\"x\",)] fn f() {}", ")", 0, "expected string, found `)`"},
+}
+
+// e0201Position returns the span of the token that row found instead of the one
+// it needed.
+func e0201Position(t *testing.T, src, at string, n int) (lo, hi uint32) {
+	t.Helper()
+	if at == "<eof>" {
+		return uint32(len(src)), uint32(len(src))
+	}
+	lo = nth(t, src, at, n)
+	return lo, lo + uint32(len(at))
 }
 
 func TestParseStmt(t *testing.T) {
@@ -523,90 +684,177 @@ func TestParseStmt(t *testing.T) {
 	})
 
 	t.Run("e0201_sites", func(t *testing.T) {
-		// One row for every place where the parser needs a token it does not
-		// find. The first diagnostic must be the E0201 with this whole message
-		// and its primary label on the token that was found: the `n`-th
-		// occurrence (from 0) of at in the source, the line feed for "\n" or
-		// the end of the file for "<eof>". What follows the first diagnostic
-		// is not compared.
-		rows := []struct {
-			src, at string
-			n       int
-			want    string
-		}{
-			// expression
-			{"fn f() { 1 + }", "}", 0, "expected expression, found `}`"},
-			{"fn f() { ; }", ";", 0, "expected expression, found `;`"},
-			{"fn f() { g(,) }", ",", 0, "expected expression, found `,`"},
-			{"fn f() { - }", "}", 0, "expected expression, found `}`"},
-			{"fn f() { let x = }", "}", 0, "expected expression, found `}`"},
-			{"fn f() { if }", "}", 0, "expected expression, found `}`"},
-			{"fn f() { 1 + else }", "else", 0, "expected expression, found `else`"},
-			// identifier
-			{"fn 1", "1", 0, "expected identifier, found `1`"},
-			{"fn f(1) {}", "1", 0, "expected identifier, found `1`"},
-			{"fn f(a, ) {}", ")", 0, "expected identifier, found `)`"},
-			{"#[1] fn f() {}", "1", 0, "expected identifier, found `1`"},
-			{"fn f() { let 1 }", "1", 0, "expected identifier, found `1`"},
-			// type
-			{"fn f(x: ) {}", ")", 0, "expected type, found `)`"},
-			{"fn f() -> {}", "{", 0, "expected type, found `{`"},
-			{"fn f(x: 1) {}", "1", 0, "expected type, found `1`"},
-			{"fn f() { let x: = 1 }", "=", 0, "expected type, found `=`"},
-			// `=`
-			{"fn f() { let x 5 }", "5", 0, "expected `=`, found `5`"},
-			{"fn f() { let x: Int }", "}", 0, "expected `=`, found `}`"},
-			// What is found is the end of the file: the label is the empty span
-			// right after the last byte, and not the last token. Only the first
-			// diagnostic is compared, as in every row.
-			{"fn f() { let x", "<eof>", 0, "expected `=`, found end of file"},
-			// `)`
-			{"fn f(x y) {}", "y", 0, "expected `)`, found `y`"},
-			{"fn f() { (1 2) }", "2", 0, "expected `)`, found `2`"},
-			{"fn f() { g(1 2) }", "2", 0, "expected `)`, found `2`"},
-			{"fn f() -> (Int) {}", "Int", 0, "expected `)`, found `Int`"},
-			{"#[a(\"x\" \"y\")] fn f() {}", "\"y\"", 0, "expected `)`, found `\"y\"`"},
-			// `{`
-			{"fn f() { if a }", "}", 0, "expected `{`, found `}`"},
-			{"fn f() { if a\n{ 1 } }", "\n", 0, "expected `{`, found newline"},
-			{"fn f() { if a { 1 } else 2 }", "2", 0, "expected `{`, found `2`"},
-			// a function with no body and no `#[extern]`
-			{"fn f()\nfn g() {}", "\n", 0, "expected `{`, found newline"},
-			// newline
-			{"fn f() { f() x }", "x", 0, "expected newline, found `x`"},
-			{"fn f() { let a = 1 b }", "b", 0, "expected newline, found `b`"},
-			{"fn f() { 1 2 }", "2", 0, "expected newline, found `2`"},
-			// item
-			{"1", "1", 0, "expected item, found `1`"},
-			{"#[a] 1", "1", 0, "expected item, found `1`"},
-			{"pub 1", "1", 0, "expected item, found `1`"},
-			{"fn f() {} )", ")", 1, "expected item, found `)`"},
-			{"}", "}", 0, "expected item, found `}`"},
-			{"let x = 1", "let", 0, "expected item, found `let`"},
-			// the punctuation of the signature and of the attributes
-			{"# fn f() {}", "fn", 0, "expected `[`, found `fn`"},
-			{"#[a fn f() {}", "fn", 0, "expected `]`, found `fn`"},
-			{"fn f x) {}", "x", 0, "expected `(`, found `x`"},
-			{"#[a(1)] fn f() {}", "1", 0, "expected string, found `1`"},
-			{"#[a(\"x\",)] fn f() {}", ")", 0, "expected string, found `)`"},
-		}
-		for _, row := range rows {
+		// The first diagnostic of every row of e0201Sites must be the E0201
+		// with the whole message and its primary label on the token that was
+		// found. What follows the first diagnostic is not compared, nor is
+		// what it says besides its code, message and place: the other
+		// subtests cover its label, its help and its fix-it.
+		for _, row := range e0201Sites {
 			r := parseModule(t, row.src)
 			diags := r.sink.All()
 			if len(diags) == 0 {
 				t.Errorf("%s: no diagnostics, want %q", show(row.src), row.want)
 				continue
 			}
-			var lo, hi uint32
-			switch row.at {
-			case "<eof>":
-				lo, hi = uint32(len(row.src)), uint32(len(row.src))
-			default:
-				lo = nth(t, row.src, row.at, row.n)
-				hi = lo + uint32(len(row.at))
+			lo, hi := e0201Position(t, row.src, row.at, row.n)
+			d := diags[0]
+			if want := (base.Span{File: r.file, Lo: lo, Hi: hi}); d.Code != diag.E(201) || d.Message != row.want || d.Primary.Span != want {
+				t.Errorf("%s: first diagnostic %v %q at %v, want E0201 %q at %v",
+					show(row.src), d.Code, d.Message, d.Primary.Span, row.want, want)
 			}
-			if want := e0201(r.file, lo, hi, row.want); !reflect.DeepEqual(diags[0], want) {
-				t.Errorf("%s: first diagnostic\n%+v\nwant\n%+v", show(row.src), diags[0], want)
+		}
+	})
+	t.Run("e0201_primary_names_the_expected_word", func(t *testing.T) {
+		// The primary label says what was needed, with the word of the message,
+		// in every place that e0201Sites lists: never an empty label.
+		for _, row := range e0201Sites {
+			r := parseModule(t, row.src)
+			diags := r.sink.All()
+			if len(diags) == 0 {
+				t.Errorf("%s: no diagnostics, want %q", show(row.src), row.want)
+				continue
+			}
+			if want := expectedHere(row.want); diags[0].Primary.Message != want {
+				t.Errorf("%s: primary label %q, want %q", show(row.src), diags[0].Primary.Message, want)
+			}
+		}
+	})
+	t.Run("e0201_closer_names_the_opener", func(t *testing.T) {
+		// A closer that is missing points at the delimiter it would close, says
+		// how to close it, and offers to write it right after the last token
+		// that was read, not at the token that was found instead.
+		for _, row := range []closerRow{
+			{"fn c() -> Int { (1 }", "}", "expected `)`, found `}`", 0, "(", 1, "1", 0},
+			{"#[a fn f() {}", "fn", "expected `]`, found `fn`", 0, "[", 0, "a", 0},
+			// The closer goes after the last token read, whatever lies between
+			// that token and the one found: spaces and comments.
+			{"fn f() { (1   /* c */  }", "}", "expected `)`, found `}`", 0, "(", 1, "1", 0},
+		} {
+			wantCloser(t, row, true)
+		}
+
+		// Across lines: inside the parenthesis the line break is only a space,
+		// so the token found is the `}` of the next line, and the closer goes
+		// after the `1`, on the line where the expression stopped. The diff
+		// shows that line and no other.
+		const src = "fn f() {\n  (1\n}\n"
+		r, d := firstDiag(t, src)
+		one := nth(t, src, "1", 0)
+		brace := nth(t, src, "}", 0)
+		if want := e0201Close(r.file, brace, brace+1, "expected `)`, found `}`", nth(t, src, "(", 1), "(", one+1); !reflect.DeepEqual(d, want) {
+			t.Errorf("%s: first diagnostic\n%+v\nwant\n%+v", show(src), d, want)
+		}
+		sm, _ := newSource(t, src)
+		want := strings.Join([]string{
+			"error[E0201]: expected `)`, found `}`",
+			" --> test.ki:3:1",
+			"  |",
+			"2 |   (1",
+			"  |   - unclosed `(` opened here",
+			"3 | }",
+			"  | ^ expected `)` here",
+			"  = help: close it with `)`",
+			"  |",
+			"2 -   (1",
+			"2 +   (1)",
+		}, "\n") + "\n"
+		if got := diag.RenderHuman(d, sm); got != want {
+			t.Errorf("%s: RenderHuman =\n%s\nwant\n%s", show(src), got, want)
+		}
+	})
+	t.Run("e0201_closer_only_when_it_is_missing", func(t *testing.T) {
+		// The help and the fix-it that write the closer are offered only when
+		// the token found says that the closer is what is missing (see
+		// closerIsMissing). A token that could go on with what is inside the
+		// parentheses (a name, a number, `true`, `!`, `{`), or that is something
+		// else (`=`, `,`), is more likely a missing `,` or operator, and the
+		// closer written after the last token would leave the line wrong: those
+		// have the label that names the opener and nothing more.
+		for _, row := range []closerRow{
+			{"fn f() { let x = (1 + 2; x }", ";", "expected `)`, found `;`", 0, "(", 1, "2", 0},
+			{"fn f() {\n  (1\n  let y = 2\n}\n", "let", "expected `)`, found `let`", 0, "(", 1, "1", 0},
+			{"#[a(\"x\"] fn f() {}", "]", "expected `)`, found `]`", 0, "(", 0, "\"x\"", 0},
+			{"#[a(\"x\" fn f() {}", "fn", "expected `)`, found `fn`", 0, "(", 0, "\"x\"", 0},
+			{"#[a(\"x\" pub fn f() {}", "pub", "expected `)`, found `pub`", 0, "(", 0, "\"x\"", 0},
+			{"#[a(\"x\" #[b] fn f() {}", "#", "expected `)`, found `#`", 1, "(", 0, "\"x\"", 0},
+		} {
+			wantCloser(t, row, true)
+		}
+		for _, row := range []closerRow{
+			{"fn f() { (1 2) }", "2", "expected `)`, found `2`", 0, "(", 1, "", 0},
+			{"fn f() { g(1 2) }", "2", "expected `)`, found `2`", 0, "(", 1, "", 0},
+			{"fn f() { (1   /* c */  2) }", "2", "expected `)`, found `2`", 0, "(", 1, "", 0},
+			{"fn f() { (1 true) }", "true", "expected `)`, found `true`", 0, "(", 1, "", 0},
+			{"fn f() { (1 !x) }", "!", "expected `)`, found `!`", 0, "(", 1, "", 0},
+			{"fn f() { (1 { 2 }) }", "{", "expected `)`, found `{`", 1, "(", 1, "", 0},
+			{"fn f() {\n  let a = g(1\n  h(2)\n}\n", "h", "expected `)`, found `h`", 0, "(", 1, "", 0},
+			{"fn f() { (1, 2) }", ",", "expected `)`, found `,`", 0, "(", 1, "", 0},
+			{"fn f(x y) {}", "y", "expected `)`, found `y`", 0, "(", 0, "", 0},
+			{"fn f(x Int) {}", "Int", "expected `)`, found `Int`", 0, "(", 0, "", 0},
+			{"fn f(x = 1) {}", "=", "expected `)`, found `=`", 0, "(", 0, "", 0},
+			{"fn f() -> (Int) {}", "Int", "expected `)`, found `Int`", 0, "(", 1, "", 0},
+			{"#[a(\"x\" \"y\")] fn f() {}", "\"y\"", "expected `)`, found `\"y\"`", 0, "(", 0, "", 0},
+		} {
+			wantCloser(t, row, false)
+		}
+
+		// These are the kinds of token that say it, and no other: the closers
+		// `}` and `]` (the `)` is the closer itself), `;`, `let` and the tokens
+		// that start an item.
+		says := map[TokenKind]bool{
+			RBrace: true, RBracket: true, Semi: true, KwLet: true,
+			KwFn: true, KwPub: true, Hash: true, KwType: true, KwTrait: true, KwImpl: true, KwEffect: true, KwImport: true,
+		}
+		for k := KwFn; k <= Error; k++ {
+			if got := closerIsMissing(k); got != says[k] {
+				t.Errorf("closerIsMissing(%v) = %v, want %v", k, got, says[k])
+			}
+		}
+	})
+	t.Run("e0201_let_without_name_help", func(t *testing.T) {
+		// The name of a variable cannot be guessed, so there is a help and no
+		// fix-it; the help is the one for the `let` and for no other
+		// identifier (see e0201_other_words_have_no_help).
+		for _, src := range []string{"fn f() { let = 1 }", "fn f() { let 1 }", "fn f() { let }"} {
+			_, d := firstDiag(t, src)
+			if d.Code != diag.E(201) || !strings.HasPrefix(d.Message, "expected identifier, found ") {
+				t.Errorf("%s: first diagnostic %v %q, want the E0201 for an identifier", show(src), d.Code, d.Message)
+			}
+			if want := "write the name of the variable: `let x = \u2026`"; d.Help != want {
+				t.Errorf("%s: help %q, want %q", show(src), d.Help, want)
+			}
+			if len(d.Fixits) != 0 || len(d.Secondary) != 0 || len(d.Notes) != 0 {
+				t.Errorf("%s: fixits %+v, secondary labels %+v and notes %q, want none", show(src), d.Fixits, d.Secondary, d.Notes)
+			}
+		}
+	})
+	t.Run("e0201_other_words_have_no_help", func(t *testing.T) {
+		// There is no action to suggest when the parser needs an expression, a
+		// type, an item, a newline, a `=`, a `{`, a `(` or `[` of a signature or
+		// attribute, a string, or an identifier that is not the name of a `let`.
+		rows := []struct{ src, message string }{
+			{"fn f() { 1 + }", "expected expression, found `}`"},
+			{"fn f(x: ) {}", "expected type, found `)`"},
+			{"1", "expected item, found `1`"},
+			{"fn f() { f() x }", "expected newline, found `x`"},
+			{"fn f() { let x 5 }", "expected `=`, found `5`"},
+			{"fn f() { if a }", "expected `{`, found `}`"},
+			{"fn f x) {}", "expected `(`, found `x`"},
+			{"# fn f() {}", "expected `[`, found `fn`"},
+			{"#[a(1)] fn f() {}", "expected string, found `1`"},
+			{"fn 1", "expected identifier, found `1`"},
+			{"fn f(1) {}", "expected identifier, found `1`"},
+			{"#[1] fn f() {}", "expected identifier, found `1`"},
+		}
+		for _, row := range rows {
+			_, d := firstDiag(t, row.src)
+			if d.Message != row.message {
+				t.Errorf("%s: first diagnostic %q, want %q", show(row.src), d.Message, row.message)
+				continue
+			}
+			if d.Help != "" || len(d.Fixits) != 0 || len(d.Secondary) != 0 || len(d.Notes) != 0 {
+				t.Errorf("%s: help %q, fixits %+v, secondary labels %+v and notes %q, want none",
+					show(row.src), d.Help, d.Fixits, d.Secondary, d.Notes)
 			}
 		}
 	})

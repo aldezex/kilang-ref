@@ -2,6 +2,7 @@ package syntax_test
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -97,28 +98,104 @@ func recShow(src string) string {
 // parser's own constants, so that a change of text, code or limit is noticed.
 
 func recE0201(sp base.Span, message string) diag.Diagnostic {
-	return diag.Diagnostic{Severity: diag.Error, Code: diag.E(201), Message: message, Primary: diag.Label{Span: sp}}
+	return diag.Diagnostic{
+		Severity: diag.Error, Code: diag.E(201), Message: message,
+		Primary: diag.Label{Span: sp, Message: primaryOf(message)},
+	}
 }
 
-// recE0202 is the E0202 for the delimiter open (`{`, `(` or `[`) at sp.
-func recE0202(sp base.Span, open string) diag.Diagnostic {
+// primaryOf is the text of the primary label of an E0201 whose message is
+// "expected <what>, found <token>": "expected <what> here". It is the external
+// copy of expectedHere, in parser_stmt_internal_test.go: the two test packages
+// cannot share a helper.
+func primaryOf(message string) string {
+	what, _, ok := strings.Cut(strings.TrimPrefix(message, "expected "), ", found ")
+	if !ok {
+		panic("not the message of an E0201: " + message)
+	}
+	return "expected " + what + " here"
+}
+
+// recE0201Let is the E0201 for the name that a `let` is missing: it has the
+// help that no other identifier gets.
+func recE0201Let(sp base.Span, message string) diag.Diagnostic {
+	d := recE0201(sp, message)
+	d.Help = "write the name of the variable: `let x = \u2026`"
+	return d
+}
+
+// recE0201Opened is the E0201 for a closer that is not there when the token
+// found does not say that the closer is what is missing: the closer is found at
+// sp, and the delimiter open (`(` or `[`) at openSp is named by the secondary
+// label. There is no help and no fix-it. It is the external copy of
+// e0201Opened, in parser_stmt_internal_test.go: the two test packages cannot
+// share a helper.
+func recE0201Opened(sp base.Span, message string, openSp base.Span, open string) diag.Diagnostic {
+	d := recE0201(sp, message)
+	d.Secondary = []diag.Label{{Span: openSp, Message: "unclosed `" + open + "` opened here"}}
+	return d
+}
+
+// recE0201Close is recE0201Opened for a token that says that the closer is
+// missing: the closer goes at the offset insertAt, right after the last token
+// that was read. It is the external copy of e0201Close, in
+// parser_stmt_internal_test.go.
+func recE0201Close(sp base.Span, message string, openSp base.Span, open string, insertAt uint32) diag.Diagnostic {
+	closer := map[string]string{"(": ")", "[": "]"}[open]
+	d := recE0201Opened(sp, message, openSp, open)
+	d.Help = "close it with `" + closer + "`"
+	d.Fixits = []diag.FixIt{{Span: base.Span{File: sp.File, Lo: insertAt, Hi: insertAt}, Replacement: closer}}
+	return d
+}
+
+// e0202 is the E0202 for the delimiter open (`{`, `(` or `[`) at sp, with the
+// help and the fix-it that writes its closer at the end of this run's file.
+func (r *recRun) e0202(sp base.Span, open string) diag.Diagnostic {
+	return r.e0202At(sp, open, uint32(len(r.src)))
+}
+
+// e0202At is e0202 with the closer written at byte offset at.
+func (r *recRun) e0202At(sp base.Span, open string, at uint32) diag.Diagnostic {
+	closer := map[string]string{"{": "}", "(": ")", "[": "]"}[open]
 	return diag.Diagnostic{
 		Severity: diag.Error, Code: diag.E(202), Message: "unclosed delimiter",
 		Primary: diag.Label{Span: sp, Message: "this `" + open + "` is never closed"},
+		Help:    "close it with `" + closer + "`",
+		Fixits:  []diag.FixIt{{Span: base.Span{File: sp.File, Lo: at, Hi: at}, Replacement: closer}},
 	}
 }
 
-func recE0203(sp base.Span) diag.Diagnostic {
-	return diag.Diagnostic{
+// recE0203 is the E0203 of a chain of comparisons whose operators are at first
+// and second, with the help and the fix-it that the chain gets (see
+// chainedDiag in parser_expr_internal_test.go, which builds the same thing).
+func recE0203(first, second base.Span, help, insert string) diag.Diagnostic {
+	d := diag.Diagnostic{
 		Severity: diag.Error, Code: diag.E(203), Message: "comparison operators cannot be chained",
-		Primary: diag.Label{Span: sp}, Help: "use `&&`: `a < b && b < c`",
+		Primary:   diag.Label{Span: second, Message: "second comparison here"},
+		Secondary: []diag.Label{{Span: first, Message: "first comparison here"}},
+		Help:      help,
 	}
+	if insert != "" {
+		d.Fixits = []diag.FixIt{{Span: base.Span{File: second.File, Lo: second.Lo, Hi: second.Lo}, Replacement: insert}}
+	}
+	return d
 }
 
 func recE0204(sp base.Span) diag.Diagnostic {
 	return diag.Diagnostic{
 		Severity: diag.Error, Code: diag.E(204), Message: "expression is nested too deeply",
-		Primary: diag.Label{Span: sp}, Notes: []string{"the limit is 256"},
+		Primary: diag.Label{Span: sp, Message: "nesting level 257 starts here"}, Notes: []string{"the limit is 256"},
+		Help: "split the expression with `let` bindings",
+	}
+}
+
+// recE0205 is the E0205 for the operator or call parenthesis at sp.
+func recE0205(sp base.Span) diag.Diagnostic {
+	return diag.Diagnostic{
+		Severity: diag.Error, Code: diag.E(205), Message: "expression chain is too long",
+		Primary: diag.Label{Span: sp, Message: "operator or call number 1025 of this chain"},
+		Notes:   []string{"the limit is 1024 operators and calls in one expression"},
+		Help:    "split the expression with `let` bindings",
 	}
 }
 
@@ -138,11 +215,12 @@ func TestRecover(t *testing.T) {
 		r := recParse(t, "fn f() {")
 		// The label sits on the `{` that is never closed, not on the end of the
 		// file where the parser noticed.
-		r.wantDiags(t, "example", recE0202(r.at(t, "{", 0), "{"))
+		r.wantDiags(t, "example", r.e0202(r.at(t, "{", 0), "{"))
 	})
 	t.Run("unclosed_paren_closed_by_brace", func(t *testing.T) {
 		r := recParse(t, "fn f() { (1 }")
-		r.wantDiags(t, "example", recE0201(r.at(t, "}", 0), "expected `)`, found `}`"))
+		r.wantDiags(t, "example", recE0201Close(r.at(t, "}", 0), "expected `)`, found `}`",
+			r.at(t, "(", 1), "(", r.at(t, "1", 0).Hi))
 		// The `}` closes the parenthesis and then the block, so the function
 		// ends where it should: nothing more is reported for it.
 		r.wantText(t, "example", "(fn f (params) (ret _) (block (error)))\n")
@@ -152,7 +230,7 @@ func TestRecover(t *testing.T) {
 		// error is at the `=` of the first let (index 6), the second at the `=` of
 		// the second (index 8). 8 - 6 = 2 < 3: the second is not reported.
 		r := recParse(t, "fn f() { let =\nlet = }")
-		r.wantDiags(t, "example", recE0201(r.at(t, "=", 0), "expected identifier, found `=`"))
+		r.wantDiags(t, "example", recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"))
 		r.wantText(t, "example", "(fn f (params) (ret _) (block (error) (error)))\n")
 	})
 	t.Run("no_suppression_at_distance_three", func(t *testing.T) {
@@ -160,7 +238,7 @@ func TestRecover(t *testing.T) {
 		// 9): 9 - 6 = 3, so it is reported.
 		r := recParse(t, "fn f() { let =\nlet y }")
 		r.wantDiags(t, "example",
-			recE0201(r.at(t, "=", 0), "expected identifier, found `=`"),
+			recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"),
 			recE0201(r.at(t, "}", 0), "expected `=`, found `}`"))
 		r.wantText(t, "example", "(fn f (params) (ret _) (block (error) (let y _ (error))))\n")
 	})
@@ -168,7 +246,7 @@ func TestRecover(t *testing.T) {
 		// Four more line breaks change no index. (The lexer joins them into one
 		// Newline; the point is that a Newline is not a token for this count.)
 		r := recParse(t, "fn f() { let =\n\n\n\n\nlet = }")
-		r.wantDiags(t, "example", recE0201(r.at(t, "=", 0), "expected identifier, found `=`"))
+		r.wantDiags(t, "example", recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"))
 		r.wantText(t, "example", "(fn f (params) (ret _) (block (error) (error)))\n")
 
 		// The line break after an `=` is not a token at all (the line is not
@@ -238,8 +316,8 @@ func TestRecover(t *testing.T) {
 		// moved the index on a suppressed error would measure 10 - 8 = 2.
 		r := recParse(t, "fn f() { let =\nlet =\nlet = }")
 		r.wantDiags(t, "three lets",
-			recE0201(r.at(t, "=", 0), "expected identifier, found `=`"),
-			recE0201(r.at(t, "=", 2), "expected identifier, found `=`"))
+			recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"),
+			recE0201Let(r.at(t, "=", 2), "expected identifier, found `=`"))
 		r.wantText(t, "three lets", "(fn f (params) (ret _) (block (error) (error) (error)))\n")
 	})
 	t.Run("suppression_index_of_a_line_break", func(t *testing.T) {
@@ -248,13 +326,13 @@ func TestRecover(t *testing.T) {
 		// at index 6, so this one is 2 away and not reported. A parser that put
 		// it at index 9 would report it (9 - 6 = 3).
 		r := recParse(t, "fn f() { let =\nlet y\n}")
-		r.wantDiags(t, "newline", recE0201(r.at(t, "=", 0), "expected identifier, found `=`"))
+		r.wantDiags(t, "newline", recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"))
 		r.wantText(t, "newline", "(fn f (params) (ret _) (block (error) (let y _ (error))))\n")
 		// One token further, the same kind of mistake is reported: in `let z w`
 		// it is at the `w` (index 9), and 9 - 6 = 3.
 		r = recParse(t, "fn f() { let =\nlet z w\n}")
 		r.wantDiags(t, "one token further",
-			recE0201(r.at(t, "=", 0), "expected identifier, found `=`"),
+			recE0201Let(r.at(t, "=", 0), "expected identifier, found `=`"),
 			recE0201(r.at(t, "w", 0), "expected `=`, found `w`"))
 	})
 	t.Run("every_parser_error_is_suppressed", func(t *testing.T) {
@@ -266,7 +344,8 @@ func TestRecover(t *testing.T) {
 		// and lies two tokens after the second.
 		src := "fn f() { 1" + strings.Repeat(" + 1", 1022) + " < 1 < 1 < 1 }"
 		r := recParse(t, src)
-		r.wantDiags(t, "E0203 then E0205", recE0203(r.at(t, "<", 1)))
+		r.wantDiags(t, "E0203 then E0205",
+			recE0203(r.at(t, "<", 0), r.at(t, "<", 1), "use `&&`: `a < b && b < c`", "&& 1 "))
 		r.wantText(t, "E0203 then E0205", "(fn f (params) (ret _) (block (error)))\n")
 
 		// The same for an E0204 after an E0201. The body of the function is at
@@ -440,7 +519,7 @@ func TestRecover(t *testing.T) {
 		}
 		for _, row := range rows {
 			r := recParse(t, row.src)
-			r.wantDiags(t, row.src, recE0202(r.at(t, row.token, row.n), row.open))
+			r.wantDiags(t, row.src, r.e0202(r.at(t, row.token, row.n), row.open))
 		}
 		// An expression abandoned for being too long is skipped up to the end of
 		// the statement, which here is the end of the file. The parenthesis that
@@ -452,12 +531,8 @@ func TestRecover(t *testing.T) {
 			r := recParse(t, src)
 			lo := nthIndex(t, src, "+", 1024)
 			r.wantDiags(t, open+" abandoned, then the end of the file",
-				diag.Diagnostic{
-					Severity: diag.Error, Code: diag.E(205), Message: "expression chain is too long",
-					Primary: diag.Label{Span: r.span(lo, lo+1)},
-					Notes:   []string{"the limit is 1024 operators and calls in one expression"},
-				},
-				recE0202(r.at(t, "{", 0), "{"))
+				recE0205(r.span(lo, lo+1)),
+				r.e0202(r.at(t, "{", 0), "{"))
 			r.wantText(t, open+" abandoned, then the end of the file", "(fn f (params) (ret _) (block (error)))\n")
 		}
 
@@ -736,7 +811,7 @@ func TestRecover(t *testing.T) {
 		r.wantDiags(t, "two items after the brace",
 			recE0201(r.at(t, "fn", 1), "expected expression, found `fn`"),
 			recE0201(r.at(t, "fn", 2), "expected expression, found `fn`"),
-			recE0202(r.at(t, "{", 0), "{"))
+			r.e0202(r.at(t, "{", 0), "{"))
 		r.wantText(t, "two items after the brace", "(fn a (params) (ret _) (block (expr 1) (expr (error)) (error)))\n")
 
 		src := head
@@ -748,7 +823,7 @@ func TestRecover(t *testing.T) {
 		for i := 1; i <= 5; i++ {
 			want = append(want, recE0201(r.at(t, "fn", i), "expected expression, found `fn`"))
 		}
-		want = append(want, recE0202(r.at(t, "{", 0), "{"))
+		want = append(want, r.e0202(r.at(t, "{", 0), "{"))
 		r.wantDiags(t, "five items after the brace", want...)
 		if n := len(r.m.Items); n != 1 {
 			t.Errorf("five items after the brace: %d items in the module, want 1 (the others are inside the block of a)", n)
@@ -766,7 +841,7 @@ func TestRecover(t *testing.T) {
 			recE0201(r.at(t, "#", 0), "expected expression, found `#`"),
 			recE0201(r.at(t, "pub", 0), "expected expression, found `pub`"),
 			recE0201(r.at(t, "fn", 2), "expected expression, found `fn`"),
-			recE0202(r.at(t, "{", 0), "{"))
+			r.e0202(r.at(t, "{", 0), "{"))
 		r.wantText(t, attr, "(fn a (params) (ret _) (block (expr 1) (expr (error)) (expr (error)) (error)))\n")
 		if n := len(r.m.Items); n != 1 {
 			t.Errorf("%s: %d items in the module, want 1", attr, n)
@@ -788,7 +863,7 @@ func TestRecover(t *testing.T) {
 				want = append(want, recE0201(r.at(t, "fn", i), "expected expression, found `fn`"))
 			}
 			if row.e0202 {
-				want = append(want, recE0202(r.at(t, "{", 0), "{"))
+				want = append(want, r.e0202(r.at(t, "{", 0), "{"))
 			}
 			r.wantDiags(t, what, want...)
 			r.wantText(t, what, "(fn a (params) (ret _) (block (expr 1)"+strings.Repeat(" (expr (error))", row.items-1)+" (error)))\n")
@@ -827,25 +902,36 @@ func TestRecover(t *testing.T) {
 			tok       string // the token the diagnostics are on, and which occurrence of it
 			n         int
 			message   string
+			open      int    // which `(` of the source is the one that is not closed
+			last      string // the last token before the one found: the closer goes after it
+			lastN     int
+			bare      bool   // the token found does not say that the closer is missing: no help, no fix-it
 			want      string // PrintModule
 		}{
 			{"call, then lets and a call", "fn f() {\n  let a = g(1\n  let b = 2\n  let c = 3\n  h(a, b, c)\n  c\n}",
-				"let", 1, "expected `)`, found `let`",
+				"let", 1, "expected `)`, found `let`", 1, "1", 0, false,
 				"(fn f (params) (ret _) (block (let a _ (error)) (let b _ 2) (let c _ 3) (expr (call h a b c)) c))\n"},
 			{"group, then lets", "fn f() {\n  let a = (1 + 2\n  let b = 3\n  let c = 4\n  b\n}",
-				"let", 1, "expected `)`, found `let`",
+				"let", 1, "expected `)`, found `let`", 1, "2", 0, false,
 				"(fn f (params) (ret _) (block (let a _ (error)) (let b _ 3) (let c _ 4) b))\n"},
 			{"calls are skipped with the statement", "fn f() {\n  let a = g(1\n  h(2)\n  k(3)\n  let z = 1\n  z\n}",
-				"h", 0, "expected `)`, found `h`",
+				"h", 0, "expected `)`, found `h`", 1, "1", 0, true,
 				"(fn f (params) (ret _) (block (let a _ (error)) (let z _ 1) z))\n"},
 			{"after a function", "fn fib(n: Int) -> Int {\n  n\n}\nfn main() {\n  let a = fib(10\n  let b: Int = a + 2 * 3\n  let c = b * 2\n  f(a, b, c)\n  c\n}\n",
-				"let", 1, "expected `)`, found `let`",
+				"let", 1, "expected `)`, found `let`", 2, "10", 0, false,
 				"(fn fib (params (n Int)) (ret Int) (block n))\n" +
 					"(fn main (params) (ret _) (block (let a _ (error)) (let b Int (+ a (* 2 3))) (let c _ (* b 2)) (expr (call f a b c)) c))\n"},
 		}
 		for _, row := range rows {
 			r := recParse(t, row.src)
-			r.wantDiags(t, row.name, recE0201(r.at(t, row.tok, row.n), row.message))
+			want := recE0201Close(r.at(t, row.tok, row.n), row.message,
+				r.at(t, "(", row.open), "(", r.at(t, row.last, row.lastN).Hi)
+			if row.bare {
+				// A name is found: it could be a missing `,` as well, so the
+				// diagnostic names the opener and offers no edit.
+				want = recE0201Opened(r.at(t, row.tok, row.n), row.message, r.at(t, "(", row.open), "(")
+			}
+			r.wantDiags(t, row.name, want)
 			r.wantText(t, row.name, row.want)
 		}
 
@@ -856,10 +942,250 @@ func TestRecover(t *testing.T) {
 		r.wantText(t, "two lets on a line", "(fn f (params) (ret _) (block (let a _ 1) (let b _ 2)))\n")
 		r = recParse(t, "fn f() {\n  let a = g(1\n  let b = 2 let c = 3\n  c\n}")
 		r.wantDiags(t, "a missing paren, then two lets on a line",
-			recE0201(r.at(t, "let", 1), "expected `)`, found `let`"),
+			recE0201Close(r.at(t, "let", 1), "expected `)`, found `let`", r.at(t, "(", 1), "(", r.at(t, "1", 0).Hi),
 			recE0201(r.at(t, "let", 2), "expected newline, found `let`"))
 		r.wantText(t, "a missing paren, then two lets on a line",
 			"(fn f (params) (ret _) (block (let a _ (error)) (let b _ 2) (let c _ 3) c))\n")
+	})
+	t.Run("e0202_fixit_closes_at_eof", func(t *testing.T) {
+		// The help names the closer of the delimiter that is open, and the
+		// one fix-it writes it at the very end of the file, also when that is
+		// a line break (the fix-it is then on the empty last line). Not when
+		// the file ends inside something that would swallow it:
+		//   - a comment that nothing closes, a `//` with no line break after
+		//     it or a `/*` with no `*/`: the closer goes right after the last
+		//     token that was read, in front of the comment;
+		//   - a string or a character that never ends: if the place where the
+		//     closer would go (the end of the file, or the end of the last
+		//     token read when a comment ends the file) is inside it or at its
+		//     end, there is the help and no fix-it.
+		rows := []struct {
+			src, open, closer string
+			n                 int         // which occurrence of open is the unclosed one
+			after             string      // the closer goes after the first occurrence of this; "" is the end of the file
+			lexer             []diag.Code // the diagnostics that come before the E0202: the lexer's, and an E0201 of the parser where a row has one
+			noEdit            bool        // the E0202 has the help and no fix-it
+		}{
+			{"fn f() {", "{", "}", 0, "", nil, false},
+			{"fn f() {\n", "{", "}", 0, "", nil, false},
+			{"fn f() { (1", "(", ")", 1, "", nil, false},
+			{"#[a", "[", "]", 0, "", nil, false},
+			{`#[a("x"`, "(", ")", 0, "", nil, false},
+			{"fn f() { g(1\n", "(", ")", 1, "", nil, false},
+			// The last line is a comment with nothing after it: the closer
+			// goes in front of the comment, after the last token, for each
+			// kind of delimiter. A lone CR does not end a comment, so it is
+			// still part of it.
+			{"fn f() {\n  // todo", "{", "}", 0, "{", nil, false},
+			{"fn f() { // x", "{", "}", 0, "{", nil, false},
+			{"fn main() {\n  print(1)\n  // todo", "{", "}", 0, "print(1)", nil, false},
+			{"fn f() { (1 // x", "(", ")", 1, "1", nil, false},
+			{"#[a\n// x", "[", "]", 0, "a", nil, false},
+			{"fn f() { // x\r", "{", "}", 0, "{", nil, false},
+			// The same for a `/*` that is never closed, which also reports
+			// E0103: the last row is the commonest way to get one, a comment
+			// that swallows the `}` that was meant to close the function.
+			{"fn f() {\n  /* x", "{", "}", 0, "{", []diag.Code{diag.E(103)}, false},
+			{"fn f() { (1 /* x", "(", ")", 1, "1", []diag.Code{diag.E(103)}, false},
+			{"fn main() {\n  print(1)\n  /* print(2)\n}\n", "{", "}", 0, "print(1)", []diag.Code{diag.E(103)}, false},
+			// A comment that is not the last thing in the file, or that a line
+			// break ends, does not move the closer from the end of the file,
+			// where it is not part of any comment.
+			{"fn f() {\n  // todo\n", "{", "}", 0, "", nil, false},
+			{"fn f() { // x\r\n", "{", "}", 0, "", nil, false},
+			{"fn f() { // x\n  1", "{", "}", 0, "", nil, false},
+			{"fn f() { /* x */", "{", "}", 0, "", nil, false},
+			// A string that never ends takes the end of the file, also when
+			// the code of an interpolation is still open in it: there is the
+			// help and no fix-it, and the comment inside the interpolation of
+			// the last row does not change that.
+			{"fn f() {\n  \"abc", "{", "}", 0, "", []diag.Code{diag.E(110)}, true},
+			{"fn f() {\n  1 + \"abc", "{", "}", 0, "", []diag.Code{diag.E(110)}, true},
+			{"fn f() {\n  \"a ${ x", "{", "}", 0, "", []diag.Code{diag.E(110)}, true},
+			{"fn f() {\n  \"a ${ x /* y", "{", "}", 0, "", []diag.Code{diag.E(103), diag.E(110)}, true},
+			// A string that a line break ends leaves the end of the file free,
+			// and so does an Error token that is not a string: the `@` is not
+			// part of anything that a `}` could join.
+			{"fn f() {\n  \"abc\n", "{", "}", 0, "", []diag.Code{diag.E(110)}, false},
+			{"fn f() {\n  \"a ${ x\n", "{", "}", 0, "", []diag.Code{diag.E(110)}, false},
+			{"fn f() { @", "{", "}", 0, "", []diag.Code{diag.E(104)}, false},
+			// A string that a line break ends, in a file that ends in a comment.
+			// The closer goes after the last token read, and when that token
+			// belongs to the string the closer would be part of it. In the
+			// first row it is the string's own Error token; in the second the
+			// comment is inside the interpolation, so the line break that ends
+			// the string is inside the comment and the Error token reaches into
+			// it; in the third the token is the code of the interpolation,
+			// which lies in the span of the Error token. There is the help and
+			// no fix-it.
+			{"fn f() {\n  \"abc\n/* x", "{", "}", 0, "", []diag.Code{diag.E(110), diag.E(103)}, true},
+			{"fn f() {\n  \"a ${/* x } b\"\n", "{", "}", 0, "", []diag.Code{diag.E(103), diag.E(110)}, true},
+			{"fn f() {\n  \"a ${ x /* y\n z", "{", "}", 0, "", []diag.Code{diag.E(103), diag.E(110)}, true},
+			// Two strings that a line break ends: it is the last that counts.
+			{"fn f() {\n  \"abc\n  \"def\n/* x", "{", "}", 0, "", []diag.Code{diag.E(110), diag.E(110), diag.E(103)}, true},
+			// A character literal that never ends takes the rest of its line
+			// as a string does, also when no comment is in the way. The
+			// parser cannot read it, so its E0201 for the string in front of it
+			// comes before the E0202.
+			{"fn f() { \"x\" y 'a", "{", "}", 0, "", []diag.Code{diag.E(108), diag.E(201)}, true},
+			// Not these: a token after the string, a string that is complete
+			// (here an attribute argument, since the parser cannot read a
+			// string in an expression yet), and an Error token that is not a
+			// string, each followed by a comment that ends the file. The
+			// closer goes after that token.
+			{"fn f() {\n  \"abc\n  1\n/* x", "{", "}", 0, "1", []diag.Code{diag.E(110), diag.E(103)}, false},
+			{"fn f() {\n  \"a ${ x\n  1 // x", "{", "}", 0, "1", []diag.Code{diag.E(110)}, false},
+			{"#[a(\"x\" // c", "(", ")", 0, "\"x\"", nil, false},
+			{"fn f() { @ // x", "{", "}", 0, "@", []diag.Code{diag.E(104)}, false},
+		}
+		for _, row := range rows {
+			r := recParse(t, row.src)
+			at := len(row.src)
+			if row.after != "" {
+				at = nthIndex(t, row.src, row.after, 0) + len(row.after)
+			}
+			// The mistake in the file is the first diagnostic after the ones
+			// the row lists; the rest are the other delimiters that are open,
+			// reported or suppressed.
+			diags := r.sink.All()
+			first := len(row.lexer)
+			if len(diags) <= first || diags[first].Code != diag.E(202) {
+				t.Errorf("%s: diagnostics %v, want an E0202 after %d from the lexer", recShow(row.src), diags, first)
+				continue
+			}
+			for i, code := range row.lexer {
+				if diags[i].Code != code {
+					t.Errorf("%s: diagnostic %d is %v, want %v", recShow(row.src), i, diags[i].Code, code)
+				}
+			}
+			e := diags[first]
+			want := r.e0202At(r.at(t, row.open, row.n), row.open, uint32(at))
+			if row.noEdit {
+				want.Fixits = nil
+			}
+			if !reflect.DeepEqual(e, want) {
+				t.Errorf("%s: the E0202\n%+v\nwant\n%+v", recShow(row.src), e, want)
+			}
+			if !row.noEdit {
+				if got := e.Fixits; len(got) != 1 || got[0].Span.Lo != uint32(at) || got[0].Span.Hi != uint32(at) || got[0].Replacement != row.closer {
+					t.Errorf("%s: fixits %+v, want one that writes %q at %d", recShow(row.src), got, row.closer, at)
+				}
+				// Applied, the fix-it closes that delimiter: the file has no E0202
+				// on it any more (the other delimiters that are open stay open).
+				opener := r.at(t, row.open, row.n)
+				for _, d := range recParse(t, applyFixits(row.src, e)).sink.All() {
+					if d.Code == diag.E(202) && d.Primary.Span.Lo == opener.Lo {
+						t.Errorf("%s: after the fix-it, the delimiter at %d is still reported as never closed", recShow(row.src), opener.Lo)
+					}
+				}
+			}
+			// The edits of the lexer's diagnostics and this one are at
+			// different places when the file ends in a comment, so each of
+			// them applies whatever the order. (The E0103 writes its `*/` at
+			// the end of the file.)
+			if row.lexer != nil && row.lexer[0] == diag.E(103) && !row.noEdit {
+				if lexFix := diags[0].Fixits; len(lexFix) != 1 || lexFix[0].Span.Lo == e.Fixits[0].Span.Lo {
+					t.Errorf("%s: the fix-its of E0103 %+v and E0202 %+v are at the same place", recShow(row.src), lexFix, e.Fixits)
+				}
+			}
+		}
+
+		// Whatever the file ends in, an E0202 that offers an edit is one whose
+		// edit works. Applied alone, it writes the closer as code (the patched
+		// file has a token of that kind right where the edit went, and not a
+		// closer that a string, a character or a comment took in) and the
+		// delimiter is no longer reported. The rows above say where the edit
+		// goes for the endings that were tried; this runs every combination of
+		// a few beginnings, strings and endings, so that a way to end a file
+		// that no row names cannot put the edit where it closes nothing. It
+		// counts the E0202 with an edit and those without, because a loop that
+		// found none of one kind would check nothing about it.
+		closerKind := map[string]syntax.TokenKind{"}": syntax.RBrace, ")": syntax.RParen, "]": syntax.RBracket}
+		heads := []string{"fn f() {\n  ", "fn f() { (1 + ", `fn f() { "x" y `}
+		strs := []string{`"abc`, `"a\`, `"a ${ x`, `"a ${ x } b`, `"a ${ x /* y`, `"a ${/* x } b"`, `"a ${ "b`, `"a ${ ("`, `'a`, `'ab`}
+		ends := []string{"", "\n", " // z", "\n// z", " /* z", "\n/* z", "\n  1", "\n  1 // z", "\n  1\n/* z", "\r\n/* z"}
+		withEdit, helpOnly := 0, 0
+		for _, head := range heads {
+			for _, str := range strs {
+				for _, end := range ends {
+					src := head + str + end
+					for _, d := range recParse(t, src).sink.All() {
+						if d.Code != diag.E(202) {
+							continue
+						}
+						if len(d.Fixits) == 0 {
+							helpOnly++
+							continue
+						}
+						withEdit++
+						edit := d.Fixits[0]
+						patched := applyFixits(src, d)
+						tb, _, _, _ := lexFile(t, patched)
+						if !slices.ContainsFunc(tb.Tokens, func(tok syntax.Token) bool {
+							return tok.Kind == closerKind[edit.Replacement] && tok.Span.Lo == edit.Span.Lo
+						}) {
+							t.Errorf("%s: the closer %q that the E0202 writes at %d is not code in %s", recShow(src), edit.Replacement, edit.Span.Lo, recShow(patched))
+						}
+						for _, after := range recParse(t, patched).sink.All() {
+							if after.Code == diag.E(202) && after.Primary.Span.Lo == d.Primary.Span.Lo {
+								t.Errorf("%s: the E0202 at %d is still reported after its fix-it %+v", recShow(src), d.Primary.Span.Lo, d.Fixits)
+							}
+						}
+					}
+				}
+			}
+		}
+		if withEdit == 0 || helpOnly == 0 {
+			t.Errorf("%d E0202 with an edit and %d with the help only, want some of each", withEdit, helpOnly)
+		}
+
+		// In a file that ends with a line break the fix-it is on the empty
+		// last line, line 2 here, and the diagnostic shows it as such: the `-`
+		// line has nothing after it (not even a space) and the `+` line has
+		// the closer.
+		const src = "fn f() {\n"
+		var sm base.SourceManager
+		id := sm.Add("test.ki", []byte(src))
+		in, sink := base.NewInterner(), &diag.Sink{}
+		tb := syntax.Lex(&sm, id, in, sink)
+		syntax.Parse(&tb, id, in, sink)
+		diags := sink.All()
+		if len(diags) != 1 {
+			t.Fatalf("%s: %d diagnostics, want exactly 1: %v", recShow(src), len(diags), diags)
+		}
+		want := strings.Join([]string{
+			"error[E0202]: unclosed delimiter",
+			" --> test.ki:1:8",
+			"  |",
+			"1 | fn f() {",
+			"  |        ^ this `{` is never closed",
+			"  = help: close it with `}`",
+			"  |",
+			"2 -",
+			"2 + }",
+			"",
+		}, "\n")
+		if got := diag.RenderHuman(diags[0], &sm); got != want {
+			t.Errorf("%s: RenderHuman =\n%s\nwant\n%s", recShow(src), got, want)
+		}
+	})
+	t.Run("e0204_label_and_help", func(t *testing.T) {
+		src := "fn f() { " + strings.Repeat("(", 257) + "1" + strings.Repeat(")", 257) + " }"
+		r := recParse(t, src)
+		diags := r.sink.All()
+		if len(diags) != 1 {
+			t.Fatalf("%d diagnostics, want exactly 1: %v", len(diags), diags)
+		}
+		d := diags[0]
+		if want := "nesting level 257 starts here"; d.Primary.Message != want {
+			t.Errorf("primary label %q, want %q", d.Primary.Message, want)
+		}
+		if want := "split the expression with `let` bindings"; d.Help != want || len(d.Fixits) != 0 {
+			t.Errorf("help %q and fixits %+v, want %q and none", d.Help, d.Fixits, want)
+		}
+		if want := []string{"the limit is 256"}; !slices.Equal(d.Notes, want) {
+			t.Errorf("notes %q, want %q", d.Notes, want)
+		}
 	})
 }
 

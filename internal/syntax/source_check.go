@@ -35,7 +35,10 @@ func CheckSource(sm *base.SourceManager, id base.FileID, sink *diag.Sink) bool {
 			span := base.Span{File: id, Lo: uint32(i), Hi: uint32(i) + 1}
 			sink.Report(diag.NewError(diag.E(102),
 				fmt.Sprintf("control character U+%04X in source", b),
-				diag.Label{Span: span, Message: fmt.Sprintf("not allowed in Ki source; write it as an escape such as `\\u{%x}`", b)}))
+				diag.Label{Span: span, Message: "not allowed in Ki source"}).
+				WithNote("Ki allows only `\\t`, `\\n` and `\\r` as raw control characters; the others are invisible in an editor").
+				WithHelp(fmt.Sprintf("write it as the escape `\\u{%x}` inside a string, or delete it", b)).
+				WithFixIt(diag.Delete(span)))
 			return false
 		}
 	}
@@ -43,7 +46,12 @@ func CheckSource(sm *base.SourceManager, id base.FileID, sink *diag.Sink) bool {
 		span := base.Span{File: id, Lo: uint32(bad), Hi: uint32(bad) + 1}
 		sink.Report(diag.NewError(diag.E(101),
 			fmt.Sprintf("invalid UTF-8 byte 0x%02X", src[bad]),
-			diag.Label{Span: span, Message: "not valid UTF-8"}))
+			diag.Label{Span: span, Message: "not valid UTF-8"}).
+			WithNote("Ki source files are UTF-8").
+			// No fix-it: the byte may be one of a multi-byte sequence, and
+			// deleting it would patch half a character; recoding the file is
+			// not an edit of its text.
+			WithHelp("save the file as UTF-8, or delete the byte"))
 		return false
 	}
 	return true

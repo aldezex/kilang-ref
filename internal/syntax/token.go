@@ -46,6 +46,35 @@ type TokenBuffer struct {
 	// token is: src[Span.Lo:Span.Hi]. Only Lex sets it. The parser reads it to
 	// quote the token in front of it when it reports an error (see text).
 	src []byte
+
+	// endsInComment says that the file ends inside a comment: its last line
+	// has a `//` comment and not even a line break comes after it to end it,
+	// or a `/*` comment is never closed. Whatever is written at the end of the
+	// file would then be part of the comment (see unclosed). Only Lex sets it.
+	endsInComment bool
+
+	// unterminatedLiteral is the span of the last string or character literal
+	// that is never closed. For a string it is the Error token that stands for
+	// it, from the opening quote to the end of the text on its line, with the
+	// code of its interpolations that are still open inside it; for a character
+	// it is the Char token, which takes the rest of its line. It is the zero
+	// Span if every literal is closed. Whatever is written inside that span or
+	// at its end becomes part of the literal and not code, so the parser asks
+	// (see inUnterminatedLiteral) before it offers an edit at a place. Only the
+	// last one is kept: the places it asks about are the end of the file and the
+	// end of the last token read, and neither lies in an earlier literal. A
+	// literal inside the code of a string's interpolation is part of that
+	// string's span, and the string is the last to be recorded. Only Lex sets it.
+	unterminatedLiteral base.Span
+}
+
+// inUnterminatedLiteral reports whether text written at offset at would become
+// part of the last literal that is never closed: at is after its opening quote
+// and not after its end. At the end itself the text is still in the literal,
+// because the literal has no closing quote to stop it. See
+// TokenBuffer.unterminatedLiteral.
+func (tb *TokenBuffer) inUnterminatedLiteral(at uint32) bool {
+	return tb.unterminatedLiteral.Lo < at && at <= tb.unterminatedLiteral.Hi
 }
 
 // text returns the text of t as the file has it. t must be a token of tb, and

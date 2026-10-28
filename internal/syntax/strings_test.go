@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aldezex/kilang/internal/base"
@@ -90,7 +91,7 @@ func wantNewlines(t *testing.T, what string, tb syntax.TokenBuffer, want ...bool
 // [lo, hi) and which carries the note about the valid escapes.
 func wantBadEscape(t *testing.T, what string, diags []diag.Diagnostic, id base.FileID, escape string, lo, hi uint32) {
 	t.Helper()
-	wantOne(t, what, diags, id, diag.E(106), "invalid escape sequence `"+escape+"`", lo, hi, "")
+	wantOne(t, what, diags, id, diag.E(106), "invalid escape sequence `"+escape+"`", lo, hi, "unknown escape")
 	if len(diags) == 1 && !slices.Equal(diags[0].Notes, []string{escapesNote}) {
 		t.Errorf("%s: notes %q, want exactly %q", what, diags[0].Notes, escapesNote)
 	}
@@ -226,6 +227,53 @@ func TestStrings(t *testing.T) {
 		}
 		wantKindList(t, src, tb, syntax.Error, syntax.Eof)
 	})
+	t.Run("e0106_label_and_fixit", func(t *testing.T) {
+		// The help and the one fix-it are the same for every bad escape in a
+		// string, a malformed \u{…} included: the fix-it puts a backslash in
+		// front of the whole escape, so the backslash is written and what
+		// followed it is plain text. The result has no mistake.
+		const help = "to write a backslash, double it: `\\\\`"
+		rows := []struct {
+			src, escape string
+			lo, hi      uint32
+		}{
+			{`"\q"`, `\q`, 1, 3},
+			{`"a\wb"`, `\w`, 2, 4},
+			{`"\é"`, `\é`, 1, 4},
+			{`"\u{110000}"`, `\u{110000}`, 1, 11},
+			{`"\u0041"`, `\u`, 1, 3},
+			// After a character: the string is not a character.
+			{`'a' "\q"`, `\q`, 5, 7},
+		}
+		for _, row := range rows {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			wantBadEscape(t, row.src, diags, id, row.escape, row.lo, row.hi)
+			if len(diags) != 1 {
+				continue
+			}
+			d := diags[0]
+			if d.Help != help {
+				t.Errorf("%s: help %q, want %q", row.src, d.Help, help)
+			}
+			want := []diag.FixIt{diag.Replace(base.Span{File: id, Lo: row.lo, Hi: row.hi}, `\`+row.src[row.lo:row.hi])}
+			if !slices.Equal(d.Fixits, want) {
+				t.Errorf("%s: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			_, after := lexAll(t, applyFixits(row.src, d))
+			wantNoDiags(t, "after the fix-it of "+row.src, after)
+		}
+
+		// In a character the help stays, but there is no fix-it: `'\\q'` is two
+		// characters, and a fix-it that turns one mistake into another is no fix.
+		src := `'\q'`
+		_, sink, id, _ := lexFile(t, src)
+		diags := sink.All()
+		wantBadEscape(t, src, diags, id, `\q`, 1, 3)
+		if len(diags) == 1 && (diags[0].Help != help || len(diags[0].Fixits) != 0) {
+			t.Errorf("%s: help %q and fixits %+v, want the help and no fix-it", src, diags[0].Help, diags[0].Fixits)
+		}
+	})
 	t.Run("bad_unicode_escape_forms_E0106", func(t *testing.T) {
 		// Each form is one E0106 over exactly the text the lexer consumed, the
 		// string stays closed, and the text holds U+FFFD for the escape and,
@@ -358,6 +406,207 @@ func TestStrings(t *testing.T) {
 		// line rule (a Char can end an expression) makes it a Newline.
 		tb, _ := lexAll(t, "'a\nx")
 		wantNewlines(t, "'a\\nx", tb, false, false, true, false)
+	})
+	t.Run("e0108_empty_help", func(t *testing.T) {
+		src := `''`
+		_, sink, _, _ := lexFile(t, src)
+		diags := sink.All()
+		if len(diags) != 1 {
+			t.Fatalf("%s: got %d diagnostics, want exactly 1: %+v", src, len(diags), diags)
+		}
+		if d := diags[0]; d.Help != "write the character between the quotes" || len(d.Fixits) != 0 {
+			t.Errorf("%s: help %q and fixits %+v, want the help and no fix-it", src, d.Help, d.Fixits)
+		}
+	})
+	t.Run("e0108_text_help_and_fixit", func(t *testing.T) {
+		// The fix-it turns the literal into a string with the same characters:
+		// the text between the quotes as the file has it, escapes included,
+		// not as it decodes. The result has no mistake.
+		//
+		// The help shows that string for a text of up to 80 bytes, with the
+		// characters that a message must not hide (the bidirectional and
+		// zero-width marks) as <U+XXXX>; the code line above it does the same
+		// for the bidirectional marks and leaves the zero-width ones as they
+		// are. The edit carries the text as the file has it. Past 80 bytes the
+		// help only says what to write, so that the help line does not grow
+		// with the literal, and the edit still replaces all of it. The bound
+		// counts bytes, not characters: 41 of "é" are 82 bytes.
+		at, over, wide := strings.Repeat("a", 80), strings.Repeat("a", 81), strings.Repeat("é", 41)
+		rows := []struct {
+			src, help, replacement string
+			hi                     uint32
+		}{
+			{`'ab'`, "for text, write a string: `\"ab\"`", `"ab"`, 4},
+			{`'a\nb'`, "for text, write a string: `\"a\\nb\"`", `"a\nb"`, 6},
+			{`'aé'`, "for text, write a string: `\"aé\"`", `"aé"`, 5},
+			{`'😀😀'`, "for text, write a string: `\"😀😀\"`", `"😀😀"`, 10},
+			// A `$` or a `{` alone is plain text in a string: only the pair
+			// `${` opens an interpolation, in either order of the two.
+			{`'$a{'`, "for text, write a string: `\"$a{\"`", `"$a{"`, 5},
+			{`'{$'`, "for text, write a string: `\"{$\"`", `"{$"`, 4},
+			// A quote or a `${` that is already escaped is as the string needs
+			// it, so the edit keeps it and nothing has to be escaped.
+			{`'a\"'`, "for text, write a string: `\"a\\\"\"`", `"a\""`, 5},
+			{`'ab\"'`, "for text, write a string: `\"ab\\\"\"`", `"ab\""`, 6},
+			{`'a\${b}'`, "for text, write a string: `\"a\\${b}\"`", `"a\${b}"`, 8},
+			// A mark that changes the order of the text, or that shows as
+			// nothing, is shown as its code point in the help and written as
+			// it is in the edit.
+			{"'a\u202eb'", "for text, write a string: `\"a<U+202E>b\"`", "\"a\u202eb\"", 7},
+			{"'a\u200bb'", "for text, write a string: `\"a<U+200B>b\"`", "\"a\u200bb\"", 7},
+			// The longest text that the help shows, and one byte more.
+			{"'" + at + "'", "for text, write a string: `\"" + at + "\"`", "\"" + at + "\"", 82},
+			{"'" + over + "'", "for text, write a string", "\"" + over + "\"", 83},
+			// 41 characters but 82 bytes: over the bound, so the help is the
+			// short one. A bound on the number of characters would show it.
+			{"'" + wide + "'", "for text, write a string", "\"" + wide + "\"", 84},
+		}
+		for _, row := range rows {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if d.Help != row.help {
+				t.Errorf("%q: help %q, want %q", row.src, d.Help, row.help)
+			}
+			want := []diag.FixIt{diag.Replace(base.Span{File: id, Lo: 0, Hi: row.hi}, row.replacement)}
+			if !slices.Equal(d.Fixits, want) {
+				t.Errorf("%q: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			_, after := lexAll(t, applyFixits(row.src, d))
+			wantNoDiags(t, "after the fix-it of "+strconv.Quote(row.src), after)
+		}
+
+		// A quote in the text would end the string early and a `${` would open
+		// an interpolation, so there is a help and no fix-it, and the help
+		// does not show a string that would not be one or would not hold the
+		// text. It says what to escape; written that way, the string is
+		// correct and holds the characters of the literal. Only the ones that
+		// are not escaped already count.
+		const quote = "each `\"` in it as `\\\"`"
+		const interp = "each `${` in it as `\\${`"
+		for _, row := range []struct{ src, help, advised, text string }{
+			{`'a"b'`, quote, `"a\"b"`, `a"b`},
+			{`'"a'`, quote, `"\"a"`, `"a`},
+			{`'a${b}x'`, interp, `"a\${b}x"`, "a${b}x"},
+			{`'${'`, interp, `"\${"`, "${"},
+			{`'a"${b}'`, quote + " and " + interp, `"a\"\${b}"`, `a"${b}`},
+			// A backslash escapes the byte after it and no more: after an
+			// escaped backslash the quote or the `${` is loose, and an escaped
+			// one next to a loose one is not the one to escape.
+			{`'a\\"b'`, quote, `"a\\\"b"`, `a\"b`},
+			{`'a\\${b}'`, interp, `"a\\\${b}"`, `a\${b}`},
+			{`'a\"${b}'`, interp, `"a\"\${b}"`, `a"${b}`},
+			{`'a"\${b}'`, quote, `"a\"\${b}"`, `a"${b}`},
+		} {
+			_, sink, _, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%s: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			if want := "for text, write a string, and write " + row.help; diags[0].Help != want || len(diags[0].Fixits) != 0 {
+				t.Errorf("%s: help %q and fixits %+v, want help %q and no fix-it", row.src, diags[0].Help, diags[0].Fixits, want)
+			}
+			if row.advised == "" {
+				continue
+			}
+			tb, after, _, in := lexFile(t, row.advised)
+			wantNoDiags(t, "the string that the help of "+row.src+" asks for", after)
+			if got, want := shape(tb, in)[0], "String("+strconv.Quote(row.text)+")"; got != want {
+				t.Errorf("%s: the string the help asks for, %s, lexes as %s, want %s", row.src, row.advised, got, want)
+			}
+		}
+	})
+	t.Run("e0108_unclosed_help_and_fixit", func(t *testing.T) {
+		// The closing quote goes where the lexer stopped: the end of the line,
+		// before its CR if it has one, or the end of the file. It is offered
+		// only when it makes a character, that is, when exactly one was written
+		// after the opening quote (an escape, or a letter of several bytes, is
+		// one), and then the file with the edit applied has no diagnostic and
+		// the literal is a Char.
+		rows := []struct {
+			src string
+			at  uint32
+		}{
+			{"'a\n", 2},
+			{"'a\r\n", 2},
+			{"'a", 2},
+			{"' ", 2},
+			{"'\u00e9", 3}, // one character of two bytes: the quote goes after both
+			{`'\n`, 3},     // the escape `\n` is one character
+			{`'\u{41}`, 7},
+			{`'\\`, 3}, // the escaped backslash is complete: only the quote is missing
+		}
+		for _, row := range rows {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if want := "close it with `'`"; d.Help != want {
+				t.Errorf("%q: help %q, want %q", row.src, d.Help, want)
+			}
+			if want := []diag.FixIt{diag.Insert(base.Span{File: id, Lo: row.at}, "'")}; !slices.Equal(d.Fixits, want) {
+				t.Errorf("%q: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			tb, after := lexAll(t, applyFixits(row.src, d))
+			if got := after.All(); len(got) != 0 {
+				t.Errorf("%q: after the fix-it there are diagnostics: %+v", row.src, got)
+			}
+			if len(tb.Tokens) == 0 || tb.Tokens[0].Kind != syntax.Char {
+				t.Errorf("%q: after the fix-it the first token is not a Char: %+v", row.src, tb.Tokens)
+			}
+		}
+
+		// A quote at the end of the line would not make a character out of
+		// none or of several: `'a b` would become the three characters of
+		// `'a b'` and a lone `'` the none of `''`, E0108 again, and so would a
+		// comment that follows the quote, which the literal swallows. So there
+		// is no edit. With nothing after the quote the help is the one of an
+		// empty literal; with several characters there is nothing concrete to
+		// propose, and the label says what a literal holds. (A lone CR at the
+		// end of the file is contents: `'a\r` has two characters.)
+		for _, row := range []struct{ src, help string }{
+			{"'", "write the character between the quotes"},
+			{"'\n", "write the character between the quotes"},
+			{"'\r\n", "write the character between the quotes"},
+			{"'a b\nx", ""},
+			{"'a\r", ""},
+			{"'ab", ""},
+			{"'\u00e9a", ""},
+			{"let c = 'a   // the letter a\n", ""},
+		} {
+			_, sink, _, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			if d := diags[0]; d.Help != row.help || len(d.Fixits) != 0 {
+				t.Errorf("%q: help %q and fixits %+v, want help %q and no fix-it", row.src, d.Help, d.Fixits, row.help)
+			}
+		}
+
+		// A backslash that ends the line is not an escape, and a quote after it
+		// would be one: the fix-it would leave the literal unclosed, so there
+		// is only the help.
+		for _, src := range []string{"'\\", "'a\\\n", "'\\\\\\\n"} {
+			_, sink, _, _ := lexFile(t, src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", src, len(diags), diags)
+				continue
+			}
+			if d := diags[0]; d.Help != "close it with `'`" || len(d.Fixits) != 0 {
+				t.Errorf("%q: help %q and fixits %+v, want the help and no fix-it", src, d.Help, d.Fixits)
+			}
+		}
 	})
 	t.Run("plain_string", func(t *testing.T) {
 		src := `"a\tb"`
@@ -502,6 +751,61 @@ func TestStrings(t *testing.T) {
 		wantUnterminated(t, src, sink.All(), id, 2)
 		wantShape(t, src, tb, in, "LowerIdent(a)", "Newline", "Error", "Eof")
 		wantNewlines(t, src, tb, false, false, true, false)
+	})
+	t.Run("e0110_fixit_closes_the_string", func(t *testing.T) {
+		// The closing quote goes where the line breaks, before the CR of a CRLF,
+		// or at the end of the file; after an interpolation that is closed, too.
+		rows := []struct {
+			src string
+			at  uint32
+		}{
+			{"\"abc\n", 4},
+			{"\"abc\r\n", 4},
+			{"\"abc", 4},
+			{"\"abc\r", 5}, // a lone CR is contents
+			{"\"\"\n\"abc\nx", 7},
+			{"\"a ${b} c\n", 9},
+			{"\"a ${b}\n", 7},
+			{"\"abc\\\\\n", 6}, // an escaped backslash is complete
+			// The quote goes at the end of the line, also when what follows
+			// the opening quote is code that belongs outside the string: the
+			// lexer cannot tell, and the help says where the quote goes.
+			{"print(\"abc) }\n", 13},
+		}
+		for _, row := range rows {
+			_, sink, id, _ := lexFile(t, row.src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", row.src, len(diags), diags)
+				continue
+			}
+			d := diags[0]
+			if want := "close the string with `\"` at the end of the line"; d.Help != want {
+				t.Errorf("%q: help %q, want %q", row.src, d.Help, want)
+			}
+			if want := []diag.FixIt{diag.Insert(base.Span{File: id, Lo: row.at}, `"`)}; !slices.Equal(d.Fixits, want) {
+				t.Errorf("%q: fixits %+v, want %+v", row.src, d.Fixits, want)
+			}
+			_, after := lexAll(t, applyFixits(row.src, d))
+			if after.Count(diag.E(110)) != 0 {
+				t.Errorf("%q: after the fix-it, the string is still unterminated: %+v", row.src, after.All())
+			}
+		}
+
+		// Where a quote would not close the string there is only the help: in the
+		// code of an interpolation that is still open (it needs its `}` first),
+		// and after a backslash that ends the line (which would escape it).
+		for _, src := range []string{"\"a ${ b\n", "\"${\n", "\"abc\\\n", "\"abc\\\\\\\n"} {
+			_, sink, _, _ := lexFile(t, src)
+			diags := sink.All()
+			if len(diags) != 1 {
+				t.Errorf("%q: got %d diagnostics, want exactly 1: %+v", src, len(diags), diags)
+				continue
+			}
+			if d := diags[0]; d.Help != "close the string with `\"`" || len(d.Fixits) != 0 {
+				t.Errorf("%q: help %q and fixits %+v, want the help and no fix-it", src, d.Help, d.Fixits)
+			}
+		}
 	})
 	t.Run("backslash_before_crlf_E0110_only", func(t *testing.T) {
 		// A backslash at the end of a line is not an escape, so the only

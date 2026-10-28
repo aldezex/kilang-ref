@@ -14,16 +14,23 @@ import (
 // tabWidth is the distance between tab stops when a source line is shown.
 const tabWidth = 4
 
-// A line of at most maxShownBytes bytes is shown whole. A longer one (a
-// minified file, or a binary renamed to .ki, can have a single line of
-// megabytes) is shown as a window of at most maxShownBytes bytes plus the rest
-// of the character the cut falls in (up to three bytes), around its labels,
-// with "..." at each end that was cut, so the size of a diagnostic does not
-// depend on the size of the file. The window starts contextBytes bytes before
-// the first label.
+// A line of at most maxShownBytes bytes is shown whole (for the lines of a
+// label; the two lines of a fix-it pair are cut together, see RenderHuman). A
+// longer one (a minified file, or a binary renamed to .ki, can have a single
+// line of megabytes) is shown as a window of at most maxShownBytes bytes plus
+// the rest of the character the cut falls in (up to three bytes), with "..."
+// at each end that was cut, so the size of a diagnostic does not depend on the
+// size of the file. The window is built around the labels of the line that
+// RenderHuman names or, in a fix-it pair, around its fix-its, and starts
+// contextBytes bytes before the first of them.
 const (
 	maxShownBytes = 200
 	contextBytes  = 40
+	// roomForLabels is how many bytes the labels that a window is built around
+	// may cover together, from the start of the first to the end of the last:
+	// what is left of maxShownBytes once contextBytes of text are kept on each
+	// side. A label that would make them cover more does not move the window.
+	roomForLabels = maxShownBytes - 2*contextBytes
 )
 
 // cutMark stands for the part of a long line that is not shown.
@@ -31,16 +38,41 @@ const cutMark = "..."
 
 // RenderHuman writes d the way a person reads it: the severity, code and
 // message, then each line that has a label with marks under it, then the notes
-// and the help. The result ends with a newline and has no color; color arrives
-// with ki explain.
+// and the help, and, if d has fix-its, the same lines of the file as they are
+// and as they would be with the fix-its applied. The result ends with a newline
+// and has no color; color arrives with ki explain.
 //
-// A line longer than maxShownBytes is shown as a window around its labels (at
-// most maxShownBytes bytes plus the rest of a character), with "..." where
-// text was cut; a label that does not fit in the window is marked up to its
-// edge.
+// A line longer than maxShownBytes is shown as a window (at most
+// maxShownBytes bytes plus the rest of a character), with "..." where text was
+// cut. The window is centred on the primary label of the line, or on the first
+// label of a line that does not have it, with contextBytes bytes of text on
+// each side, so a primary label that fits in roomForLabels bytes is shown whole
+// and with its own mark, wherever the other labels are. It is widened to the
+// other labels of the line, in the order of their position, one at a time,
+// while all the labels it is built around fit in roomForLabels bytes. A
+// label that does not move the window is drawn as far as the window goes: one
+// that reaches past the edge up to the edge, and one that is wholly outside as
+// a single mark at the edge nearest to it, under the "..." there.
 //
-// Every label of d must be in the file of the primary label. A label in
-// another file would show text of the wrong file, so it panics instead.
+// The fix-its follow the help line, after a line with only the margin and a
+// bar. For each line of the file that a fix-it touches, in increasing order, two
+// lines come: the line number, " - " and the line as it is, and the line number,
+// " + " and the line with the fix-its of that line applied. They are drawn as
+// the code lines are: the same display rules, with no trailing spaces, and a
+// window around the fix-its, in place of the labels, if the line is long. The
+// two lines of a pair are cut together: if either is longer than maxShownBytes
+// both are windowed, so that an edit that takes a line across the limit does
+// not leave one whole beside the other cut, with text that the first shows
+// seeming to vanish in the second. Each edit works on the offsets of the
+// original line, so it does not matter that an earlier edit made the line
+// longer or shorter. The width of the line numbers is that of the largest one
+// shown anywhere in the diagnostic, the lines of the fix-its included.
+//
+// RenderHuman panics, because the pass that built d is wrong and not the user's
+// program, if a label or a fix-it is in another file than the primary label, if
+// d has fix-its and no help line (a fix-it is only ever offered together with
+// the sentence that says what it does), if a fix-it covers a line break, or if
+// two fix-its of a line overlap.
 func RenderHuman(d Diagnostic, sm *base.SourceManager) string {
 	file := d.Primary.Span.File
 	type placed struct {
@@ -75,8 +107,15 @@ func RenderHuman(d Diagnostic, sm *base.SourceManager) string {
 		return int(a.label.Span.Lo) - int(b.label.Span.Lo)
 	})
 
-	// g is the width of the largest line number that will be shown.
-	g := len(strconv.Itoa(int(all[len(all)-1].line)))
+	edits := groupFixits(d, sm)
+
+	// g is the width of the largest line number that will be shown, in the
+	// code lines and in the fix-it lines alike.
+	maxLine := all[len(all)-1].line
+	if n := len(edits); n > 0 {
+		maxLine = max(maxLine, edits[n-1].line)
+	}
+	g := len(strconv.Itoa(int(maxLine)))
 	pad := strings.Repeat(" ", g)
 
 	var sb strings.Builder
@@ -109,43 +148,43 @@ func RenderHuman(d Diagnostic, sm *base.SourceManager) string {
 		// marked up to the end of the first line it is on.
 		type extent struct{ lo, hi int }
 		extents := make([]extent, len(group))
-		first, last := len(text), 0
 		for n, l := range group {
 			lo := int(min(l.label.Span.Lo-start, uint32(len(text))))
 			hi := int(min(max(l.label.Span.Hi-start, uint32(lo)), uint32(len(text))))
 			extents[n] = extent{lo, hi}
-			first, last = min(first, lo), max(last, hi)
 		}
-		from, to := lineWindow(text, first, last)
-
-		shown, cols := displayLine(text[from:to])
-		margin := 0 // columns shown before the first byte of the window
-		if from > 0 {
-			shown, margin = cutMark+shown, len(cutMark)
+		// The window is built around the first label of the line, which is
+		// the primary one if the line has it (the sort above), and around each
+		// later label that fits with the ones already taken. Taking every
+		// label would anchor the window on the leftmost one, and a secondary
+		// label far to the left of the primary would push the primary mark to
+		// the edge of the window.
+		first, last := extents[0].lo, extents[0].hi
+		for _, e := range extents[1:] {
+			if lo, hi := min(first, e.lo), max(last, e.hi); hi-lo <= roomForLabels {
+				first, last = lo, hi
+			}
 		}
-		if to < len(text) {
-			shown += cutMark
-		} else {
-			// Trailing spaces and tabs are invisible. cols still counts them.
-			shown = strings.TrimRight(shown, " ")
-		}
-		num := strconv.Itoa(int(line))
-		sb.WriteString(strings.Repeat(" ", g-len(num)) + num + " |")
-		if shown != "" {
-			sb.WriteString(" " + shown)
-		}
-		sb.WriteString("\n")
+		w := showWindow(text, first, last, fitsWhole(text))
+		writeNumbered(&sb, g, line, "|", w.shown)
 
 		for n, l := range group {
 			// A label outside the window is marked at the nearest edge of it.
-			lo := min(max(extents[n].lo, from), to) - from
-			hi := min(max(extents[n].hi, from), to) - from
-			width := max(cols[hi]-cols[lo], 1)
+			lo := min(max(extents[n].lo, w.from), w.to) - w.from
+			hi := min(max(extents[n].hi, w.from), w.to) - w.from
+			width := max(w.cols[hi]-w.cols[lo], 1)
+			col := w.margin + w.cols[lo]
+			if extents[n].lo < w.from && extents[n].hi <= w.from {
+				// Wholly before the window: under the last character of the
+				// "..." that stands for it, as a label past the end is under
+				// the first character of the "..." there.
+				col = w.margin - 1
+			}
 			mark := "-"
 			if l.primary {
 				mark = "^"
 			}
-			sb.WriteString(pad + " | " + strings.Repeat(" ", margin+cols[lo]) + strings.Repeat(mark, width))
+			sb.WriteString(pad + " | " + strings.Repeat(" ", col) + strings.Repeat(mark, width))
 			if l.label.Message != "" {
 				sb.WriteString(" " + l.label.Message)
 			}
@@ -159,19 +198,177 @@ func RenderHuman(d Diagnostic, sm *base.SourceManager) string {
 	if d.Help != "" {
 		sb.WriteString(pad + " = help: " + d.Help + "\n")
 	}
+	if len(edits) > 0 {
+		sb.WriteString(pad + " |\n")
+	}
+	for _, le := range edits {
+		text := sm.LineText(file, le.line)
+		start := sm.LineStart(file, le.line)
+		first := int(le.fixits[0].Span.Lo - start)
+		last := int(le.fixits[len(le.fixits)-1].Span.Hi - start)
+		patched, patchedLast := applyFixits(text, start, le.fixits)
+		// One decision for the pair (see above): each line asking for itself
+		// would show the old line whole and cut the new one, or the other way
+		// round, at the limit.
+		whole := fitsWhole(text) && fitsWhole(patched)
+		old := showWindow(text, first, last, whole)
+		writeNumbered(&sb, g, le.line, "-", old.shown)
+		now := showWindow(patched, first, patchedLast, whole)
+		writeNumbered(&sb, g, le.line, "+", now.shown)
+	}
 	return sb.String()
 }
 
+// window is the part of a source line that is shown, ready to print.
+type window struct {
+	// shown is the text to print for the line, with the cut marks and without
+	// trailing spaces if the line ends in the window.
+	shown string
+	// cols[i] is the number of columns shown before byte from+i of the line,
+	// and cols[to-from] is the width of the window (not counting the margin).
+	cols []int
+	// from and to are the offsets in the line of the first byte shown and of
+	// the one after the last.
+	from, to int
+	// margin is the number of columns shown before the first byte of the
+	// window: the cut mark, if text was cut at the start.
+	margin int
+}
+
+// fitsWhole reports whether a source line is short enough to be shown whole.
+func fitsWhole(text string) bool { return len(text) <= maxShownBytes }
+
+// showWindow returns what is shown of text, a source line, given that the
+// window is built around the labels or fix-its that cover the bytes [first,
+// last). If whole is true the line is shown whole; otherwise see lineWindow for
+// which part is shown. A line that fits is cut too when whole is false: the
+// caller decides, because the old and the new line of a fix-it are cut
+// together.
+func showWindow(text string, first, last int, whole bool) window {
+	from, to := lineWindow(text, first, last, whole)
+	shown, cols := displayLine(text[from:to])
+	margin := 0
+	if from > 0 {
+		shown, margin = cutMark+shown, len(cutMark)
+	}
+	if to < len(text) {
+		shown += cutMark
+	} else {
+		// Trailing spaces and tabs are invisible. cols still counts them.
+		shown = strings.TrimRight(shown, " ")
+	}
+	return window{shown: shown, cols: cols, from: from, to: to, margin: margin}
+}
+
+// writeNumbered writes one line that starts with the line number, right
+// aligned in g columns, and the mark that says what the line is: "|" for a
+// line of code, "-" for the old line of a fix-it and "+" for the new one. The
+// text follows after a space, unless there is none, so that an empty line has
+// no trailing space.
+func writeNumbered(sb *strings.Builder, g int, line uint32, mark, text string) {
+	num := strconv.Itoa(int(line))
+	sb.WriteString(strings.Repeat(" ", g-len(num)) + num + " " + mark)
+	if text != "" {
+		sb.WriteString(" " + text)
+	}
+	sb.WriteString("\n")
+}
+
+// lineEdits are the fix-its of d that fall on one line of the file, by the
+// offset where they start. Of two that start at the same offset the later one
+// in d.Fixits comes first (see groupFixits).
+type lineEdits struct {
+	line   uint32
+	fixits []FixIt
+}
+
+// groupFixits checks the fix-its of d and returns them grouped by line, the
+// lines in increasing order and on each line the fix-its in the order of their
+// position. Of those at one position the later one in d.Fixits comes first,
+// which is what applying them from the right gives (see FixIt). It panics for
+// the four reasons RenderHuman lists.
+func groupFixits(d Diagnostic, sm *base.SourceManager) []lineEdits {
+	if len(d.Fixits) == 0 {
+		return nil
+	}
+	if d.Help == "" {
+		panic("diag: fix-its without a help line")
+	}
+	file := d.Primary.Span.File
+	type placed struct {
+		line  uint32
+		index int // position in d.Fixits
+		fix   FixIt
+	}
+	all := make([]placed, 0, len(d.Fixits))
+	for i, f := range d.Fixits {
+		if f.Span.File != file {
+			panic(fmt.Sprintf("diag: fix-it in file %d, primary in file %d", f.Span.File, file))
+		}
+		line := sm.LineCol(file, f.Span.Lo).Line
+		// The line break is not part of the line: the text of the line ends
+		// before the "\n" and before the "\r" of a "\r\n". A fix-it that goes
+		// past that would replace the break.
+		if f.Span.Hi > sm.LineStart(file, line)+uint32(len(sm.LineText(file, line))) {
+			panic("diag: fix-it spans a line break")
+		}
+		all = append(all, placed{line, i, f})
+	}
+	slices.SortFunc(all, func(a, b placed) int {
+		if a.line != b.line {
+			return int(a.line) - int(b.line)
+		}
+		if a.fix.Span.Lo != b.fix.Span.Lo {
+			return int(a.fix.Span.Lo) - int(b.fix.Span.Lo)
+		}
+		return b.index - a.index
+	})
+	var out []lineEdits
+	for i, p := range all {
+		if i > 0 && all[i-1].line == p.line {
+			if prev := all[i-1].fix; p.fix.Span.Lo < prev.Span.Hi {
+				panic("diag: overlapping fix-its")
+			}
+			out[len(out)-1].fixits = append(out[len(out)-1].fixits, p.fix)
+			continue
+		}
+		out = append(out, lineEdits{line: p.line, fixits: []FixIt{p.fix}})
+	}
+	return out
+}
+
+// applyFixits returns text, the line of the file that starts at offset start,
+// with fixits applied, and where the last replacement ends in the result. The
+// fix-its are sorted by position, those at one position with the later one of
+// d.Fixits first, and do not overlap (see groupFixits). Each one is placed by
+// its offsets in the original line, so an edit never moves another: this is the
+// same as applying them from the right.
+func applyFixits(text string, start uint32, fixits []FixIt) (patched string, lastEnd int) {
+	var sb strings.Builder
+	at := 0 // how much of text has been copied
+	for _, f := range fixits {
+		lo, hi := int(f.Span.Lo-start), int(f.Span.Hi-start)
+		sb.WriteString(text[at:lo])
+		sb.WriteString(f.Replacement)
+		lastEnd = sb.Len()
+		at = hi
+	}
+	sb.WriteString(text[at:])
+	return sb.String(), lastEnd
+}
+
 // lineWindow returns the part [from, to) of a source line that is shown, given
-// that the labels of the line cover the bytes [first, last). A line of at most
-// maxShownBytes bytes is shown whole. For a longer one the window starts
-// contextBytes before first and ends contextBytes after last, but is not
-// longer than maxShownBytes bytes plus the rest of the character its end falls
-// in: both ends move forward to the start of a character, so a character is not
-// cut in two, and the end can move after it has been capped (a window of 201 to
-// 203 bytes).
-func lineWindow(text string, first, last int) (from, to int) {
-	if len(text) <= maxShownBytes {
+// that the window is built around the bytes [first, last): the ones that the
+// labels RenderHuman takes cover, or the fix-its of a pair. If whole is true
+// that is the line itself, and callers pass fitsWhole(text) unless the line is
+// shown together with another one. Otherwise the window starts contextBytes
+// before first and ends contextBytes after last, but is not longer than
+// maxShownBytes bytes plus the rest of the character its end falls in: both
+// ends move forward to the start of a character, so a character is not cut in
+// two, and the end can move after it has been capped (a window of 201 to 203
+// bytes).
+func lineWindow(text string, first, last int, whole bool) (from, to int) {
+	if whole {
 		return 0, len(text)
 	}
 	from = max(first-contextBytes, 0)
@@ -291,12 +488,28 @@ type jsonDiagnostic struct {
 	Labels   []jsonLabel `json:"labels"`
 	Notes    []string    `json:"notes"`
 	Help     *string     `json:"help"`
+	Fixits   []jsonFixit `json:"fixits"`
+}
+
+// jsonFixit is one fix-it in the JSON output: where the text to replace starts
+// and ends (the end is exclusive, so an insertion has the same start and end)
+// and what goes there.
+type jsonFixit struct {
+	Line        uint32 `json:"line"`
+	Col         uint32 `json:"col"`
+	EndLine     uint32 `json:"end_line"`
+	EndCol      uint32 `json:"end_col"`
+	Replacement string `json:"replacement"`
 }
 
 // RenderJSON writes d as one line of JSON for tools to read: the keys are
 // severity, code, message, path, line, col, labels (the primary one first),
-// notes (an empty array if there are none) and help (null if there is none).
-// The result ends with a newline.
+// notes (an empty array if there are none), help (null if there is none) and
+// fixits (an empty array if there are none; each has line, col, end_line,
+// end_col and replacement, with positions as for the labels and the end
+// exclusive; the array has the order of d.Fixits, and a tool that applies the
+// edits writes the later of two at one offset first, as FixIt says). The result
+// ends with a newline.
 func RenderJSON(d Diagnostic, sm *base.SourceManager) string {
 	file := d.Primary.Span.File
 	pos := sm.LineCol(file, d.Primary.Span.Lo)
@@ -309,6 +522,7 @@ func RenderJSON(d Diagnostic, sm *base.SourceManager) string {
 		Col:      pos.Col,
 		Labels:   make([]jsonLabel, 0, 1+len(d.Secondary)),
 		Notes:    []string{},
+		Fixits:   make([]jsonFixit, 0, len(d.Fixits)),
 	}
 	add := func(l Label, primary bool) {
 		p := sm.LineCol(l.Span.File, l.Span.Lo)
@@ -321,6 +535,12 @@ func RenderJSON(d Diagnostic, sm *base.SourceManager) string {
 	out.Notes = append(out.Notes, d.Notes...)
 	if d.Help != "" {
 		out.Help = &d.Help
+	}
+	for _, f := range d.Fixits {
+		from, to := sm.LineCol(f.Span.File, f.Span.Lo), sm.LineCol(f.Span.File, f.Span.Hi)
+		out.Fixits = append(out.Fixits, jsonFixit{
+			Line: from.Line, Col: from.Col, EndLine: to.Line, EndCol: to.Col, Replacement: f.Replacement,
+		})
 	}
 	// Encode, unlike Marshal, can be told not to write <, > and & as \u003c,
 	// \u003e and \u0026 (a protection for JSON inside HTML that does not apply

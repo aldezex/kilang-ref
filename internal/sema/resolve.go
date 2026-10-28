@@ -85,7 +85,8 @@ const (
 	// ResLocal is a name that stands for a local variable, Res.Local.
 	ResLocal
 	// ResError is a name that stands for nothing: Resolve has reported it
-	// (E0301).
+	// (E0301), or it is the name of a function whose signature the parser could
+	// not read, which the parser has reported.
 	ResError
 )
 
@@ -157,12 +158,24 @@ type ResolvedProgram struct {
 // repeated parameter (TestScopes/shadowing_picks_innermost pins this).
 //
 // It reports to sink: E0301 for a name that stands for nothing, with the help
-// line "did you mean `fib`?" if a variable or definition it could have stood
-// for is spelled almost like it; E0302 for a function defined twice in a
-// module, E0304 for `#[extern]` anywhere but the standard library (any module
-// but user) and E0305 for any other attribute, in any module. A tree that has
-// syntax errors is resolved like any other: its error nodes stand for nothing
-// and are skipped. Resolve does not change the modules.
+// line "did you mean `fib`?" and the fix-it that writes `fib` if a variable or
+// definition it could have stood for is spelled almost like it, and with a
+// label on the `let` and a note if the name is the one that `let` binds;
+// E0302 for a function defined twice in a module, E0304 for `#[extern]` in the
+// user's module and E0305 for any other attribute, in any module. The last two
+// have the fix-it that removes the attribute when it is on one line, except
+// E0304 on a function with no body (the edit alone would leave a function
+// without a body), and E0305 in the standard library has the one that fixes the
+// name when it is close to `extern`; in the user's module `extern` is not an
+// attribute to suggest (it is E0304 there), so E0305 only offers to remove the
+// attribute. A tree that has syntax errors is resolved like any other: its
+// error nodes are skipped and define nothing. The exception is a function whose
+// signature the parser could not read after its name: that name stands for
+// ResError wherever the module uses it, and Resolve reports nothing for it (the
+// parser has reported the signature), so a call to it does not add an E0301 to
+// that error. It is not a definition (it has no Def), a definition of the same
+// name in the module wins over it and a variable hides it. Resolve does not
+// change the modules.
 //
 // The second pass recurses once per level of the tree. Parse bounds that depth
 // (MaxNesting levels, and the operators and calls of one statement, MaxChain,
@@ -172,6 +185,7 @@ func Resolve(mods []*syntax.Module, user ModuleIdx, in *base.Interner, sink *dia
 	r := &resolver{mods: mods, user: user, in: in, sink: sink, rp: &ResolvedProgram{}}
 	r.rp.Modules = make([]ModuleRes, len(mods))
 	r.tops = make([]map[base.Symbol]DefID, len(mods))
+	r.broken = make(map[moduleName]bool)
 	for i, m := range mods {
 		r.rp.Modules[i] = ModuleRes{
 			ExprRes:     make([]Res, m.Exprs.Len()),
@@ -198,6 +212,11 @@ type resolver struct {
 	// depends on the order of a map.
 	tops []map[base.Symbol]DefID
 
+	// broken holds the functions whose signature the parser could not read
+	// (error items that kept their name). They are not definitions, but they
+	// exist: see lookupDef. None is the zero value.
+	broken map[moduleName]bool
+
 	// The module whose function bodies the second pass is walking, its tree
 	// and its table.
 	mod ModuleIdx
@@ -208,6 +227,25 @@ type resolver struct {
 	// that is being walked.
 	owner DefID
 	scope *scope
+
+	// initializing holds the `let`s whose initializer is being walked, the
+	// innermost last: the name each one binds and where. A name that is unknown
+	// there and is the name of one of them is `let x = x`, which gets an
+	// explanation of its own (see name).
+	initializing []letName
+}
+
+// moduleName is a name in the name space of one module.
+type moduleName struct {
+	mod  ModuleIdx
+	name base.Symbol
+}
+
+// letName is the name that a `let` binds, with the span of the name in the
+// `let`.
+type letName struct {
+	name base.Symbol
+	span base.Span
 }
 
 // collect is the first pass: it makes a Def for every function of every module.
@@ -220,7 +258,14 @@ func (r *resolver) collect() {
 			case syntax.ItemFn:
 				r.define(mod, id, it)
 			case syntax.ItemError:
-				// The parser could not read it and has reported that.
+				// The parser could not read it and has reported that. If it
+				// had read the name of a function before the signature went
+				// wrong, the function exists, only without a signature that
+				// anything can use: remember the name, so that a call to it
+				// is not an unknown name (see lookupDef).
+				if it.Name != base.NoSymbol {
+					r.broken[moduleName{mod, it.Name}] = true
+				}
 			default:
 				panic("unreachable")
 			}
@@ -244,9 +289,11 @@ func (r *resolver) define(mod ModuleIdx, id syntax.ItemID, it syntax.Item) {
 		r.tops[mod][it.Name] = def
 		return
 	}
+	// No fix-it: which of the two stays is not for the compiler to say.
 	r.sink.Report(diag.NewError(diag.E(302), "`"+r.in.String(it.Name)+"` is defined more than once",
 		diag.Label{Span: it.NameSpan, Message: "redefined here"}).
-		WithSecondary(diag.Label{Span: r.rp.Defs.Get(first).Span, Message: "first defined here"}))
+		WithSecondary(diag.Label{Span: r.rp.Defs.Get(first).Span, Message: "first defined here"}).
+		WithHelp("rename one of them, or delete the second"))
 }
 
 // attributes checks the attributes of the function it of module m and says what
@@ -260,11 +307,20 @@ func (r *resolver) attributes(mod ModuleIdx, m *syntax.Module, it syntax.Item) (
 		name := string(r.in.Bytes(a.Name))
 		switch {
 		case name != syntax.ExternAttr:
-			r.sink.Report(diag.NewError(diag.E(305), "unknown attribute `"+name+"`",
-				diag.Label{Span: a.Span, Message: "the only attribute in Part I is `#[extern]`"}))
+			r.unknownAttribute(mod, a, name)
 		case mod == r.user:
-			r.sink.Report(diag.NewError(diag.E(304), "`#[extern]` is only allowed in the standard library",
-				diag.Label{Span: a.Span, Message: "remove the attribute"}))
+			d := diag.NewError(diag.E(304), "`#[extern]` is only allowed in the standard library",
+				diag.Label{Span: a.Span, Message: "not allowed outside the standard library"}).
+				WithNote("extern functions are declared by the standard library and implemented by the runtime; a program calls them through the prelude")
+			if it.HasBody {
+				d = removable(d, a, "remove the attribute")
+			} else {
+				// An extern function has no body, and removing the attribute
+				// leaves one that the parser refuses (E0201), so the help names
+				// both steps and there is no edit that does either alone.
+				d = d.WithHelp("remove the attribute, and write a body for the function")
+			}
+			r.sink.Report(d)
 		case kind != DefExternFn:
 			kind = DefExternFn
 			if len(a.Args) > 0 {
@@ -275,20 +331,62 @@ func (r *resolver) attributes(mod ModuleIdx, m *syntax.Module, it syntax.Item) (
 	return kind, externName
 }
 
-// lookupDef returns the top-level definition that name stands for in module mod:
-// the module's own, and failing that a `pub` one of the prelude. (The prelude
-// itself has no other module to fall back on.) It knows nothing of local
-// variables: see name.
-func (r *resolver) lookupDef(mod ModuleIdx, name base.Symbol) (DefID, bool) {
+// unknownAttribute reports E0305 for the attribute a, called name, of a function
+// of module mod. In the standard library, if the name is close to `extern` the
+// help suggests it and the fix-it writes it in place of the name; otherwise the
+// help is to remove the attribute. In the user's module there is nothing to
+// suggest, because `extern` is not allowed there (E0304) and a program has no
+// other attribute: the help is to remove it, and the note does not list
+// `extern` as one that Ki knows.
+func (r *resolver) unknownAttribute(mod ModuleIdx, a syntax.Attr, name string) {
+	d := diag.NewError(diag.E(305), "unknown attribute `"+name+"`",
+		diag.Label{Span: a.Span, Message: "not an attribute Ki knows"})
+	if mod == r.user {
+		r.sink.Report(removable(d.WithNote("a program cannot use attributes yet"), a, "remove it"))
+		return
+	}
+	d = d.WithNote("the attributes Ki knows: `" + syntax.ExternAttr + "`")
+	if best, ok := suggest(name, []string{syntax.ExternAttr}); ok {
+		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(a.NameSpan, best))
+	} else {
+		d = removable(d, a, "remove it")
+	}
+	r.sink.Report(d)
+}
+
+// removable adds to d the help line help and, if the attribute a is on one line,
+// the fix-it that deletes it. An attribute can run over several lines (a line
+// break inside its brackets or parentheses is only a space), and a fix-it is
+// an edit of one line, so for that one the help is all there is.
+func removable(d diag.Diagnostic, a syntax.Attr, help string) diag.Diagnostic {
+	d = d.WithHelp(help)
+	if a.OneLine {
+		d = d.WithFixIt(diag.Delete(a.Span))
+	}
+	return d
+}
+
+// lookupDef returns what name stands for among the top-level functions of module
+// mod, and whether it stands for anything there: the module's own definition;
+// failing that a function of the module whose signature the parser could not
+// read, which is ResError, because there is nothing to resolve to and the parser
+// has reported the mistake; and failing that a `pub` definition of the prelude.
+// (The prelude itself has no other module to fall back on.) A function that
+// could not be read comes before the prelude's, as the module's own definition
+// does. It knows nothing of local variables: see name.
+func (r *resolver) lookupDef(mod ModuleIdx, name base.Symbol) (Res, bool) {
 	if def, ok := r.tops[mod][name]; ok {
-		return def, true
+		return Res{Kind: ResDef, Def: def}, true
+	}
+	if r.broken[moduleName{mod, name}] {
+		return Res{Kind: ResError}, true
 	}
 	if mod != preludeModule {
 		if def, ok := r.tops[preludeModule][name]; ok && r.rp.Defs.Get(def).Pub {
-			return def, true
+			return Res{Kind: ResDef, Def: def}, true
 		}
 	}
-	return 0, false
+	return Res{}, false
 }
 
 // bodies is the second pass: it goes through the definitions, which are in the
@@ -334,24 +432,37 @@ func (r *resolver) bind(name base.Symbol, span base.Span) LocalID {
 
 // name says what the name written in e stands for: a local variable if a scope
 // has one by that name, and failing that a definition. If there is none it
-// reports E0301, with a help line if a name that it could have meant exists
-// (see suggest) and the sink has not yet dropped an error, and says ResError.
+// reports E0301, with a help line and a fix-it if a name that it could have
+// meant exists (see suggest) and the sink has not yet dropped an error, and
+// says ResError. If the name is the one that a `let` whose initializer is being
+// walked binds, the diagnostic points at that `let` and gives the rule.
 func (r *resolver) name(e syntax.Expr) Res {
 	if local, ok := r.scope.lookup(e.Name); ok {
 		return Res{Kind: ResLocal, Local: local}
 	}
-	if def, ok := r.lookupDef(r.mod, e.Name); ok {
-		return Res{Kind: ResDef, Def: def}
+	if res, ok := r.lookupDef(r.mod, e.Name); ok {
+		return res
 	}
 	name := r.in.String(e.Name)
 	d := diag.NewError(diag.E(301), "unknown name `"+name+"`",
 		diag.Label{Span: e.Span, Message: "not found in this scope"})
+	// A `let` is visible only after its own statement, so the name that a `let`
+	// binds is unknown in its initializer. That is a mistake the user may not
+	// see, so the diagnostic points at the `let` and gives the rule. The
+	// innermost `let` that binds the name is the one it points at.
+	for i := len(r.initializing) - 1; i >= 0; i-- {
+		if l := r.initializing[i]; l.name == e.Name {
+			d = d.WithSecondary(diag.Label{Span: l.span, Message: "`" + name + "` is bound by this `let`, which cannot see itself"}).
+				WithNote("a `let` is visible only after its own statement")
+			break
+		}
+	}
 	// The help line costs a pass over every candidate. Once the sink is full it
 	// drops what it is given, so a file with thousands of unknown names would
 	// pay for thousands of suggestions that nobody reads.
 	if !r.sink.Truncated() {
 		if best, ok := suggest(name, r.candidates()); ok {
-			d = d.WithHelp("did you mean `" + best + "`?")
+			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(e.Span, best))
 		}
 	}
 	r.sink.Report(d)
@@ -406,7 +517,9 @@ func (r *resolver) stmt(id syntax.StmtID) {
 	case syntax.StmtLet:
 		// The initializer first: the variable is not bound, so not visible in
 		// it, until the initializer has been resolved.
+		r.initializing = append(r.initializing, letName{name: s.Name, span: s.NameSpan})
 		r.expr(s.Expr)
+		r.initializing = r.initializing[:len(r.initializing)-1]
 		r.res.LetLocal[id] = r.bind(s.Name, s.NameSpan)
 	case syntax.StmtExpr:
 		r.expr(s.Expr)

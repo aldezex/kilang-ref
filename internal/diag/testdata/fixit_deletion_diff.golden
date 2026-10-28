@@ -1,0 +1,9 @@
+error[E0305]: unknown attribute `inline`
+ --> test.ki:1:1
+  |
+1 | #[inline]
+  | ^^^^^^^^^ not an attribute Ki knows
+  = help: remove it
+  |
+1 - #[inline]
+1 +
