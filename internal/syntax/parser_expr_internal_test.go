@@ -689,6 +689,56 @@ func TestParseExpr(t *testing.T) {
 		check("f(1, 2", e.Span, r.span(0, 6))
 	})
 
+	t.Run("call_arg_list_span", func(t *testing.T) {
+		// The OpSpan of a call is its argument list, from the `(` to the `)`
+		// and not the callee's end plus one: the type checker draws E0402 on it.
+		rows := []struct {
+			src    string
+			lo, hi uint32
+		}{
+			{"f(1, 2)", 1, 7},
+			{"f()", 1, 3},
+			{"f( )", 1, 4},
+			{"f(1,)", 1, 5},
+			{"f(\n1)", 1, 5},
+			// A blank between the callee and the `(` is not part of the list,
+			// and neither is the `)` that closes a callee in parentheses.
+			{"f (1)", 2, 5},
+			{"f  ()", 3, 5},
+			{"(f)(1)", 3, 6},
+			{"( f ) (1)", 6, 9},
+		}
+		for _, row := range rows {
+			r := newExprRun(t, row.src)
+			e := r.node(r.p.expr(0))
+			if e.Kind != ExprCall {
+				t.Errorf("%s: kind %d, want ExprCall (%d)", show(row.src), e.Kind, ExprCall)
+				continue
+			}
+			if want := r.span(row.lo, row.hi); e.OpSpan != want {
+				t.Errorf("%s: argument list span %v, want %v", show(row.src), e.OpSpan, want)
+			}
+		}
+		// Each call of a chain has its own list, and the one of an argument
+		// that is a call is inside the list of the outer call.
+		r := newExprRun(t, "f(1)(2)")
+		outer := r.node(r.p.expr(0))
+		if want := r.span(4, 7); outer.OpSpan != want {
+			t.Errorf("f(1)(2): outer list %v, want %v", outer.OpSpan, want)
+		}
+		if want := r.span(1, 4); r.node(outer.Callee).OpSpan != want {
+			t.Errorf("f(1)(2): inner list %v, want %v", r.node(outer.Callee).OpSpan, want)
+		}
+		r = newExprRun(t, "f(g(1), 2)")
+		outer = r.node(r.p.expr(0))
+		if want := r.span(1, 10); outer.OpSpan != want {
+			t.Errorf("f(g(1), 2): outer list %v, want %v", outer.OpSpan, want)
+		}
+		if want := r.span(3, 6); r.node(r.p.m.ExprList(outer.Args)[0]).OpSpan != want {
+			t.Errorf("f(g(1), 2): list of g(1) %v, want %v", r.node(r.p.m.ExprList(outer.Args)[0]).OpSpan, want)
+		}
+	})
+
 	t.Run("malformed_input_still_parses", func(t *testing.T) {
 		// Each of these stops making sense inside an expression. The parser
 		// must come back, print what it understood with an (error) where it

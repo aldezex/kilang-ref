@@ -215,7 +215,7 @@ const (
 	ExprBool                   // Bool
 	ExprUnit                   // `()`; no field
 	ExprName                   // Name
-	ExprCall                   // Callee, Args
+	ExprCall                   // Callee, Args, OpSpan
 	ExprBinary                 // Op, OpSpan, Lhs, Rhs
 	ExprUnary                  // UnOp, OpSpan, Operand
 	ExprIf                     // Cond, Then, Else, HasElse
@@ -244,7 +244,12 @@ type Expr struct {
 	Bool bool
 	Name base.Symbol
 
-	// Operators. OpSpan is the span of the operator itself.
+	// Operators. OpSpan is the span of the operator itself. For a call it is the
+	// argument list, from the `(` to the `)`: the `(` is the operator of a call,
+	// and the span has a width even when there are no arguments. It is not the
+	// end of the callee plus one, because a blank can lie between the callee and
+	// the `(` (`f (x)`) and a callee in parentheses ends before the `)` of its
+	// group (`(f)(x)`).
 	Op                BinOp
 	UnOp              UnOp
 	OpSpan            base.Span

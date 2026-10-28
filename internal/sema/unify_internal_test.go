@@ -563,6 +563,50 @@ func TestUnify(t *testing.T) {
 				withBecause(wantMismatch("expected `Int`, found `Bool`"), row.want))
 		}
 
+		// A reason without a place (the zero Span), or with one in another file
+		// than the found type, has no secondary label, because RenderHuman could
+		// not draw one in another file under the primary label. The rest of the
+		// diagnostic is as it was, for every kind of reason.
+		elsewhere := base.Span{File: unifyFoundAt.File + 1, Lo: 7, Hi: 12}
+		for _, where := range []struct {
+			name string
+			span base.Span
+		}{{"no place", base.Span{}}, {"another file", elsewhere}} {
+			for _, row := range rows {
+				e.check(t, where.name+", "+row.name, i, b, Reason{Kind: row.kind, Because: where.span}, false,
+					wantMismatch("expected `Int`, found `Bool`"))
+			}
+			e.check(t, where.name+", one operand", i, b, Reason{Kind: ReasonOperand, Because: where.span, Detail: "-", Index: 1}, false,
+				wantMismatch("expected `Int`, found `Bool`"))
+			e.check(t, where.name+", two operands", i, b, Reason{Kind: ReasonOperand, Because: where.span, Detail: "+", Index: 2}, false,
+				wantMismatch("expected `Int`, found `Bool`"))
+			// The help of a body that returns `()` does not depend on the place.
+			e.check(t, where.name+", help at the tail", e.unitT, i, Reason{Kind: ReasonBlockTail, Because: where.span, CanReturn: true}, false,
+				wantMismatch("expected `()`, found `Int`").WithHelp(unusedHelp))
+		}
+		// The zero Span is told from a real span of file 0 by being the zero Span
+		// and not by its file. File 0 is the user's own file (the prelude is file
+		// 1), so the zero Span has the file of any type found in the program: a
+		// callee that is a local (`let g = f; g(true)`) has no place for its
+		// parameter, and a guard that compared only the files would draw a label
+		// at the start of the program. The rows above put the found type in file
+		// 1, where the zero Span differs by its file anyway. Here a found type in
+		// file 0, with no place, has no label either, and one with a place has it.
+		inFileZero := func(because base.Span) []diag.Diagnostic {
+			sink := &diag.Sink{}
+			(&Unifier{Types: e.tbl, Sink: sink}).Unify(i, b, base.Span{File: 0, Lo: 40, Hi: 45}, Reason{Kind: ReasonArgument, Because: because})
+			return sink.All()
+		}
+		primary := diag.Label{Span: base.Span{File: 0, Lo: 40, Hi: 45}, Message: "expected `Int`, found `Bool`"}
+		if got, want := inFileZero(base.Span{}), []diag.Diagnostic{diag.NewError(diag.E(401), "mismatched types", primary)}; !reflect.DeepEqual(got, want) {
+			t.Errorf("found type in file 0, no place: %+v, want %+v", got, want)
+		}
+		placed := base.Span{File: 0, Lo: 7, Hi: 12}
+		want := diag.NewError(diag.E(401), "mismatched types", primary).WithSecondary(diag.Label{Span: placed, Message: "the parameter is declared here"})
+		if got := inFileZero(placed); !reflect.DeepEqual(got, []diag.Diagnostic{want}) {
+			t.Errorf("found type in file 0, place in file 0: %+v, want %+v", got, want)
+		}
+
 		// The branch label shows the type that the first branch has, resolved:
 		// a variable bound to Int is Int, and a function type is written whole.
 		branches := Reason{Kind: ReasonIfBranches, Because: unifyBecause}

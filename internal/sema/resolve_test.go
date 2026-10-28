@@ -560,7 +560,7 @@ fn main() {
 }
 fn later() { helper }
 `
-		p := testsupport.Analyze(t, src)
+		p := testsupport.Resolve(t, src)
 		wantCodes(t, p)
 		rp, m, in := p.Frontend.Resolved, p.Frontend.Modules[p.Frontend.User], p.Session.Interner
 

@@ -28,8 +28,9 @@ const (
 type Frontend struct {
 	Modules []*syntax.Module
 	User    sema.ModuleIdx
-	// Resolved is nil until Analyze has run.
+	// Resolved and Typed are nil until Analyze has run.
 	Resolved *sema.ResolvedProgram
+	Typed    *sema.TypedProgram
 }
 
 // ParseSource lexes and parses source, a file that is called displayPath in
@@ -86,8 +87,12 @@ func (s *Session) parseFiles(user base.FileID) *Frontend {
 	return f
 }
 
-// Analyze runs the passes after the parser on f: so far, name resolution. It
-// reports to the session's sink and does not write them; ReportAll does.
+// Analyze runs the passes after the parser on f: so far, name resolution and
+// the type checker. Both run whether or not the file has errors, because what an
+// earlier pass could not understand has the error type, which the next one
+// never reports again. It reports to the session's sink and does not write
+// them; ReportAll does.
 func (s *Session) Analyze(f *Frontend) {
 	f.Resolved = sema.Resolve(f.Modules, f.User, s.Interner, &s.Sink)
+	f.Typed = sema.Check(f.Modules, f.Resolved, s.Interner, &s.Sink)
 }

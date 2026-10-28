@@ -13,14 +13,16 @@ package driver
 // that begins an item is one more error) and others by one or two errors, such
 // as a block that is not the branch of an `if` (the `else` after it is an error
 // of its own). Last it analyzes the trees (see Analyze): so far it resolves
-// names (see sema.Resolve). It collects the top-level definitions, binds the
-// parameters and the `let`s, resolves every name in the function bodies, and
-// reports what is wrong: a name that stands for nothing (with a suggestion and
-// its edit if one is spelled almost like it), a function defined twice and an
-// attribute that is not allowed. That happens even if the file has syntax
-// errors: the error nodes of the trees define nothing, except that a function
-// whose signature could not be read after its name still has the name, so the
-// calls to it are not reported as unknown names.
+// names (see sema.Resolve) and checks types (see sema.Check). Resolving
+// collects the top-level definitions, binds the parameters and the `let`s,
+// resolves every name in the function bodies, and reports what is wrong: a name
+// that stands for nothing (with a suggestion and its edit if one is spelled
+// almost like it), a function defined twice and an attribute that is not
+// allowed. Checking then finds the type of every expression and reports the
+// ones that do not fit where they are used. That happens even if the file has
+// syntax errors: the error nodes of the trees define nothing and have the error
+// type, except that a function whose signature could not be read after its name
+// still has the name, so the calls to it are not reported as unknown names.
 //
 // With --diagnostics=json each diagnostic is one line of JSON on stderr, but
 // two things are still written there as plain text: the "error: cannot read
