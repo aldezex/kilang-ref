@@ -67,7 +67,8 @@ type Reason struct {
 	// mistake at a tail: the help that Unify adds to it offers that only when
 	// it is true. Only ReasonBlockTail reads it. The checker sets it for the
 	// tail of a body and clears it where returning the value would not mend
-	// anything, as for the `then` branch of an `if` with no `else`: what that
-	// branch ends in is not what the function returns.
+	// anything: for the `main` of the program, whose type E0404 holds to
+	// `() -> ()`, and for the `then` branch of an `if` with no `else`, because
+	// what that branch ends in is not what the function returns.
 	CanReturn bool
 }

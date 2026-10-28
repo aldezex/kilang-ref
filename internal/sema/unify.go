@@ -185,7 +185,8 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 	// what to call the variable, and whether to bind the value or to return it,
 	// is for the author to say. Binding works wherever a statement does;
 	// returning is offered only where the checker says it would (see
-	// Reason.CanReturn).
+	// Reason.CanReturn): it is E0404 in `main`, and no use at the end of a
+	// branch that has no `else`.
 	if r.Kind == ReasonBlockTail && t.Resolve(expected) == t.Builtin(BuiltinUnit) {
 		help := "this value is unused: bind it with `let name = …`"
 		if r.CanReturn {

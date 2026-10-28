@@ -49,8 +49,11 @@ type TypedProgram struct {
 //
 // Signatures come first. Every function gets its type from its annotations:
 // a parameter without one gets a new variable, and a function without `->`
-// returns `()`. Only then are the bodies checked, each against the return type
-// of its function (the tail of a body is the reason ReasonBlockTail). All the
+// returns `()`. A type name that is neither `Int` nor `Bool` is E0406 (an
+// unknown type), reported once where it is written, and has the error type.
+// Then `main`, if the user's file has one, is held to its type, `() -> ()`
+// (E0404). Only then are the bodies checked, each against the return type of
+// its function (the tail of a body is the reason ReasonBlockTail). All the
 // functions of the program are one group whose variables are not generalized
 // (chapter 13 does that), so what a call or a body finds out about a parameter
 // is what every other use of the function sees.
@@ -63,9 +66,11 @@ type TypedProgram struct {
 // type of its callee: E0403 if it is not a function, E0402 if the number of
 // arguments is not the number of parameters. A callee whose type is a variable
 // that nothing has bound yet (a parameter without an annotation) is made a
-// function of the types of the arguments. A type name that is neither `Int` nor
-// `Bool` gets the error type without a word, because no pass reports an unknown
-// type name yet.
+// function of the types of the arguments. The error type of an unknown type
+// name gives no complaint of its own wherever it is used, but it is still part
+// of the types around it, so a message about another mistake can write it as
+// `{error}` (a function with a parameter of an unknown type, used where an
+// `Int` is expected, is a mismatch with `({error}) -> ()`).
 //
 // infer and check call each other once per level of the tree, like Resolve:
 // Parse bounds that depth (MaxNesting levels, and the operators and calls of
@@ -83,6 +88,7 @@ func Check(mods []*syntax.Module, res *ResolvedProgram, in *base.Interner, sink 
 		errT:  tbl.Error(),
 	}
 	c.signatures()
+	c.mainSignature()
 	c.bodies()
 	c.judgeEqualities()
 	return c.tp
@@ -184,8 +190,9 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 		case "Bool":
 			return c.boolT
 		}
-		// Not a type Ki has. Nothing reports that yet, so it is the error type
-		// and the program is accepted as far as this pass can tell.
+		// Not a type Ki has: reported here, once, where it is written, and the
+		// error type from then on, which says nothing more wherever it is used.
+		c.unknownTypeError(te.Span, c.in.String(te.Name))
 		return c.errT
 	case syntax.TypeError:
 		return c.errT
@@ -194,11 +201,80 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 	}
 }
 
+// unknownTypeError reports E0406 for the type name that is written at. The
+// help and its edit are there when a type Ki has is spelled almost like it
+// (`Bol` for `Bool`), as for an unknown name.
+func (c *checker) unknownTypeError(at base.Span, name string) {
+	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
+		WithNote("the types Ki knows: `Int`, `Bool` and `()`")
+	if best, ok := suggest(name, []string{"Int", "Bool"}); ok {
+		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
+	}
+	c.sink.Report(d)
+}
+
+// mainSignature reports E0404 if the `main` of the user's file does not have the
+// type `() -> ()`. A file without a `main` is not for this pass to report (that
+// is E0303, which comes with `ki run`), and one that defines it twice is held to
+// the first, as Resolve is. A return type that is not a type Ki has gives no
+// E0404 of its own: it is E0406, and the error type, which never gives one.
+//
+// The primary label is on the name and says what is wrong with the signature:
+// how many parameters there are, what is returned, or both. The help names the
+// same pieces, and each comes with the fix-it that removes it, the parameters
+// as `()` and the return clause with the blanks just before its `->` (a
+// comment between the `)` and them stays). A signature that runs over several
+// lines has the help and no fix-its, since an edit is of one line, and so does
+// a signature with two things wrong when only one could be edited, so that the
+// help never promises more than the fix-its do. Only the pieces that the help
+// names count: an empty parameter list or a `-> ()` that runs over lines is not
+// what is wrong, and does not take the edit of the other piece away.
+func (c *checker) mainSignature() {
+	if !c.res.HasMain {
+		return
+	}
+	def := c.res.Defs.Get(c.res.Main)
+	it := c.mods[def.Module].ItemNodes.Get(def.Item)
+	fn := c.tp.Types.Node(c.tp.DefTypes.Get(c.res.Main))
+	var declared, remove []string
+	var fixits []diag.FixIt
+	oneLine := true
+	if len(fn.Params) > 0 {
+		declared = append(declared, "with "+strconv.Itoa(len(fn.Params))+" parameter(s)")
+		remove = append(remove, "the parameters")
+		fixits = append(fixits, diag.Replace(it.ParamList, "()"))
+		oneLine = oneLine && it.ParamListOneLine
+	}
+	// The return type of a signature is never a variable, so it needs no
+	// resolving.
+	if fn.Ret != c.unitT && !c.isError(fn.Ret) {
+		ret := c.tp.Types.Show(fn.Ret)
+		declared = append(declared, "returning `"+ret+"`")
+		remove = append(remove, "`-> "+ret+"`")
+		fixits = append(fixits, diag.Delete(it.RetClause))
+		oneLine = oneLine && it.RetClauseOneLine
+	}
+	if len(declared) == 0 {
+		return
+	}
+	d := diag.NewError(diag.E(404), "`main` must be `fn main()`",
+		diag.Label{Span: def.Span, Message: "declared here " + strings.Join(declared, " and ")}).
+		WithNote("it takes no parameters and returns `()`").
+		WithHelp("remove " + strings.Join(remove, " and "))
+	if oneLine {
+		for _, f := range fixits {
+			d = d.WithFixIt(f)
+		}
+	}
+	c.sink.Report(d)
+}
+
 // bodies is the second pass: it checks the body of every function that has one
 // against the function's return type. The reason is the tail of the body, and
 // its secondary label is on the return type, or on the name of the function
 // when it has none. A value at that tail where `()` is wanted can be returned
-// by giving the function a return type, which Reason.CanReturn says.
+// by giving the function a return type, which Reason.CanReturn says, for every
+// function but the `main` of the program: E0404 holds its type to `() -> ()`.
 func (c *checker) bodies() {
 	for id, def := range c.res.Defs.All() {
 		m := c.mods[def.Module]
@@ -211,8 +287,9 @@ func (c *checker) bodies() {
 		if it.HasRet {
 			because = m.Types.Get(it.Ret).Span
 		}
+		isMain := c.res.HasMain && id == c.res.Main
 		c.check(it.Body, c.tp.Types.Node(c.tp.DefTypes.Get(id)).Ret,
-			Reason{Kind: ReasonBlockTail, Because: because, CanReturn: true})
+			Reason{Kind: ReasonBlockTail, Because: because, CanReturn: !isMain})
 	}
 }
 

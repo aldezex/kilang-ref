@@ -162,6 +162,81 @@ func TestParser(t *testing.T) {
 			}
 		}
 	})
+	t.Run("signature_spans", func(t *testing.T) {
+		// ParamList runs from the `(` to the `)`, wherever the name and the
+		// first parameter are in relation to it. RetClause runs from the spaces
+		// and tabs just before the `->` to the end of the return type, so it
+		// starts at the arrow when there are none, and what lies between the `)`
+		// and those blanks (a comment) is not in it. Each has a flag that says
+		// whether a line break lies inside it. The offsets are those of the item
+		// that comes last in src.
+		rows := []struct {
+			name, src        string
+			paramLo, paramHi uint32
+			paramOneLine     bool
+			retLo, retHi     uint32 // both 0 when the function has no `->`
+			retOneLine       bool
+		}{
+			{name: "no parameters", src: "fn f() {}", paramLo: 4, paramHi: 6, paramOneLine: true},
+			{name: "one parameter", src: "fn f(x: Int) {}", paramLo: 4, paramHi: 12, paramOneLine: true},
+			{name: "blanks inside and before", src: "fn f (  x ) -> Int {}", paramLo: 5, paramHi: 11, paramOneLine: true,
+				retLo: 11, retHi: 18, retOneLine: true},
+			{name: "arrow next to the paren", src: "fn f()->Int {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 6, retHi: 11, retOneLine: true},
+			{name: "unit return type", src: "fn f() -> () {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 6, retHi: 12, retOneLine: true},
+			{name: "parameters on three lines", src: "fn f(\n  x: Int\n) {}", paramLo: 4, paramHi: 16},
+			{name: "break after the paren only", src: "fn f(\n  x: Int) {}", paramLo: 4, paramHi: 15},
+			{name: "return type on the next line", src: "fn f() ->\n  Int {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 6, retHi: 15},
+			{name: "comment with a line break", src: "fn f(/* \n */) -> Int {}", paramLo: 4, paramHi: 13,
+				retLo: 13, retHi: 20, retOneLine: true},
+			// A comment between the `)` and the arrow stays out of the clause, with
+			// or without blanks around it. The blanks can be tabs.
+			{name: "comment before the arrow", src: "fn f() /* c */ -> Int {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 14, retHi: 21, retOneLine: true},
+			{name: "comment next to the arrow", src: "fn f()/* c */->Int {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 13, retHi: 18, retOneLine: true},
+			{name: "spaces and a tab before the arrow", src: "fn f() \t ->Int {}", paramLo: 4, paramHi: 6, paramOneLine: true,
+				retLo: 6, retHi: 14, retOneLine: true},
+			{name: "second item", src: "fn a() {}\nfn b(y: Bool) -> Int {}", paramLo: 14, paramHi: 23, paramOneLine: true,
+				retLo: 23, retHi: 30, retOneLine: true},
+			{name: "extern without a body", src: "#[extern(\"x\")] fn f(a: Int) -> Int\n", paramLo: 19, paramHi: 27, paramOneLine: true,
+				retLo: 27, retHi: 34, retOneLine: true},
+		}
+		for _, row := range rows {
+			m, id, _, sink := parseFile(t, row.src)
+			if n := len(sink.All()); n != 0 {
+				t.Errorf("%s: %d diagnostics, want none: %v", row.name, n, sink.All())
+				continue
+			}
+			var it syntax.Item // the last item of src
+			for _, got := range m.ItemNodes.All() {
+				it = got
+			}
+			if want := (base.Span{File: id, Lo: row.paramLo, Hi: row.paramHi}); it.ParamList != want {
+				t.Errorf("%s: ParamList %+v, want %+v", row.name, it.ParamList, want)
+			}
+			if it.ParamListOneLine != row.paramOneLine {
+				t.Errorf("%s: ParamListOneLine %v, want %v", row.name, it.ParamListOneLine, row.paramOneLine)
+			}
+			if row.retHi == 0 {
+				if it.HasRet {
+					t.Errorf("%s: the item has a return type, the row says it has none", row.name)
+				}
+				continue
+			}
+			if !it.HasRet {
+				t.Errorf("%s: the item has no return type", row.name)
+			}
+			if want := (base.Span{File: id, Lo: row.retLo, Hi: row.retHi}); it.RetClause != want {
+				t.Errorf("%s: RetClause %+v, want %+v", row.name, it.RetClause, want)
+			}
+			if it.RetClauseOneLine != row.retOneLine {
+				t.Errorf("%s: RetClauseOneLine %v, want %v", row.name, it.RetClauseOneLine, row.retOneLine)
+			}
+		}
+	})
 	t.Run("extern_then_item", func(t *testing.T) {
 		// A function has a body when a `{` follows on the same line. Without
 		// one, which only an `#[extern]` function may do, it ends at the line

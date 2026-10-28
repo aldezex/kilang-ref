@@ -95,6 +95,22 @@ type Item struct {
 	// Ret is the written return type, meaningful only when HasRet is true.
 	Ret    TypeExprID
 	HasRet bool
+	// ParamList is the parameter list, from its `(` to its `)`: the parser does
+	// not require the name, the `(` and the first parameter to be next to each
+	// other, so it cannot be worked out from NameSpan or from the parameters.
+	// RetClause is the return clause, from the blanks (spaces and tabs) just
+	// before the `->` to the end of the return type, so it holds those blanks,
+	// the arrow and the type, and nothing between the `)` and the blanks, such
+	// as a comment; with no blanks it starts at the arrow. It means something
+	// only when HasRet is true. Both are zero for an ItemError. They are what an
+	// edit that removes the parameters or the return type is made of (E0404).
+	ParamList, RetClause base.Span
+	// ParamListOneLine and RetClauseOneLine say that no line break lies inside
+	// ParamList and RetClause, so an edit over them stays on one line (a line
+	// break inside parentheses is only a space, so a parameter list can run
+	// over several lines). The way Attr.OneLine does for an attribute.
+	// RetClauseOneLine means something only when HasRet is true.
+	ParamListOneLine, RetClauseOneLine bool
 	// Body is the block, meaningful only when HasBody is true. A function
 	// without a body is a declaration whose code lives elsewhere, as in
 	// `#[extern("ki_print_int")] pub fn print(x: Int)`.

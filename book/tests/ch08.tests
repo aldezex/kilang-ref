@@ -279,10 +279,11 @@ why:     la ayuda es la única de E0401, y solo es cierta en un sitio: `fn f() {
          razón y por lo que los tipos son una vez resueltos, no por sus ids. No lleva fix-it porque ligar
          el valor o devolverlo, y cómo llamar a la variable, lo decides tú.
          Lo que propone tiene que funcionar: `let _ = …` no (el parser lo rechaza, una variable tiene
-         nombre), y por eso dice `let name = …`. Y devolver el valor solo se ofrece donde sirve: el valor con
-         el que acaba la rama de un `if` sin `else` no es lo que devuelve la función. `Unify` no sabe en qué
-         sitio está, lo sabe quien lo llama, que lo dice con `CanReturn`; las filas sin él matan una ayuda
-         que ofreciera devolver siempre, y las que lo llevan, una que no lo ofreciera nunca
+         nombre), y por eso dice `let name = …`. Y devolver el valor solo se ofrece donde sirve: en `main`
+         añadir un `-> Int` es un E0404, y el valor con el que acaba la rama de un `if` sin `else` no es
+         lo que devuelve la función. `Unify` no sabe en qué sitio está, lo sabe quien lo llama, que lo dice
+         con `CanReturn`; las filas sin él matan una ayuda que ofreciera devolver siempre, y las que lo
+         llevan, una que no lo ofreciera nunca
 ref:     TestUnify/unit_at_block_tail_has_help
 
 [T08.20] errordocs.pending_word                             level: core
@@ -339,8 +340,8 @@ ref:     TestCheck/unannotated_param_inferred
 [T08.23] check.fn_without_arrow_returns_unit                level: core
 kind:    unit (go test)      file: internal/sema/check_test.go
 case:    la cola del cuerpo se comprueba contra el retorno con la razón de la cola del bloque, y una función sin `->` devuelve `()`: el valor que sobra da un E0401 con la secundaria «expected because of the return type» sobre el nombre de la función, o sobre el tipo de retorno si está escrito, y la ayuda de que el valor no se usa solo cuando lo esperado es `()`; esa ayuda propone algo que funciona: el test aplica el consejo al programa y lo vuelve a comprobar
-input:   `fn f() { 1 }`; `fn f() -> Int { true }`; `fn f() -> () { 1 }`; `fn f() -> Int { }`; `fn f() { 1` y, en la línea siguiente, `2 }`; y tres funciones que cuadran: `fn f() { }`, `fn g() -> () { }` y `fn h() { () }`; y, para la ayuda, seis programas: `fn f() { 1 }`, `fn f() -> () { 1 }`, `fib(10)` como cola de una función sin `->`, `fn f() { { 1 } }`, un `if` con `else` como cola y `fn f() { if true { 1 } }`
-expect:  la primera da exactamente un E0401 con «expected `()`, found `Int`» sobre el `1`, la secundaria sobre el nombre `f` y la ayuda «this value is unused: bind it with `let name = …`, or return it from the function»; la segunda, «expected `Int`, found `Bool`» sobre el `true` y la secundaria sobre el `Int` de `-> Int`, sin ayuda; la tercera, igual que la primera pero con la secundaria sobre el `()` escrito; la cuarta, «expected `Int`, found `()`» sobre el bloque `{ }` y la secundaria sobre el `Int`, sin ayuda; la quinta, el mismo error de la primera sobre el `2`, porque el `1` no se compara con nada; las tres últimas no dan nada; en los seis programas de la ayuda, exactamente un E0401 sin fix-it y con la ayuda «this value is unused: bind it with `let name = …`, or return it from the function», salvo en el `if` sin `else`, donde es solo «this value is unused: bind it with `let name = …`»; escribir `let name = ` delante del valor que señala la primaria deja un programa sin diagnósticos, y en los cinco en que la ayuda lo ofrece, devolver el valor (`-> Int` en la función) también
+input:   `fn f() { 1 }`; `fn f() -> Int { true }`; `fn f() -> () { 1 }`; `fn f() -> Int { }`; `fn f() { 1` y, en la línea siguiente, `2 }`; y tres funciones que cuadran: `fn f() { }`, `fn g() -> () { }` y `fn h() { () }`; y, para la ayuda, nueve programas: `fn f() { 1 }`, `fn f() -> () { 1 }`, `fib(10)` como cola de una función sin `->`, `fn f() { { 1 } }`, un `if` con `else` como cola, `fn f() { if true { 1 } }`, `fib(10)` como cola de `main`, un `if` con `else` como cola de `main` y `fn double(x: Int) { x * 2 }` junto a un `main` que la llama
+expect:  la primera da exactamente un E0401 con «expected `()`, found `Int`» sobre el `1`, la secundaria sobre el nombre `f` y la ayuda «this value is unused: bind it with `let name = …`, or return it from the function»; la segunda, «expected `Int`, found `Bool`» sobre el `true` y la secundaria sobre el `Int` de `-> Int`, sin ayuda; la tercera, igual que la primera pero con la secundaria sobre el `()` escrito; la cuarta, «expected `Int`, found `()`» sobre el bloque `{ }` y la secundaria sobre el `Int`, sin ayuda; la quinta, el mismo error de la primera sobre el `2`, porque el `1` no se compara con nada; las tres últimas no dan nada; en los nueve programas de la ayuda, exactamente un E0401 sin fix-it y con la ayuda «this value is unused: bind it with `let name = …`, or return it from the function», salvo en el `if` sin `else` y en los dos de `main`, donde es solo «this value is unused: bind it with `let name = …`»; escribir `let name = ` delante del valor que señala la primaria deja un programa sin diagnósticos, y en los seis en que la ayuda lo ofrece, devolver el valor (`-> Int` en la función) también; en los dos de `main`, devolverlo da un solo E0404
 why:     es el error más fácil de cometer al escribir una función corta: olvidar la flecha y que el valor de
          la última línea sobre. La secundaria sobre el nombre dice de dónde sale el `()`, que no está escrito
          en ningún sitio, y la ayuda, que solo es cierta cuando lo esperado es `()`, dice qué hacer con el
@@ -348,7 +349,11 @@ why:     es el error más fácil de cometer al escribir una función corta: olvi
          La ayuda es un consejo y tiene que funcionar: la primera versión decía `let _ = …`, que el parser
          rechaza (una variable tiene nombre), y por eso el test no se queda en comparar el texto: aplica el
          consejo y vuelve a comprobar el resultado. Devolver el valor desde un `if` sin `else` no arregla la
-         función, porque lo que acaba la rama no es lo que ella devuelve, y la ayuda no lo ofrece ahí. El
+         función, porque lo que acaba la rama no es lo que ella devuelve, y en `main` es un E0404; la
+         ayuda no lo ofrece en ninguno de los dos sitios. Y solo en `main`: la fila de `double` junto a un
+         `main` que la llama existe porque un comprobador que quitara «o devolverlo» a todas las funciones
+         de un programa que tiene `main` pasaría las demás filas, que o no tienen `main` o solo tienen
+         `main`, y sería justo el caso más corriente. El
          test escribe a mano el programa que devuelve el valor: fija que el consejo funciona, no que el
          comprobador lo derive
 ref:     TestCheck/fn_without_arrow_returns_unit
@@ -531,3 +536,130 @@ why:     el comprobador dibuja E0402 sobre esta lista, y entre la función llama
          espacios (`f (x)`) o el `)` de una función llamada entre paréntesis (`(f)(x)`): el final de la
          función llamada más uno apuntaría a un blanco o a un paréntesis que no es el de la lista
 ref:     TestParseExpr/call_arg_list_span
+
+[T08.38] check.no_cascade_after_unknown_name                level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un nombre desconocido tiene el tipo de error, que encaja en cualquier sitio sin dar un diagnóstico propio, y una operación con un operando de ese tipo lo tiene también: el único error de un programa con un nombre desconocido es el E0301 de la resolución, esté el nombre donde esté
+input:   `fn main() { print(nope + 1) }` y veinte programas más, con `nope` como operando de una suma (a cada lado, contra una anotación `Bool`), de `&&`, `!`, `-`, `<` y `==` (el último a cada lado y en los dos), como condición (`if nope`, `if nope + 1`), como argumento (de `print` y de una función del fichero), como función llamada, como inicializador con anotación, en una variable que luego se usa, como cola de un cuerpo y como rama de un `if` que es argumento
+expect:  los códigos de error que da cada programa son exactamente `[E0301]`, o `[E0301 E0301]` en los dos que escriben `nope` dos veces (`nope + nope`, `nope == nope`): ningún E0401, E0402 ni E0403
+why:     «un error por equivocación»: el E0301 ya dice qué falta. Si el comprobador diera un tipo cualquiera al
+         nombre, cada sitio donde se usa daría además un «mismatched types» sobre un tipo que el nombre nunca tuvo,
+         y el error de verdad quedaría enterrado entre los demás. Las filas cuyo resultado no encajaría con la
+         anotación (`let n: Int = nope < 1`) son las que fallan si la operación no hereda el tipo de error de su
+         operando; en `print(nope + 1)` el resultado, `Int`, encajaría de todos modos
+ref:     TestCheck/no_cascade_after_unknown_name
+
+[T08.39] check.syntax_error_has_no_type_error               level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    donde el parser no pudo leer una expresión, un tipo o un item deja un nodo de error, y el comprobador lo toma por un valor de cualquier tipo: el único diagnóstico es el del parser (o el del léxico)
+input:   `fn f() -> Int { 1 + }` y dieciséis más: la expresión que falta como operando izquierdo de una suma, a la derecha de `<`, tras `!`, tras `-`, a la derecha de `==`, como argumento (`print(+)`), como inicializador de un `let` con anotación, la suma incompleta contra una anotación `Bool`, en la cola de un cuerpo `Bool` (`1 +`) y de uno `Int` (`1 <`); un tipo ilegible en un parámetro, en un `let` y en un retorno; un item ilegible (`fn 1() {}`); y un `$` suelto, solo y dentro de una suma
+expect:  los códigos de error que da cada programa son exactamente `[E0201]`, salvo los dos con `$`, que dan `[E0104]`: ningún E0401, E0402 ni E0403
+why:     es el otro origen de los nodos de error, y el más común mientras se escribe: un fichero a medias. Si el
+         comprobador diera un tipo a la expresión que falta, el `1 +` del cuerpo `Bool` daría un «expected `Bool`,
+         found `Int`» encima del «expected expression» que sí explica qué falta. Los tipos ilegibles (`x: )`) son
+         la otra mitad: un parámetro sin tipo legible no puede hacer fallar la llamada `f(true)`
+ref:     TestCheck/syntax_error_has_no_type_error
+
+[T08.40] check.main_params_E0404                            level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    `main` tiene que ser `fn main()`: con parámetros es un E0404 sobre el nombre, con «declared here with <n> parameter(s)», la nota «it takes no parameters and returns `()`», la ayuda «remove the parameters» y una edición que escribe `()` en lugar de la lista, de `(` a `)`; solo se mira el `main` del fichero, el primero si hay dos
+input:   `fn main(x: Int) {}`; con dos parámetros; con uno sin tipo; `fn main ( x )  {}`; detrás de otra función; `fn main(x: Int) ->` con `() {}` en la línea siguiente; con el parámetro usado en el cuerpo; con la lista en tres líneas; `fn main() {}` junto a funciones con parámetros; `fn main() {}` seguida de `fn main(x: Int) {}`; `fn main(x: Int) {}` seguida de `fn main() {}`; y un fichero sin `main`
+expect:  los cinco primeros dan exactamente un E0404 igual campo por campo, con `n` igual a 1, 2, 1, 1 y 1, y aplicar su edición da el fuente con `()` en lugar de la lista y sin diagnósticos; el del retorno `()` en dos líneas da el E0404 del parámetro, con su edición de la lista, porque ese retorno no es lo que se queja; el del parámetro usado en el cuerpo da el mismo E0404 y nada más; el de tres líneas lleva la ayuda y ninguna edición; las otras funciones con parámetros, nada; la segunda `main` solo da un E0302, y si la del parámetro es la primera, dan un E0404 solo sobre ella y un E0302; el fichero sin `main`, nada; y `fn main(x: Int) {}` se dibuja con `RenderHuman` como el diagnóstico de diez líneas esperado, con la etiqueta bajo `main` (`1:4`) y el diff `fn main(x: Int) {}` → `fn main() {}`
+why:     `main(args)` es un error fácil para quien viene de otro lenguaje. El mensaje tiene que decir qué sobra,
+         con la cuenta, y la edición tiene que dejar un `main` válido: por eso el test la aplica y vuelve a
+         comprobar. Una ayuda que dice «remove the parameters» y una edición que hace otra cosa serían peor que
+         ninguna. El cuerpo se comprueba igual: el único aviso es la firma, y la `x` que la edición deja sin
+         sentido la señalaría la siguiente ejecución de `ki check`. La ayuda solo nombra los parámetros, y
+         por eso solo cuentan los saltos de línea de la lista: un `-> ()` partido en dos líneas no quita la
+         edición. Y se juzga el primer `main` del fichero, el mismo al que se refieren los nombres, sea
+         cual sea el que esté mal
+ref:     TestCheck/main_params_E0404
+
+[T08.41] check.main_return_E0404                            level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un `main` con un tipo de retorno que no es `()` es un E0404 sobre el nombre, con «declared here returning `<T>`», la ayuda «remove `-> <T>`» y una edición que borra el `-> T` con el espacio anterior; con parámetros y retorno mal a la vez, una etiqueta y una ayuda que nombran las dos cosas y dos ediciones, en el orden del fuente
+input:   `fn main() -> Int { 1 }`; con `-> Bool`; `fn main()->Int { 1 }`; `fn main()   ->   Int { 1 }`; con un comentario entre el `)` y la flecha, `fn main() /* c */ -> Int { 1 }` y `fn main()/* c */->Int { 1 }`; detrás de otra función que también devuelve `Int`; `fn main(x: Int) -> Int { x }`; `fn main() -> () {}` vacía y con un `print(1)`; `-> Foo`, con y sin un parámetro; y cuatro firmas en varias líneas
+expect:  los seis primeros dan exactamente un E0404 igual campo por campo, con la edición sobre los blancos justo antes de la flecha, la flecha y el tipo (` -> Int`, ` -> Bool`, `->Int`, `   ->   Int`, ` -> Int` y `->Int` en los dos con comentario), y aplicarla borra justo eso y deja el comentario; el de detrás de otra función da solo el suyo; tras aplicar la edición de `fn main() -> Int { 1 }` queda `fn main() { 1 }`, que ya solo da un E0401; `-> ()` no da nada; los dos juntos dan «declared here with 1 parameter(s) and returning `Int`», «remove the parameters and `-> Int`» y las dos ediciones, que aplicadas dejan `fn main() { x }`, y se dibujan con `RenderHuman` en un solo diff; el retorno en dos líneas, y los parámetros o el retorno partidos cuando hay los dos, llevan la ayuda y ninguna edición; la lista vacía partida en dos líneas (`fn main(\n) -> Int { 1 }`) no quita la edición del retorno, que sigue siendo una sola, la que lo borra; `-> Foo` solo da el E0406 sobre `Foo` y ningún E0404, y con un parámetro da la queja del parámetro con su edición y el E0406
+why:     la edición borra los blancos que hay justo antes de la flecha, la flecha y el tipo: ni un espacio contado
+         a mano ni todo lo que hay desde el `)`, que se llevaría un comentario que la ayuda no menciona. Así
+         `fn main()->Int`, `fn main()   ->   Int` y `fn main() /* c */ -> Int` quedan igual de bien. Cuando una
+         de las dos ediciones no se puede hacer porque ocupa varias líneas, no se ofrece ninguna: la ayuda
+         nombra las dos cosas y media edición diría menos que ella. Pero solo cuentan las piezas que la ayuda
+         nombra: una lista vacía partida en dos líneas no es lo que está mal. `-> ()` dice lo
+         que dice el valor por defecto, y un tipo que no existe es el E0406 (T08.47) y el tipo de error, que no
+         añade un E0404
+ref:     TestCheck/main_return_E0404
+
+[T08.42] check.if_branch_mismatch                           level: core
+kind:    diag                file: tests/errors/ch08/if_branch_mismatch.ki
+case:    `ki check` sobre un `if` con `else` cuyas ramas tienen tipos distintos da un único E0401, en la línea 4, columna 32, el `false` de la rama `else`
+input:   `let x = if true { 1 } else { false }` dentro de `main`, y un `print(x)` después
+expect:  sale con 1 y el único error es un E0401 en 4:32; el `print(x)` no da otro
+why:     es el error de tipos que el capítulo enseña primero: dos ramas que no coinciden. Que el `print(x)` de
+         después no dé un segundo error es la regla de «un error por equivocación», vista de punta a punta con el
+         comando de verdad: el `if` sin tipo no se compara con nada, y el runner cuenta todos los errores del
+         fichero, no solo el primero
+ref:     tests/errors/ch08/if_branch_mismatch.ki
+
+[T08.43] check.if_branches_render                           level: core
+kind:    diag                file: tests/errors/ch08/if_branches_render.ki
+case:    `ki check` sobre el mismo programa, con el E0401 en la línea 12, columna 32 (el fichero lleva diez líneas de cabecera)
+input:   `let x = if true { 1 } else { false }` dentro de `main`, y un `print(x)` después, tras la cabecera
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 6 líneas: `error[E0401]: mismatched types`, la ruta relativa a la raíz con `12:32`, el fragmento de la línea 12 con `^^^^^` y «expected `Int`, found `Bool`» bajo `false`, y bajo el `1` un `-` con «the other branch has type `Int`»
+why:     la secundaria solo existe de verdad cuando se ve en una terminal: los tests de `TestCheck` miran las
+         etiquetas del diagnóstico, este mira el texto que sale por stderr, con las dos marcas en su sitio (`^^^^^`
+         bajo el error y `-` bajo la rama que lo explica) y el número de línea de dos cifras que ensancha la
+         columna. Si el renderizador o el comprobador olvidaran la razón de las ramas, solo esta tarjeta lo
+         notaría de punta a punta
+ref:     tests/errors/ch08/if_branches_render.ki
+
+[T08.44] check.arg_type                                     level: core
+kind:    diag                file: tests/errors/ch08/arg_type.ki
+case:    `ki check` sobre una llamada con un argumento del tipo equivocado da un único E0401, en la línea 4, columna 23, el argumento
+input:   `fn fib(n: Int) -> Int { n }` y un `main` que imprime `fib(true)`
+expect:  sale con 1 y el único error es un E0401 en 4:23, el `true`; la llamada a `print` que lo rodea, con el resultado de `fib`, no da otro
+why:     el error de tipos más común, un argumento que no es del tipo del parámetro, escrito en el `fib` que ya
+         conoces. El error cae sobre el argumento y no sobre la llamada entera. Que `print(fib(true))` no dé un
+         segundo error por el resultado de `fib` es la parte que solo se ve con el programa completo
+ref:     tests/errors/ch08/arg_type.ki
+
+[T08.45] check.no_cascade                                   level: core
+kind:    diag                file: tests/errors/ch08/no_cascade.ki
+case:    `ki check` sobre un nombre desconocido dentro de una suma da un único error, el E0301, en la línea 3, columna 19, y ningún error de tipos
+input:   un `main` que imprime `nope + 1`
+expect:  sale con 1 y el único error es un E0301 en 3:19, el nombre `nope`; la suma, que tiene un operando de tipo error, no da un E0401
+why:     es el caso de manual de las cascadas, y el que justifica el tipo de error: si `nope` tuviera un tipo
+         cualquiera, `nope + 1` daría un «unknown name» y un «mismatched types» por el mismo descuido, y el
+         segundo no diría nada útil. El runner compara todos los errores del fichero, así que un E0401 de más
+         lo hace fallar
+ref:     tests/errors/ch08/no_cascade.ki
+
+[T08.46] syntax.signature_spans                             level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    el item de una función guarda el span de su lista de parámetros, del `(` al `)`, y el de su cláusula de retorno, desde los blancos justo antes del `->` hasta el final del tipo, y dice si cada uno cabe en una sola línea
+input:   `fn f() {}`, `fn f(x: Int) {}`, `fn f (  x ) -> Int {}`, `fn f()->Int {}`, `fn f() -> () {}`, parámetros en tres líneas y con el salto solo tras el paréntesis, el tipo de retorno en la línea siguiente, un comentario con un salto dentro del paréntesis, un comentario entre el `)` y la flecha (con blancos alrededor y sin ellos), espacios y un tabulador antes de la flecha, un segundo item, y una función externa sin cuerpo
+expect:  ningún diagnóstico; `ParamList` y `RetClause` valen los intervalos esperados (la cláusula incluye los espacios y tabuladores justo antes del `->`, y empieza en la flecha si no los hay; lo que hay entre el `)` y esos blancos, un comentario, queda fuera); en cada fila, `ParamListOneLine` es falso justo cuando hay un salto de línea dentro de la lista, también el de un comentario, y en cada fila con `->`, `RetClauseOneLine` es falso justo cuando lo hay dentro de la cláusula
+why:     el E0404 tiene que decir dónde está la lista y dónde la cláusula, y el comprobador no tiene el texto:
+         no puede contar paréntesis ni buscar el `->` (`fn main (x)` y `fn main()->Int` son válidos). Las ediciones
+         son de una sola línea, y un salto dentro de unos paréntesis es solo un espacio para el parser, así que
+         sin el indicador de línea única una firma en tres líneas haría que el renderizador se detuviera con un
+         panic en vez de mostrar el error. La cláusula no empieza en el `)` porque entre él y la flecha puede
+         haber un comentario, y una edición que lo borrara se llevaría texto que la ayuda no menciona
+ref:     TestParser/signature_spans
+
+[T08.47] check.unknown_type_E0406                           level: core
+kind:    unit (go test)      file: internal/sema/check_test.go
+case:    un nombre de tipo que no es `Int`, `Bool` ni `()` da un E0406 donde está escrito, una sola vez, con «not a type Ki knows» sobre el nombre y la nota «the types Ki knows: `Int`, `Bool` and `()`»; si el nombre está a una edición de `Int` o de `Bool` (un nombre de hasta cinco letras admite una edición, y una más por cada tres de más), lleva la ayuda «did you mean `T`?» y la edición que escribe `T`; lo que tiene ese tipo no da ningún error por tenerlo
+input:   `fn double(x: Itn) -> Int { x * 2 }` con un `main` que llama a `double(true)`; `let a: Foo = 1`; `fn f() -> Itn { 1 }` con `print(f())`; una firma con tres nombres que no son tipos (`Aa`, `Bb` y `Cc`) y un `let z: Dd = x`; un `let a: Foo = 1` con dos `let` más que usan `a` como `Int` y como `Bool`; `fn f(x: Itn) {}` llamada con `f(true)` y con `f(1)`; `fn f(x: Itn) {}` con `let g: Int = f`; `fn f(x: T) {}` para `Bol`, `Boo`, `Boool`, `Ints`, `In`, `Itn`, `Float`, `String`, `Boolean`, `BOOL` y `A`; y una función con parámetros `Int`, `Bool` y `()`
+expect:  el primero da exactamente un E0406 sobre `Itn`, sin ayuda, y nada sobre la llamada con `true` ni sobre `x * 2`; `let a: Foo` y `-> Itn` dan uno cada uno, sobre `Foo` y sobre `Itn`; la firma con el `let`, cuatro E0406, uno por nombre; los usos de `a` y las dos llamadas a `f(x: Itn)` no dan nada más; `let g: Int = f` da el E0406 y un E0401 «expected `Int`, found `({error}) -> ()`» sobre `f` con la secundaria de la anotación; con `Bol`, `Boo` y `Boool` el E0406 lleva la ayuda «did you mean `Bool`?», y con `Ints` e `In`, «did you mean `Int`?», cada una con la edición que reemplaza el nombre, que aplicada deja `fn f(x: Bool) {}` (o `Int`) sin diagnósticos; `Itn`, `Float`, `String`, `Boolean`, `BOOL` y `A` dan el E0406 sin ayuda ni edición; y la función con `Int`, `Bool` y `()` no da nada
+why:     un tipo mal escrito es la equivocación más fácil de cometer en una firma, y el comprobador la aceptaba
+         sin una palabra: con `x: Itn`, `double(true)` salía con 0. El nombre desconocido tiene el tipo de error,
+         el mismo que un nombre sin definir (T08.38): por eso se informa una sola vez, donde se escribe, y lo
+         que lo usa (la llamada con `true`, el `x * 2`, los `let` que usan `a`) no da otro error. Lo que rodea
+         al tipo de error se sigue comparando con lo demás (T08.16): una función con un parámetro de tipo
+         desconocido que se usa como `Int` es una equivocación más, y su mensaje escribe lo que falta como
+         `{error}`. Un nombre que empieza por minúscula ni llega aquí: el parser lo rechaza (E0201). La pregunta
+         sale de la misma comparación que la de los nombres sin definir (E0301): `Bol` está a una edición de
+         `Bool` y `Itn` a dos de `Int` aunque sea `Int` con dos letras cambiadas de sitio (una edición es una
+         letra más, una menos o una distinta), y las filas de los dos lados fijan ese borde
+ref:     TestCheck/unknown_type_E0406

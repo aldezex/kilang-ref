@@ -1137,15 +1137,19 @@ ref:     TestSuggest/skips_names_over_the_cap
 [T07.94] sema.fuzz_analyze_properties                       level: core
 kind:    prop                file: internal/sema/analyze_fuzz_test.go
 case:    para cualquier entrada, los pases que `Analyze` ejecuta después del parser no hacen panic, todo span de los diagnósticos (las etiquetas y las ediciones) está dentro de su fichero y cada diagnóstico se puede dibujar en los tres formatos
-input:   las doce semillas: `fn main() {}`; `fib` que llama a `fibb`; `let x = x`; `f` definida dos veces; un `#[extern("k")]` en una línea, en tres líneas y en una función sin cuerpo; lo mismo con un `#[inline]` (el E0305), una firma rota seguida de una llamada, y `fn main() { if true { () } }`
-expect:  con `go test`, las doce semillas cumplen las propiedades (`go test -json` las lista como `FuzzAnalyze/seed#0` a `FuzzAnalyze/seed#11`): ningún span de una etiqueta primaria, secundaria o de una edición empieza después de acabar ni pasa del final del fichero al que pertenece, y `RenderHuman`, `RenderShort` y `RenderJSON` vuelven con cada diagnóstico. `go test ./internal/sema -run=^$ -fuzz=FuzzAnalyze -fuzztime=10s` busca entradas que las rompan
+input:   las quince semillas: `fn main() {}`; `fib` que llama a `fibb`; `let x = x`; `f` definida dos veces; un `#[extern("k")]` en una línea, en tres líneas y en una función sin cuerpo; lo mismo con un `#[inline]` (el E0305), una firma rota seguida de una llamada, y `fn main() { if true { () } }`; y, del E0404 y el E0406, un `main` con los parámetros en tres líneas, un `main` con el `->` y el tipo en dos líneas y `fn f(x: Bol) {}`
+expect:  con `go test`, las quince semillas cumplen las propiedades (`go test -json` las lista como `FuzzAnalyze/seed#0` a `FuzzAnalyze/seed#14`): ningún span de una etiqueta primaria, secundaria o de una edición empieza después de acabar ni pasa del final del fichero al que pertenece, y `RenderHuman`, `RenderShort` y `RenderJSON` vuelven con cada diagnóstico. `go test ./internal/sema -run=^$ -fuzz=FuzzAnalyze -fuzztime=10s` busca entradas que las rompan
 why:     las ediciones del lexer y del parser ya las vigila `FuzzParse`, pero las del E0301 (que reemplaza un nombre),
          el E0304 y el E0305 (que borran un atributo o le cambian el nombre) las construye la resolución de nombres,
          y `RenderHuman` hace panic con una edición que cruza un salto de línea o que está en otro fichero. Un
          atributo escrito en tres líneas es el caso que lo provoca si la edición olvida que el atributo ocupa
          varias, y por eso hay una semilla de cada forma. Sin este fuzzer, los pases que vienen detrás del parser
          podían construir una edición que el renderizador rechaza y nada, salvo los tests de cada caso, lo notaría.
-         La última semilla lleva `true`, `()` y un `if` sin `else`: el recorrido de la resolución hace panic en una
+         Desde el comprobador de tipos hay dos más: el E0404 (que cambia los parámetros de `main` por `()` y borra su
+         retorno) y el E0406 (que cambia el nombre de un tipo). Las del E0404 solo se ofrecen si lo que editan cabe en
+         una línea, y los tests de cada caso comprueban que no se ofrecen; las semillas con los parámetros o el `->`
+         repartidos en varias líneas comprueban además que dibujar el diagnóstico no hace panic.
+         Una semilla lleva `true`, `()` y un `if` sin `else`: el recorrido de la resolución hace panic en una
          clase de expresión que no conoce, y estas son las más corrientes
 ref:     FuzzAnalyze
 

@@ -78,6 +78,40 @@ const (
 	unusedBindHelp = "this value is unused: bind it with `let name = …`"
 )
 
+// mainError is the E0404 for a `main` whose name is at: label says what is wrong
+// with the signature and help how to mend it, and fixits are the edits that do
+// it, if there are any.
+func mainError(at base.Span, label, help string, fixits ...diag.FixIt) diag.Diagnostic {
+	d := diag.NewError(diag.E(404), "`main` must be `fn main()`", diag.Label{Span: at, Message: label}).
+		WithNote("it takes no parameters and returns `()`").WithHelp(help)
+	for _, f := range fixits {
+		d = d.WithFixIt(f)
+	}
+	return d
+}
+
+// unknownType is the E0406 for the type name that is written at. If best is not
+// empty, the help asks whether that type was meant and the fix-it writes it.
+func unknownType(at base.Span, name, best string) diag.Diagnostic {
+	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
+		WithNote("the types Ki knows: `Int`, `Bool` and `()`")
+	if best != "" {
+		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
+	}
+	return d
+}
+
+// onlyDiag returns the one diagnostic that p reported, and fails the test if
+// there are none or several.
+func onlyDiag(t *testing.T, p *testsupport.Program) diag.Diagnostic {
+	t.Helper()
+	all := p.Session.Sink.All()
+	if len(all) != 1 {
+		t.Fatalf("%d diagnostics, want exactly 1: %+v", len(all), all)
+	}
+	return all[0]
+}
+
 // exprType returns the type of the one expression of the user's file whose span
 // is span, written as Show writes it. It fails the test if no expression, or
 // more than one, has that span.
@@ -387,18 +421,27 @@ func TestCheck(t *testing.T) {
 		// help also says to return the value, the row has the program that does
 		// it, written by hand: the function gets the type of the value. Where it
 		// does not, returning would not do: the `if` has no `else`, so the value
-		// is the end of a branch and not what the function returns.
+		// is the end of a branch and not what the function returns, and `main`
+		// cannot return a value at all, which the row shows by the program that
+		// returns it and the error it gets instead.
 		for _, row := range []struct {
 			name, src string
 			help      string
-			returned  string // the program that returns the value; "" if the help does not offer it
+			returned  string // the program that returns the value; "" if there is none
+			fails     string // the code that the returning program reports, if the help does not offer it
 		}{
-			{"no arrow", "fn f() { 1 }", unusedHelp, "fn f() -> Int { 1 }"},
-			{"explicit unit", "fn f() -> () { 1 }", unusedHelp, "fn f() -> Int { 1 }"},
-			{"a call", "fn fib(n: Int) -> Int { n }\nfn g() { fib(10) }", unusedHelp, "fn fib(n: Int) -> Int { n }\nfn g() -> Int { fib(10) }"},
-			{"a block", "fn f() { { 1 } }", unusedHelp, "fn f() -> Int { { 1 } }"},
-			{"an if with an else", "fn f() { if true { 1 } else { 2 } }", unusedHelp, "fn f() -> Int { if true { 1 } else { 2 } }"},
-			{"an if with no else", "fn f() { if true { 1 } }", unusedBindHelp, ""},
+			{"no arrow", "fn f() { 1 }", unusedHelp, "fn f() -> Int { 1 }", ""},
+			{"explicit unit", "fn f() -> () { 1 }", unusedHelp, "fn f() -> Int { 1 }", ""},
+			{"a call", "fn fib(n: Int) -> Int { n }\nfn g() { fib(10) }", unusedHelp, "fn fib(n: Int) -> Int { n }\nfn g() -> Int { fib(10) }", ""},
+			{"a block", "fn f() { { 1 } }", unusedHelp, "fn f() -> Int { { 1 } }", ""},
+			{"an if with an else", "fn f() { if true { 1 } else { 2 } }", unusedHelp, "fn f() -> Int { if true { 1 } else { 2 } }", ""},
+			{"an if with no else", "fn f() { if true { 1 } }", unusedBindHelp, "", ""},
+			{"main", "fn fib(n: Int) -> Int { n }\nfn main() { fib(10) }", unusedBindHelp, "fn fib(n: Int) -> Int { n }\nfn main() -> Int { fib(10) }", "E0404"},
+			{"main with an if with an else", "fn main() { if true { 1 } else { 2 } }", unusedBindHelp, "fn main() -> Int { if true { 1 } else { 2 } }", "E0404"},
+			// The commonest case: a function next to a `main` that calls it. It is
+			// `main` that cannot return a value, and the other function keeps the
+			// offer to return it.
+			{"a function next to main", "fn double(x: Int) { x * 2 }\nfn main() { let r = double(2) }", unusedHelp, "fn double(x: Int) -> Int { x * 2 }\nfn main() { let r = double(2) }", ""},
 		} {
 			p := testsupport.Analyze(t, row.src)
 			all := p.Session.Sink.All()
@@ -416,8 +459,9 @@ func TestCheck(t *testing.T) {
 				t.Errorf("%s: after binding the value the program is %q, which reports %+v, want nothing", row.name, bound, got)
 			}
 			if row.returned != "" {
-				if got := testsupport.Analyze(t, row.returned).Session.Sink.All(); len(got) != 0 {
-					t.Errorf("%s: after returning the value the program is %q, which reports %+v, want nothing", row.name, row.returned, got)
+				got := testsupport.ErrorCodes(testsupport.Analyze(t, row.returned))
+				if row.fails == "" && len(got) != 0 || row.fails != "" && !slices.Equal(got, []string{row.fails}) {
+					t.Errorf("%s: after returning the value the program is %q, which reports %v, want %q", row.name, row.returned, got, row.fails)
 				}
 			}
 		}
@@ -1249,6 +1293,391 @@ func TestCheck(t *testing.T) {
 			p := testsupport.Analyze(t, src)
 			wantDiags(t, "x(x)", p, infinite(spanIn(t, p, src, "{ x(x)", "x"),
 				"`a` would have to be `(a) -> b`, which has no finite size"))
+		}
+	})
+
+	t.Run("no_cascade_after_unknown_name", func(t *testing.T) {
+		// A name that stands for nothing has the error type, which fits every
+		// place without a word, so the E0301 that Resolve reported is the whole
+		// report. Each row puts an unknown name where a type is expected, in
+		// another way. An operation with an operand of the error type has the
+		// error type itself, and the rows with an annotation that is not the
+		// type the operation would have otherwise (`let n: Int = nope < 1`, a
+		// Bool) are the ones that report a second error if it does not.
+		rows := []struct {
+			name, src string
+			want      []string
+		}{
+			{"operand of a sum", "fn main() { print(nope + 1) }", []string{"E0301"}},
+			{"left operand against another type", "fn main() { let b: Bool = nope + 1 }", []string{"E0301"}},
+			{"right operand", "fn main() { let b: Bool = 1 + nope }", []string{"E0301"}},
+			{"both operands", "fn main() { print(nope + nope) }", []string{"E0301", "E0301"}},
+			{"sum as a condition", "fn main() { if nope + 1 { } }", []string{"E0301"}},
+			{"condition", "fn main() { if nope { } }", []string{"E0301"}},
+			{"&&", "fn main() { let n: Int = nope && true }", []string{"E0301"}},
+			{"not", "fn main() { let n: Int = !nope }", []string{"E0301"}},
+			{"negation", "fn main() { let b: Bool = -nope }", []string{"E0301"}},
+			{"comparison", "fn main() { let n: Int = nope < 1 }", []string{"E0301"}},
+			{"left of ==", "fn main() { let n: Int = nope == 1 }", []string{"E0301"}},
+			{"right of ==", "fn main() { let n: Int = true == nope }", []string{"E0301"}},
+			{"both sides of ==", "fn main() { let n: Int = nope == nope }", []string{"E0301", "E0301"}},
+			{"argument", "fn main() { print(nope) }", []string{"E0301"}},
+			{"argument of a function of the file", "fn f(a: Bool) {}\nfn main() { f(nope) }", []string{"E0301"}},
+			{"callee", "fn main() { let b: Bool = nope(1) }", []string{"E0301"}},
+			{"annotated let", "fn main() { let x: Bool = nope }", []string{"E0301"}},
+			{"variable that holds it", "fn main() {\n  let x = nope\n  let y: Bool = x\n  print(x)\n}", []string{"E0301"}},
+			{"tail of a body", "fn f() -> Bool { nope }", []string{"E0301"}},
+			{"then branch", "fn main() { print(if true { nope } else { 1 }) }", []string{"E0301"}},
+			{"else branch", "fn main() { print(if true { 1 } else { nope }) }", []string{"E0301"}},
+		}
+		for _, row := range rows {
+			p := testsupport.Analyze(t, row.src)
+			if got := testsupport.ErrorCodes(p); !slices.Equal(got, row.want) {
+				t.Errorf("%s: %q reported %v, want %v; diagnostics %+v", row.name, row.src, got, row.want, p.Session.Sink.All())
+			}
+		}
+	})
+
+	t.Run("syntax_error_has_no_type_error", func(t *testing.T) {
+		// Where the parser could not read an expression it leaves an error node,
+		// and the type checker takes it for a value of any type: the E0201 (or
+		// E0104) is the whole report. The rows put the error node in the places
+		// of the previous test, and in the type annotations that the parser could
+		// not read either.
+		rows := []struct {
+			name, src string
+			want      string
+		}{
+			{"right operand of a sum", "fn f() -> Int { 1 + }", "E0201"},
+			{"left operand", "fn f() -> Int { + 1 }", "E0201"},
+			{"comparison", "fn f() -> Bool { 1 < }", "E0201"},
+			{"not", "fn f() -> Bool { ! }", "E0201"},
+			{"negation", "fn f() -> Int { - }", "E0201"},
+			{"right of ==", "fn main() { 1 == }", "E0201"},
+			{"argument", "fn main() { print(+) }", "E0201"},
+			{"initializer with its annotation", "fn main() { let x: Int = }", "E0201"},
+			{"sum against another annotation", "fn main() { let x: Bool = 1 + }", "E0201"},
+			{"sum at the tail of a Bool body", "fn f() -> Bool { 1 + }", "E0201"},
+			{"comparison at the tail of an Int body", "fn f() -> Int { 1 < }", "E0201"},
+			{"unreadable parameter type", "fn f(x: ) -> Int { x + 1 }\nfn main() { print(f(true)) }", "E0201"},
+			{"unreadable let type", "fn main() {\n  let x: = 1\n  print(x + 1)\n}", "E0201"},
+			{"unreadable return type", "fn f() -> + { 1 }\nfn main() { let n: Int = f() }", "E0201"},
+			{"unreadable item", "fn 1() {}\nfn main() { }", "E0201"},
+			{"unexpected character", "fn main() { $ }", "E0104"},
+			{"unexpected character in a sum", "fn f() -> Bool { 1 + $ }", "E0104"},
+		}
+		for _, row := range rows {
+			p := testsupport.Analyze(t, row.src)
+			if got := testsupport.ErrorCodes(p); !slices.Equal(got, []string{row.want}) {
+				t.Errorf("%s: %q reported %v, want [%s]; diagnostics %+v", row.name, row.src, got, row.want, p.Session.Sink.All())
+			}
+		}
+	})
+
+	t.Run("main_params_E0404", func(t *testing.T) {
+		// The primary label is on the name, and the fix-it writes `()` over the
+		// parameter list, from its `(` to its `)`.
+		rows := []struct {
+			name, src string
+			list      string // the parameter list, which occurs once in src
+			label     string
+		}{
+			{"one parameter", "fn main(x: Int) {}", "(x: Int)", "declared here with 1 parameter(s)"},
+			{"two parameters", "fn main(a: Int, b: Bool) {}", "(a: Int, b: Bool)", "declared here with 2 parameter(s)"},
+			{"parameter without a type", "fn main(x) {}", "(x)", "declared here with 1 parameter(s)"},
+			{"blanks", "fn main ( x )  {}", "( x )", "declared here with 1 parameter(s)"},
+			{"after another function", "fn f(a: Int) {}\nfn main(x: Int) {}", "(x: Int)", "declared here with 1 parameter(s)"},
+		}
+		for _, row := range rows {
+			p := testsupport.Analyze(t, row.src)
+			list := spanIn(t, p, row.src, row.list, row.list)
+			want := mainError(spanIn(t, p, row.src, " main", "main"), row.label, "remove the parameters", diag.Replace(list, "()"))
+			wantDiags(t, row.name, p, want)
+			// The edit does what the help says: afterwards `main` is `fn main()`.
+			if got := p.Session.Sink.All(); len(got) == 1 {
+				fixed := testsupport.ApplyFixits(row.src, got[0])
+				if want := strings.Replace(row.src, row.list, "()", 1); fixed != want {
+					t.Errorf("%s: the fix-it gives %q, want %q", row.name, fixed, want)
+				}
+				wantDiags(t, row.name+" after the fix-it", testsupport.Analyze(t, fixed))
+			}
+		}
+
+		{
+			// The same for a return clause that the help does not name: `-> ()`
+			// over two lines is not what is wrong, and the parameters keep their
+			// edit.
+			const src = "fn main(x: Int) ->\n  () {}"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "unit return clause on two lines", p, mainError(spanIn(t, p, src, " main", "main"),
+				"declared here with 1 parameter(s)", "remove the parameters", diag.Replace(spanIn(t, p, src, "(x: Int)", "(x: Int)"), "()")))
+		}
+		{
+			// The body is checked all the same, with the parameter in scope: the
+			// signature is the only complaint. (The edit would leave the `x`
+			// without a meaning, which is for the next run to say.)
+			const src = "fn main(x: Int) { print(x) }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "parameter used in the body", p, mainError(spanIn(t, p, src, " main", "main"),
+				"declared here with 1 parameter(s)", "remove the parameters", diag.Replace(spanIn(t, p, src, "(x: Int)", "(x: Int)"), "()")))
+		}
+		{
+			// A signature on several lines has the help and no edit: an edit is of
+			// one line.
+			const src = "fn main(\n  x: Int\n) {}"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "three lines", p, mainError(spanIn(t, p, src, " main", "main"),
+				"declared here with 1 parameter(s)", "remove the parameters"))
+		}
+		{
+			// Only `main` is held to this, and the first one of the file.
+			p := testsupport.Analyze(t, "fn f(a: Int, b: Bool) {}\nfn g(c) {}\nfn main() { f(1, true) }")
+			wantDiags(t, "other functions", p)
+			const dup = "fn main() {}\nfn main(x: Int) {}"
+			p = testsupport.Analyze(t, dup)
+			if got := testsupport.ErrorCodes(p); !slices.Equal(got, []string{"E0302"}) {
+				t.Errorf("a second main with a parameter: error codes %v, want [E0302]", got)
+			}
+			// When the first one is the bad one, it is the one that is judged:
+			// E0404 on it, and E0302 for the second.
+			const first = "fn main(x: Int) {}\nfn main() {}"
+			p = testsupport.Analyze(t, first)
+			var e0404 []diag.Diagnostic
+			for _, d := range p.Session.Sink.All() {
+				if d.Code == diag.E(404) {
+					e0404 = append(e0404, d)
+				}
+			}
+			if got := slices.Sorted(slices.Values(testsupport.ErrorCodes(p))); !slices.Equal(got, []string{"E0302", "E0404"}) {
+				t.Errorf("a first main with a parameter: error codes %v, want [E0302 E0404]", got)
+			}
+			if len(e0404) != 1 || e0404[0].Primary.Span != spanIn(t, p, first, "fn main(x", "main") {
+				t.Errorf("a first main with a parameter: E0404 diagnostics %+v, want one on the first main", e0404)
+			}
+			// A file without a main is E0303, which `ki run` reports (chapter 10).
+			p = testsupport.Analyze(t, "fn f(x: Int) {}")
+			wantDiags(t, "no main", p)
+		}
+		{
+			// The diagnostic is drawn, with the edit as a diff, and a name that
+			// lies before the parameters does not move the label.
+			const src = "fn main(x: Int) {}"
+			p := testsupport.Analyze(t, src)
+			const want = "error[E0404]: `main` must be `fn main()`\n" +
+				" --> test.ki:1:4\n" +
+				"  |\n" +
+				"1 | fn main(x: Int) {}\n" +
+				"  |    ^^^^ declared here with 1 parameter(s)\n" +
+				"  = note: it takes no parameters and returns `()`\n" +
+				"  = help: remove the parameters\n" +
+				"  |\n" +
+				"1 - fn main(x: Int) {}\n" +
+				"1 + fn main() {}\n"
+			if got := diag.RenderHuman(onlyDiag(t, p), &p.Session.Sources); got != want {
+				t.Errorf("rendered\n%s\nwant\n%s", got, want)
+			}
+		}
+	})
+
+	t.Run("main_return_E0404", func(t *testing.T) {
+		// The fix-it deletes the return clause: the blanks just before the `->`,
+		// the arrow and the type. A comment between the `)` and the arrow stays.
+		rows := []struct {
+			name, src, clause string
+			label, help       string
+		}{
+			{"Int", "fn main() -> Int { 1 }", " -> Int", "declared here returning `Int`", "remove `-> Int`"},
+			{"Bool", "fn main() -> Bool { true }", " -> Bool", "declared here returning `Bool`", "remove `-> Bool`"},
+			{"arrow next to the paren", "fn main()->Int { 1 }", "->Int", "declared here returning `Int`", "remove `-> Int`"},
+			{"blanks", "fn main()   ->   Int { 1 }", "   ->   Int", "declared here returning `Int`", "remove `-> Int`"},
+			{"comment before the arrow", "fn main() /* c */ -> Int { 1 }", " -> Int", "declared here returning `Int`", "remove `-> Int`"},
+			{"comment next to the arrow", "fn main()/* c */->Int { 1 }", "->Int", "declared here returning `Int`", "remove `-> Int`"},
+		}
+		for _, row := range rows {
+			p := testsupport.Analyze(t, row.src)
+			clause := spanIn(t, p, row.src, row.clause, row.clause)
+			wantDiags(t, row.name, p, mainError(spanIn(t, p, row.src, " main", "main"), row.label, row.help, diag.Delete(clause)))
+			if got := p.Session.Sink.All(); len(got) == 1 {
+				if fixed, want := testsupport.ApplyFixits(row.src, got[0]), strings.Replace(row.src, row.clause, "", 1); fixed != want {
+					t.Errorf("%s: the fix-it gives %q, want %q", row.name, fixed, want)
+				}
+			}
+		}
+		{
+			// The second function is the one with the wrong signature, and the
+			// first one, which also returns Int, is fine.
+			const src = "fn f() -> Int { 1 }\nfn main() -> Int { 1 }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "after another function", p, mainError(spanIn(t, p, src, " main", "main"),
+				"declared here returning `Int`", "remove `-> Int`", diag.Delete(spanIn(t, p, src, "main() -> Int", " -> Int"))))
+		}
+		{
+			// With the clause gone `main` is `fn main()`, and E0404 with it. The
+			// body is another matter: its `1` is now a value that nothing uses.
+			const src = "fn main() -> Int { 1 }"
+			p := testsupport.Analyze(t, src)
+			fixed := testsupport.ApplyFixits(src, onlyDiag(t, p))
+			p = testsupport.Analyze(t, fixed)
+			if got := testsupport.ErrorCodes(p); fixed != "fn main() { 1 }" || !slices.Equal(got, []string{"E0401"}) {
+				t.Errorf("after the fix-it: %q reports %v, want \"fn main() { 1 }\" and [E0401]", fixed, got)
+			}
+		}
+		{
+			// `-> ()` says what the default says, and a type that does not exist
+			// is the error type: neither is a complaint about `main`.
+			wantDiags(t, "explicit unit", testsupport.Analyze(t, "fn main() -> () {}"))
+			wantDiags(t, "explicit unit with a value", testsupport.Analyze(t, "fn main() -> () { print(1) }"))
+		}
+		{
+			// With both wrong, one label and one help say both, and there are two
+			// edits, in the order of the source.
+			const src = "fn main(x: Int) -> Int { x }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "parameters and return type", p, mainError(spanIn(t, p, src, " main", "main"),
+				"declared here with 1 parameter(s) and returning `Int`", "remove the parameters and `-> Int`",
+				diag.Replace(spanIn(t, p, src, "(x: Int)", "(x: Int)"), "()"),
+				diag.Delete(spanIn(t, p, src, ") -> Int {", " -> Int"))))
+			if got := p.Session.Sink.All(); len(got) == 1 {
+				if fixed := testsupport.ApplyFixits(src, got[0]); fixed != "fn main() { x }" {
+					t.Errorf("the two fix-its give %q, want \"fn main() { x }\"", fixed)
+				}
+			}
+			const want = "error[E0404]: `main` must be `fn main()`\n" +
+				" --> test.ki:1:4\n" +
+				"  |\n" +
+				"1 | fn main(x: Int) -> Int { x }\n" +
+				"  |    ^^^^ declared here with 1 parameter(s) and returning `Int`\n" +
+				"  = note: it takes no parameters and returns `()`\n" +
+				"  = help: remove the parameters and `-> Int`\n" +
+				"  |\n" +
+				"1 - fn main(x: Int) -> Int { x }\n" +
+				"1 + fn main() { x }\n"
+			if got := diag.RenderHuman(onlyDiag(t, p), &p.Session.Sources); got != want {
+				t.Errorf("rendered\n%s\nwant\n%s", got, want)
+			}
+		}
+		{
+			// A clause that runs over two lines has the help and no edit; and when
+			// only one of two things could be edited there is none at all, so that
+			// the help never says more than the edits do.
+			const clause = "fn main() ->\n  Int { 1 }"
+			p := testsupport.Analyze(t, clause)
+			wantDiags(t, "clause on two lines", p, mainError(spanIn(t, p, clause, " main", "main"),
+				"declared here returning `Int`", "remove `-> Int`"))
+			const both = "fn main(\n  x: Int\n) -> Int { x }"
+			p = testsupport.Analyze(t, both)
+			wantDiags(t, "parameters on three lines and a return type", p, mainError(spanIn(t, p, both, " main", "main"),
+				"declared here with 1 parameter(s) and returning `Int`", "remove the parameters and `-> Int`"))
+			const bothTheOtherWay = "fn main(x: Int) ->\n  Int { x }"
+			p = testsupport.Analyze(t, bothTheOtherWay)
+			wantDiags(t, "parameters and a return type on two lines", p, mainError(spanIn(t, p, bothTheOtherWay, " main", "main"),
+				"declared here with 1 parameter(s) and returning `Int`", "remove the parameters and `-> Int`"))
+			// The line breaks of a piece that the help does not name do not count:
+			// an empty parameter list over two lines is not what is wrong, and
+			// the clause on one line keeps its edit.
+			const emptyList = "fn main(\n) -> Int { 1 }"
+			p = testsupport.Analyze(t, emptyList)
+			wantDiags(t, "empty parameter list on two lines", p, mainError(spanIn(t, p, emptyList, " main", "main"),
+				"declared here returning `Int`", "remove `-> Int`", diag.Delete(spanIn(t, p, emptyList, ") -> Int {", " -> Int"))))
+		}
+		{
+			// A return type that does not exist is the error type, and gives no
+			// complaint about `main`; with a parameter the parameter is the whole
+			// complaint.
+			// A return type that is not a type is E0406 and not a `main` that
+			// returns something: the unknown type is the one mistake.
+			const unknown = "fn main() -> Foo {}"
+			p := testsupport.Analyze(t, unknown)
+			wantDiags(t, "unknown return type", p, unknownType(spanIn(t, p, unknown, "-> Foo", "Foo"), "Foo", ""))
+			const src = "fn main(x: Int) -> Foo {}"
+			p = testsupport.Analyze(t, src)
+			wantDiags(t, "parameter and unknown return type", p,
+				mainError(spanIn(t, p, src, " main", "main"),
+					"declared here with 1 parameter(s)", "remove the parameters",
+					diag.Replace(spanIn(t, p, src, "(x: Int)", "(x: Int)"), "()")),
+				unknownType(spanIn(t, p, src, "-> Foo", "Foo"), "Foo", ""))
+		}
+	})
+
+	t.Run("unknown_type_E0406", func(t *testing.T) {
+		// A name that is not a type is reported where it is written, and the thing
+		// that has that type says nothing more: the call that passes `true` for a
+		// parameter of a type that is not there, and the body that multiplies it,
+		// are not mistakes of their own.
+		{
+			const src = "fn double(x: Itn) -> Int { x * 2 }\nfn main() { print(double(true)) }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "parameter", p, unknownType(spanIn(t, p, src, ": Itn", "Itn"), "Itn", ""))
+		}
+		{
+			const src = "fn main() { let a: Foo = 1 }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "let", p, unknownType(spanIn(t, p, src, ": Foo", "Foo"), "Foo", ""))
+		}
+		{
+			const src = "fn f() -> Itn { 1 }\nfn main() { print(f()) }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "return type", p, unknownType(spanIn(t, p, src, "-> Itn", "Itn"), "Itn", ""))
+		}
+		{
+			// One report for each name that is written, in a signature and in a
+			// body, and none for the uses of what has the type.
+			const src = "fn f(x: Aa, y: Bb) -> Cc {\n  let z: Dd = x\n  y\n}"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "four names", p,
+				unknownType(spanIn(t, p, src, ": Aa", "Aa"), "Aa", ""),
+				unknownType(spanIn(t, p, src, ": Bb", "Bb"), "Bb", ""),
+				unknownType(spanIn(t, p, src, "-> Cc", "Cc"), "Cc", ""),
+				unknownType(spanIn(t, p, src, ": Dd", "Dd"), "Dd", ""))
+		}
+		{
+			const src = "fn main() {\n  let a: Foo = 1\n  let b: Int = a\n  let c: Bool = a\n}"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "uses of a variable of an unknown type", p, unknownType(spanIn(t, p, src, ": Foo", "Foo"), "Foo", ""))
+		}
+		{
+			const src = "fn f(x: Itn) {}\nfn main() {\n  f(true)\n  f(1)\n}"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "calls with any argument", p, unknownType(spanIn(t, p, src, ": Itn", "Itn"), "Itn", ""))
+		}
+		{
+			// The type around the unknown name is still compared with others: a
+			// function used as an Int is a mistake of its own, and the message
+			// writes the part that is not there as the error type.
+			const src = "fn f(x: Itn) {}\nfn main() { let g: Int = f }"
+			p := testsupport.Analyze(t, src)
+			wantDiags(t, "function with an unknown parameter used as an Int", p,
+				unknownType(spanIn(t, p, src, ": Itn", "Itn"), "Itn", ""),
+				secondary(mismatch(spanIn(t, p, src, "= f", "f"), "expected `Int`, found `({error}) -> ()`"),
+					spanIn(t, p, src, ": Int", "Int"), "expected because of this annotation"))
+		}
+
+		// A name spelled almost like a type gets the question and the edit that
+		// writes it; one that is farther away gets neither. Applying the edit
+		// leaves a program with no diagnostics. (`suggest` allows one edit for a
+		// name of up to five letters, and one more for each three after that.)
+		for _, row := range []struct{ name, best string }{
+			{"Bol", "Bool"}, {"Boo", "Bool"}, {"Ints", "Int"}, {"In", "Int"}, {"Boool", "Bool"},
+			{"Itn", ""}, {"Float", ""}, {"String", ""}, {"Boolean", ""}, {"BOOL", ""}, {"A", ""},
+		} {
+			src := "fn f(x: " + row.name + ") {}"
+			p := testsupport.Analyze(t, src)
+			want := unknownType(spanIn(t, p, src, ": "+row.name, row.name), row.name, row.best)
+			wantDiags(t, row.name, p, want)
+			if row.best == "" {
+				continue
+			}
+			fixed := testsupport.ApplyFixits(src, p.Session.Sink.All()[0])
+			if fixed != "fn f(x: "+row.best+") {}" {
+				t.Errorf("%s: applying the edit gives %q, want %q", row.name, fixed, "fn f(x: "+row.best+") {}")
+			}
+			wantDiags(t, row.name+" after the edit", testsupport.Analyze(t, fixed))
+		}
+
+		// The names of the types, and `()`, are not unknown.
+		{
+			p := testsupport.Analyze(t, "fn f(a: Int, b: Bool, c: ()) -> () { c }\nfn main() { let x: Int = 1\n let y: Bool = true }")
+			wantDiags(t, "known types", p)
 		}
 	})
 }

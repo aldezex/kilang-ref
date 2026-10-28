@@ -295,11 +295,22 @@ func (p *parser) item() ItemID {
 	if !ok {
 		return p.namedErrorItem(start, name)
 	}
+	afterOpen := p.pos
 	if it.Params, ok = p.params(open); !ok {
 		return p.namedErrorItem(start, name)
 	}
-	if _, ok = p.eat(Arrow); ok {
+	// p.last is the `)` now.
+	it.ParamList = p.spanFrom(open.Span)
+	it.ParamListOneLine = p.oneLine(afterOpen)
+	afterClose := p.pos
+	if arrow, ok := p.eat(Arrow); ok {
 		it.Ret, it.HasRet = p.typeExpr(), true
+		// The clause starts at the blanks just before the arrow, and not at the
+		// `)`: what lies between the two, such as a comment, is not part of it.
+		// The arrow is the token at afterClose, so the tokens that can put a
+		// line break inside the clause are the ones after it.
+		it.RetClause = base.Span{File: open.Span.File, Lo: p.blanksBefore(arrow.Span.Lo), Hi: p.last.Span.Hi}
+		it.RetClauseOneLine = p.oneLine(afterClose + 1)
 	}
 	if p.at(LBrace) {
 		it.Body, it.HasBody = p.block(), true
@@ -380,15 +391,33 @@ func (p *parser) attr() (Attr, bool) {
 		return Attr{}, false
 	}
 	a.Span = p.spanFrom(hash.Span)
-	// The tokens after the `#` that have a line break in front of them are the
-	// ones that put the attribute on more than one line.
-	a.OneLine = true
-	for _, t := range p.tb.Tokens[first+1 : p.pos] {
+	a.OneLine = p.oneLine(first + 1)
+	return a, true
+}
+
+// oneLine reports whether the tokens from index from up to the cursor, the ones
+// that were consumed since, lie on one line: none of them has a line break in
+// front of it. The token before from is not looked at, so from is the index of
+// the first token after the one that starts the piece of source.
+func (p *parser) oneLine(from int) bool {
+	for _, t := range p.tb.Tokens[from:p.pos] {
 		if t.NewlineBefore {
-			a.OneLine = false
+			return false
 		}
 	}
-	return a, true
+	return true
+}
+
+// blanksBefore returns where the run of spaces and tabs that ends at byte hi
+// starts: hi itself if no blank comes just before it. A buffer that was not
+// made by Lex has no text to look at, and then there are no blanks.
+func (p *parser) blanksBefore(hi uint32) uint32 {
+	src := p.tb.src
+	lo := hi
+	for lo > 0 && int(lo) <= len(src) && (src[lo-1] == ' ' || src[lo-1] == '\t') {
+		lo--
+	}
+	return lo
 }
 
 // params reads the parameters after the `(` of a function, which is open, and

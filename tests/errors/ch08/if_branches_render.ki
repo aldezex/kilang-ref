@@ -1,0 +1,14 @@
+// test: T08.43
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0401]: mismatched types
+// |   --> tests/errors/ch08/if_branches_render.ki:12:32
+// |    |
+// | 12 |   let x = if true { 1 } else { false }
+// |    |                                ^^^^^ expected `Int`, found `Bool`
+// |    |                     - the other branch has type `Int`
+fn main() {
+  let x = if true { 1 } else { false }
+  print(x)
+}
