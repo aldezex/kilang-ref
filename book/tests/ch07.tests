@@ -273,10 +273,11 @@ input:   "fn main() {\n  missing\n}\n" y "fn main() {\n  nope(nada, 1 + nil)\n}\
 expect:  con `missing`: exactamente un E0301 «unknown name `missing`», con la primaria «not found in this scope» sobre los bytes de `missing`, sin etiqueta secundaria, nota, ayuda ni fixit; la resolución del nombre es exactamente `Res{Kind: ResError}` (ni `Def` ni `Local`) y el fichero no liga ninguna variable. Con la llamada: exactamente tres E0301, uno por `nope` (la función llamada), `nada` (un argumento) y `nil` (un operando), cada uno con su nombre en el mensaje y su span; los tres nombres son `ResError`
 why:     es el error que más vas a ver, y tiene que decir qué nombre y dónde: el mensaje lleva el nombre entre comillas
          invertidas y la etiqueta cae justo sobre él. `ResError` y no `ResNone` es lo que dice a los pases de
-         después que el nombre ya está explicado, para que no den un segundo error sobre él. La ayuda («did you mean…?») llega en la sesión
-         siguiente: este test usa `missing`, lejos de `main` y de `print`, para que «sin ayuda» siga siendo cierto
-         cuando exista. Y el callee, el argumento y el operando son tres sitios distintos del recorrido: cada uno
-         puede olvidarse por separado
+         después que el nombre ya está explicado, para que no den un segundo error sobre él. La ayuda («did
+         you mean…?») ya existe: este test usa `missing`, lejos de `main` y de `print`, para que «sin ayuda»
+         siga siendo cierto, y lo que la ayuda dice cuando un nombre sí se parece a otro lo fija
+         `TestSuggestions`. Y el callee, el argumento y el operando son tres sitios distintos del recorrido:
+         cada uno puede olvidarse por separado
 ref:     TestScopes/unknown_name_E0301
 
 [T07.24] scopes.forward_reference_to_later_fn               level: core
@@ -304,3 +305,175 @@ why:     las sugerencias de «¿quisiste decir…?» sacan sus candidatos de aqu
          no con el exterior. Y parar a medias tiene su trampa: un recorrido que siguiera llamando a quien ya paró
          hace que Go detenga el programa con un panic
 ref:     TestScope/visible_lists_innermost_first_once
+
+[T07.26] base.edit_distance_basic                           level: core
+kind:    unit (go test)      file: internal/base/edit_distance_test.go
+case:    la distancia de edición entre dos cadenas es el menor número de inserciones, borrados y sustituciones de un byte que convierten una en la otra; cada una de las tres operaciones cuesta 1, el resultado no depende del orden de los argumentos y se cuentan bytes, no caracteres
+input:   catorce pares, cada uno dado en los dos órdenes: `kitten` y `sitting`; `""` y `abc`; `igual` y `igual`; `ab` y `ba`; `""` y `""`; `a` y `b`; `abc` y `abd`; `xbc` y `abc`; `abc` y `abxc`; `abc` y `bc`; `flaw` y `lawn`; `sunday` y `saturday`; `intention` y `execution`; `é` y `e`
+expect:  3, 3, 0, 2, 0, 1, 1, 1, 1, 1, 2, 3, 5 y 2, en este orden, también al darlos al revés (la `é` son dos bytes, así que pasar a `e` es una sustitución y un borrado)
+why:     la tabla de programación dinámica tiene muchas formas de salir mal sin que se note en el ejemplo de
+         siempre: una sustitución que cueste 2 da 5 en `kitten`, una fila inicial a cero o una columna 0 sin
+         rellenar falsean los casos con una cadena vacía, y contar caracteres pegados en vez de alinearlos
+         (los que difieren en su sitio, más la diferencia de largo) acierta los cuatro primeros pares y
+         falla en `abc` y `bc`. El orden de los argumentos importa porque la fila se dimensiona con una de las
+         dos cadenas: con la equivocada, el índice se sale. Y que cuente bytes y no caracteres es el contrato
+         (el umbral de `suggest` también mide en bytes): una versión por runes daría 1 para `é` y `e`
+ref:     TestEditDistance/basic
+
+[T07.27] suggest.picks_closest                              level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    de los candidatos que están al alcance de un nombre, `suggest` devuelve el de menor distancia de edición, esté donde esté en la lista, y mide también los candidatos más largos y más cortos que el nombre
+input:   `fibb` con `main`, `fib` y `print`; `abcdef` con `abcdez` (a una edición), `abcdaa` y `abcdxx` (a dos), con el más cercano el primero, el de en medio y el último; `counter` con `counterss` y `counters`; y `counter` con `coter` y `counte`
+expect:  `fib`; `abcdez` en los tres órdenes; `counters`; y `counte`, siempre con `true`
+why:     es la regla central de la ayuda: entre varios nombres que se parecen, el que más. Un recorrido que se
+         quedara con el primero que llega al umbral, con el último o con el más lejano falla en una de las tres
+         posiciones; uno que prefiriera el primero del alfabeto (`abcdaa`) falla en las tres, porque el más cercano
+         no es el primero por orden alfabético. Y los dos últimos casos comprueban que el candidato puede tener
+         otro largo que el nombre: una comparación que solo mirara cadenas del mismo largo se saltaría
+         `counters` y `counte`
+ref:     TestSuggest/picks_closest
+
+[T07.28] suggest.ties_are_alphabetical                      level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    si varios candidatos están a la misma distancia mínima, gana el primero por orden alfabético, en cualquier orden en que lleguen; un empate lo es solo a la distancia mínima
+input:   `ab` con `ac` y `aa` (en los dos órdenes) y con `ad`, `aa`, `ac` en tres órdenes más; `abcdef` con `abcdzz`, `abcdyy` y `abcdxx`; `ab` con `ac` dos veces; `abcdef` con `abcdaa` (a dos ediciones) y `abcdez` (a una); `x` con `z` e `y`
+expect:  `aa` en las cinco listas de `ab`; `abcdxx`; `ac`; `abcdez`, que gana aunque va después en el alfabeto porque está más cerca; e `y`, siempre con `true`
+why:     la ayuda tiene que ser la misma en cada ejecución y en cada máquina. Hoy los candidatos le llegan
+         ordenados, pero el desempate es cosa de `suggest` y no debe depender de ello: por eso se prueba el
+         mismo empate con la lista en cada orden, y quedarse con el primero que llega, o con el último, falla
+         en alguno. El caso de `abcdez` impide el error contrario, el de ordenar por nombre y olvidar la
+         distancia. El nombre de un solo byte comprueba que el umbral nunca baja de una edición: con
+         `len/3` a secas valdría 0 y no habría ninguna sugerencia
+ref:     TestSuggest/ties_are_alphabetical
+
+[T07.29] suggest.none_when_far                              level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    si ningún candidato está al alcance del nombre, `suggest` no sugiere nada: devuelve la cadena vacía y `false`, también sin candidatos; y los candidatos lejanos no estorban al cercano
+input:   `zzzzzz` con `main`, `fib` y `print`; `fibb` sin candidatos (`nil` y la lista vacía); `fibb` con `fob` y `ffibbbb` (a dos y a tres ediciones); `x` con `ab`; y `fibb` con `zzzzzz`, `fib` y `qqq`
+expect:  `("", false)` en los cinco primeros casos y `("fib", true)` en el último
+why:     una ayuda que sugiere un nombre que no tiene nada que ver es peor que ninguna: quien lee «did you
+         mean `print`?» tras escribir `zzzzzz` deja de fiarse de las sugerencias. Los casos de `fibb` fijan que
+         dos ediciones son demasiadas para un nombre de cuatro bytes, y el de `x`, que un nombre de un byte
+         admite una edición y no dos. Y devolver `false` sin vaciar la cadena haría que un llamador descuidado
+         usara un nombre a medias
+ref:     TestSuggest/none_when_far
+
+[T07.30] suggest.threshold_is_len_over_three                level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    un nombre de n bytes admite como mucho max(1, n/3) ediciones (con la división de enteros), contadas sobre el largo del nombre y no sobre el del candidato; con esa distancia se sugiere y con una más no
+input:   un nombre de 1 a 9 bytes (`a`, `ab`, `abc`… `abcdefghi`) con un candidato a la distancia justa y, salvo en n = 1, otro a una más, cambiando sus primeras letras por `z`; `abcd` con `abcdef`, `abcdef` con `abcd`, `abcdef` con `abcdefgh`, `a` con `ab` y `ab` con `a`; y `abcdef` con `abcdxx` (a dos), con `abcxxx` (a tres) y con los dos juntos
+expect:  se sugiere con 1 edición hasta n = 5, con 2 en n = 6, 7 y 8, y con 3 en n = 9, y no con una más; `abcd` no sugiere `abcdef` y `abcdef` sí sugiere `abcd`; `abcdef` sí sugiere `abcdefgh`, `a` sí sugiere `ab` y `ab` sí sugiere `a`; con `abcdxx` y `abcxxx` juntos gana `abcdxx`
+why:     el umbral decide cuándo la ayuda es útil y cuándo es ruido, y se escribe con tantas formas de
+         equivocarse que cada fila mata a una: `len/2` deja pasar `abcxxx`, `<` en vez de `<=` rechaza la
+         distancia justa, quitar el mínimo de 1 deja sin sugerencia a los nombres de una o dos letras,
+         redondear hacia arriba o al más cercano admite alguna edición de más (n = 4, 5, 7 u 8), y medir con el
+         largo del candidato en vez del del nombre falla en las dos filas de `abcd` y `abcdef`. Las tres últimas
+         filas fijan el borde del descarte por largo (`skips_lengths_out_of_reach`): un candidato cuyo largo
+         difiere del del nombre justo en el umbral sí está al alcance, por la derecha y por la izquierda, y
+         descartarlo con un `>=` en vez de un `>` le quitaría la sugerencia
+ref:     TestSuggest/threshold_is_len_over_three
+
+[T07.31] suggest.candidates_are_sorted_once                 level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    los candidatos de un nombre desconocido son los nombres de las variables visibles, los de las definiciones del módulo y los de las definiciones `pub` del preludio, en un slice ordenado alfabéticamente y con cada nombre una sola vez
+input:   un resolvedor montado a mano: un preludio con `print` y `beta` públicas y `hidden` privada; un módulo con `zeta`, `alpha`, `mid` y `mid` otra vez (una definición repetida); y dos ámbitos con las variables `yy` y `alpha` (fuera) y `cc` (dentro). Los nombres se internan en orden alfabético inverso
+expect:  en 50 llamadas seguidas, exactamente `alpha`, `beta`, `cc`, `mid`, `print`, `yy` y `zeta`: `hidden` no está, y `alpha` (variable y definición) y `mid` (definida dos veces) salen una vez
+why:     la lista de candidatos se junta en un `map` (para que un nombre no salga dos veces), y un `map` de Go
+         se recorre en un orden distinto cada vez: si la lista saliera tal cual, la ayuda de un mismo programa
+         podría cambiar de una ejecución a otra. `suggest` desempata por orden alfabético y no depende de ello, así que
+         ningún test de la ayuda notaría que la lista dejara de estar ordenada: este sí, porque pide la lista
+         misma, 50 veces, y porque interna los nombres al revés (ordenar por `Symbol` en vez de por texto
+         también falla). Pide además lo que `name` busca y nada más: nada de lo privado del preludio, y nada
+         dos veces
+ref:     TestSuggest/candidates_are_sorted_once
+
+[T07.32] suggestions.suggests_closest_name                  level: core
+kind:    unit (go test)      file: internal/sema/suggest_test.go
+case:    el E0301 de un nombre desconocido lleva la ayuda «did you mean `x`?» con el nombre más parecido entre las funciones del fichero (también las que se definen más abajo), los parámetros y los `let` que se ven en ese punto, los de los bloques que lo rodean incluidos; funciones y variables compiten solo por distancia, y los empates los gana el primero por orden alfabético; y un nombre desconocido dentro del propio preludio busca entre las funciones del preludio
+input:   el programa del golden, con `fibb` escrito en el cuerpo de `fib`; `helpr()` con `fn helper` más abajo; `countr` con el parámetro `counter`; `totl` con `let total`; `widt` con el parámetro `width` desde un bloque; `valu` con `let value` desde dos bloques; y `gammc` con una función y un parámetro a la misma distancia, `gamma` y `gammb` en los dos órdenes posibles; y `helpr()` dentro de `fn broken()` en un preludio escrito a mano que define también `fn helper() {}`
+expect:  en cada fuente exactamente un diagnóstico, un E0301 con su mensaje, su etiqueta «not found in this scope» sobre el nombre, sin etiqueta secundaria, nota ni fixit, y `Help` exactamente «did you mean `fib`?», «…`helper`?», «…`counter`?», «…`total`?», «…`width`?», «…`value`?» y, en las dos últimas, «…`gamma`?» sea la función o la variable; y, en el preludio, el único diagnóstico es un E0301 dentro del fichero del preludio, con `Help` «…`helper`?» aunque `helper` no sea `pub`
+why:     el caso de `fibb` es el del hito del capítulo, y los demás cierran lo que podría quedarse fuera de la
+         lista de candidatos sin que ese caso lo notara: las variables (que no son definiciones), las de los
+         ámbitos que rodean al bloque (si solo se mirara el más interior, `widt` y `valu` no encontrarían nada) y
+         las funciones que aún no se han leído. Las dos últimas filas fijan que no hay prioridad entre
+         variables y funciones: una lista de candidatos que buscara primero en una clase y solo después en la
+         otra daría `gammb` o `gamma` según el orden, y la prueba falla en alguno de los dos. La última fila
+         fija que los candidatos son las definiciones del módulo que se recorre, sea cual sea: una lista que
+         mirase siempre el módulo del usuario no encontraría `helper`, y ningún otro caso tiene un nombre
+         desconocido fuera del fichero del usuario
+ref:     TestSuggestions/suggests_closest_name
+
+[T07.33] suggestions.suggests_prelude_name                  level: core
+kind:    unit (go test)      file: internal/sema/suggest_test.go
+case:    entre los candidatos de un nombre desconocido están las definiciones `pub` del preludio, aunque el fichero no las defina
+input:   `fn main() { prnt(1) }` con el preludio de verdad; y `visibl()` en un fichero cuyo preludio, escrito a mano, es `pub fn visible() {}`
+expect:  en cada caso exactamente un E0301 (mensaje, etiqueta primaria sobre el nombre, sin secundaria, nota ni fixit) con `Help` «did you mean `print`?» y «did you mean `visible`?»
+why:     `print` no está en el fichero y aun así se puede llamar, y por eso mismo se puede escribir mal: sin el
+         preludio entre los candidatos, `prnt` no tendría ayuda justo en el error que más va a cometer quien
+         empieza. El segundo caso usa un preludio propio para que el test no dependa de lo que lleve la
+         biblioteca el día de mañana
+ref:     TestSuggestions/suggests_prelude_name
+
+[T07.34] suggestions.no_suggestion_when_far                 level: core
+kind:    unit (go test)      file: internal/sema/suggest_test.go
+case:    el E0301 no lleva ayuda cuando ningún candidato está al alcance del nombre, y los nombres que el programa no puede usar en ese punto no cuentan como candidatos: una variable cuyo bloque ya terminó, una que aún no se ha ligado, una de otra función, y una función privada del preludio, también cuando se define dos veces
+input:   `zzzzzz` en `main`; `appl` tras `{ let apple = 1 }`; `appl` antes de `let apple = 1`; `coun` en una función cuando otra tiene el parámetro `count`; `secret` con un preludio que define `fn secrett() {}` sin `pub`; y `dupl` con un preludio que define `fn dupe() {}` y después `pub fn dupe() {}`
+expect:  en los cinco primeros casos exactamente un E0301 (mensaje, etiqueta, sin secundaria, nota ni fixit) con `Help == ""`; en el último, el único E0301 está en el fichero del usuario y tiene `Help == ""` (el preludio da además un E0302 por su `dupe`, que el test no mira)
+why:     «did you mean…?» solo es honesta si el nombre sugerido funcionaría de verdad: si el compilador dice
+         `count` y al escribirlo sigue dando E0301, la ayuda ha mentido. Cada fila mata una lista de
+         candidatos más generosa de la cuenta: todas las variables de la función en vez de las visibles,
+         las de todas las funciones, las privadas del preludio, o la segunda definición de un
+         nombre (la primera es la que el nombre designa, y aquí es privada). `zzzzzz` es el caso trivial,
+         lejos de `main` y de `print`
+ref:     TestSuggestions/no_suggestion_when_far
+
+[T07.35] resolve.unknown_name_is_reported_by_check          level: core
+kind:    diag                file: tests/errors/ch07/unknown_name.ki
+case:    `ki check` pasa el fichero por la resolución de nombres y da el E0301 de un nombre desconocido, `fibb`, escrito dentro de una función que sí existe, `fib`
+input:   `fn fib` que llama a `fibb(n - 1) + fib(n - 2)`, y un `main` que imprime `fib(20)`
+expect:  sale con 1 y el único diagnóstico es un E0301 en la línea 4, columna 25, el nombre `fibb`; `fib`, `print` y `n` se resuelven sin error
+why:     es el primer programa de verdad con un error de nombres, y el que el capítulo enseña: un error en medio
+         de una función recursiva, donde un `fib` bien escrito justo al lado se resuelve sin problema. Sirve
+         de contraste con la tarjeta siguiente: aquí el runner compara el código y la posición del error,
+         allí el texto exacto que ve quien ejecuta `ki check`
+ref:     tests/errors/ch07/unknown_name.ki
+
+[T07.36] check.unknown_name_render                          level: core
+kind:    diag                file: tests/errors/ch07/unknown_name_render.ki
+case:    `ki check` sobre el mismo programa, con el E0301 en la línea 12, columna 25 (el fichero lleva diez líneas de cabecera)
+input:   `fn fib` que llama a `fibb(n - 1) + fib(n - 2)`, y un `main` que imprime `fib(20)`, tras la cabecera
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 6 líneas: `error[E0301]: unknown name `fibb``, la ruta relativa a la raíz con `12:25`, el fragmento de la línea 12 con `^^^^` y «not found in this scope» bajo `fibb`, y la línea `= help: did you mean `fib`?`
+why:     la ayuda solo existe de verdad cuando se ve en una terminal: los tests anteriores miran el campo
+         `Help` del diagnóstico, este mira el texto que sale por stderr, con la línea `= help:` en su sitio y
+         el número de línea de dos cifras que ensancha la columna. Si el renderizador olvidara pintar la
+         ayuda, o el compilador no la adjuntara, solo esta tarjeta lo notaría de punta a punta
+ref:     tests/errors/ch07/unknown_name_render.ki
+
+[T07.37] suggest.skips_lengths_out_of_reach                 level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    un candidato cuyo largo difiere del del nombre en más que el umbral no está al alcance, y `suggest` ni siquiera lo mide
+input:   `abcdef` con un candidato de 100 bytes y con `abcdefghi` (tres más); un nombre de 100 bytes con `abcdef`; `a` con `abcdefg` (seis más); `abcdefghij` con `abcdef` (cuatro menos); `abcdefghijkl` con `abcdefg` (cinco menos); y, como contraste, `abcdef` con `abcdxx`, que sí está al alcance
+expect:  medido con `testing.AllocsPerRun`, buscar entre los seis candidatos fuera de alcance cuesta 0 asignaciones, y buscar entre el del contraste cuesta alguna
+why:     la distancia de edición recorre una tabla del tamaño del producto de los dos largos, y un nombre
+         desconocido muy largo contra otro de diez bytes la recorre entera para acabar descartándolo. El largo ya
+         dice que está lejos: cada edición cambia el largo en uno como mucho, así que la distancia es al menos la
+         diferencia de largos. La salida es la misma con o sin el descarte, así que el test cuenta asignaciones:
+         la distancia reserva las dos filas de su tabla y `suggest` no reserva nada, de modo que un candidato
+         descartado cuesta 0 y uno que se mide, alguna (dos, si la tabla no cabe en la pila: por eso todos los
+         candidatos tienen al menos 6 bytes, como el del contraste). El contraste evita que los ceros se deban a
+         que nada se asigna nunca. El borde (un candidato justo a la distancia del umbral sí se mide) lo fijan las tres
+         últimas filas de `threshold_is_len_over_three`
+ref:     TestSuggest/skips_lengths_out_of_reach
+
+[T07.38] suggest.no_suggestions_after_the_error_cap         level: core
+kind:    unit (go test)      file: internal/sema/suggest_internal_test.go
+case:    el E0301 lleva su ayuda mientras el sink guarda los errores, el último que cabe incluido, y cuando el sink ya está lleno no se busca ninguna: un nombre desconocido deja de costar una asignación por cada candidato
+input:   un resolvedor montado a mano, con un ámbito vacío y un módulo de usuario que define `fib` y otras 300 funciones; `fibb`, que no está definido y está a una edición de `fib`, resuelto 101 veces con un sink vacío; y, con `testing.AllocsPerRun`, resuelto con un sink vacío y con otro al que ya se han dado 101 errores
+expect:  los 101 nombres dan `ResError`; el sink guarda exactamente 100 errores y dice que se pasó (`Truncated`); los 100 llevan la ayuda «did you mean `fib`?»; y resolver un nombre con el sink lleno cuesta como mucho una décima parte de las asignaciones que cuesta con sitio en el sink, que son al menos 100
+why:     sin este freno, `ki check` de un fichero con miles de nombres desconocidos tardaba segundos: cada uno
+         reunía, ordenaba y medía todos los candidatos para una ayuda que el sink iba a tirar, desde el error 101,
+         y la salida era la misma. Como la salida no cambia, el test mide el trabajo: las asignaciones de una
+         llamada son siempre las mismas, cosa que un reloj no sería. La primera mitad vigila el otro lado: una
+         guarda que saltara antes de tiempo quitaría la ayuda a errores que sí se ven, y por eso se miran los
+         100 que guarda el sink, el último incluido
+ref:     TestSuggest/no_suggestions_after_the_error_cap

@@ -156,12 +156,13 @@ type ResolvedProgram struct {
 // the second. Nothing is reported, because Ki defines no diagnostic for a
 // repeated parameter (TestScopes/shadowing_picks_innermost pins this).
 //
-// It reports to sink: E0301 for a name that stands for nothing, E0302 for a
-// function defined twice in a module, E0304 for `#[extern]` anywhere but the
-// standard library (any module but user) and E0305 for any other attribute, in
-// any module. A tree that has syntax errors is resolved like any other: its
-// error nodes stand for nothing and are skipped. Resolve does not change the
-// modules.
+// It reports to sink: E0301 for a name that stands for nothing, with the help
+// line "did you mean `fib`?" if a variable or definition it could have stood
+// for is spelled almost like it; E0302 for a function defined twice in a
+// module, E0304 for `#[extern]` anywhere but the standard library (any module
+// but user) and E0305 for any other attribute, in any module. A tree that has
+// syntax errors is resolved like any other: its error nodes stand for nothing
+// and are skipped. Resolve does not change the modules.
 //
 // The second pass recurses once per level of the tree. Parse bounds that depth
 // (MaxNesting levels, and the operators and calls of one statement, MaxChain,
@@ -333,7 +334,8 @@ func (r *resolver) bind(name base.Symbol, span base.Span) LocalID {
 
 // name says what the name written in e stands for: a local variable if a scope
 // has one by that name, and failing that a definition. If there is none it
-// reports E0301 and says ResError.
+// reports E0301, with a help line if a name that it could have meant exists
+// (see suggest) and the sink has not yet dropped an error, and says ResError.
 func (r *resolver) name(e syntax.Expr) Res {
 	if local, ok := r.scope.lookup(e.Name); ok {
 		return Res{Kind: ResLocal, Local: local}
@@ -341,8 +343,18 @@ func (r *resolver) name(e syntax.Expr) Res {
 	if def, ok := r.lookupDef(r.mod, e.Name); ok {
 		return Res{Kind: ResDef, Def: def}
 	}
-	r.sink.Report(diag.NewError(diag.E(301), "unknown name `"+r.in.String(e.Name)+"`",
-		diag.Label{Span: e.Span, Message: "not found in this scope"}))
+	name := r.in.String(e.Name)
+	d := diag.NewError(diag.E(301), "unknown name `"+name+"`",
+		diag.Label{Span: e.Span, Message: "not found in this scope"})
+	// The help line costs a pass over every candidate. Once the sink is full it
+	// drops what it is given, so a file with thousands of unknown names would
+	// pay for thousands of suggestions that nobody reads.
+	if !r.sink.Truncated() {
+		if best, ok := suggest(name, r.candidates()); ok {
+			d = d.WithHelp("did you mean `" + best + "`?")
+		}
+	}
+	r.sink.Report(d)
 	return Res{Kind: ResError}
 }
 

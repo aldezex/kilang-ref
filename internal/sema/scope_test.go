@@ -138,8 +138,8 @@ func userDiags(t *testing.T, p *testsupport.Program, n int) []diag.Diagnostic {
 }
 
 // checkUnknown fails the test unless d is the E0301 for the name written at
-// span. It leaves the help line alone: the next session adds one when a name
-// that exists is close to this one.
+// span. It leaves the help line alone: a name that is close to one that exists
+// has one, and TestSuggestions is the test that pins what it says.
 func checkUnknown(t *testing.T, d diag.Diagnostic, name string, span base.Span) {
 	t.Helper()
 	if d.Severity != diag.Error || d.Code != diag.E(301) {
@@ -449,8 +449,8 @@ fn k() {
 	})
 
 	t.Run("unknown_name_E0301", func(t *testing.T) {
-		// `missing` is far from every name that exists (main, print), so the
-		// next session finds nothing to suggest and the help line stays empty.
+		// `missing` is far from every name that exists (main, print), so there
+		// is nothing to suggest and the help line stays empty.
 		const src = "fn main() {\n  missing\n}\n"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p, "E0301")

@@ -51,10 +51,11 @@ func (s *scope) lookup(name base.Symbol) (LocalID, bool) {
 }
 
 // visible returns every name that s can see, once each, for the suggestions of
-// the next session: the names of s first, then those of its parent that s does
-// not bind, and so on outwards. The names of one scope come in increasing
-// Symbol order, which is the order they were first interned, not alphabetical:
-// the order depends on the program and never on the order of a Go map.
+// `did you mean…?` (see resolver.candidates): the names of s first, then those
+// of its parent that s does not bind, and so on outwards. The names of one scope
+// come in increasing Symbol order, which is the order they were first interned,
+// not alphabetical: the order depends on the program and never on the order of
+// a Go map.
 func (s *scope) visible() iter.Seq[base.Symbol] {
 	return func(yield func(base.Symbol) bool) {
 		seen := make(map[base.Symbol]bool)

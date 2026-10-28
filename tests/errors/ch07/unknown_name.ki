@@ -1,0 +1,8 @@
+// test: T07.35
+// run: check
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }  // ERROR(E0301) @25
+}
+fn main() {
+  print(fib(20))
+}
