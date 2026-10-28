@@ -32,6 +32,10 @@ $ ki emit tokens fib.ki
 
 No hay `Newline` antes de `|>`, que continúa la línea, y el string se parte en cabeza, expresión y cola. Es el hito del capítulo; el parser del capítulo 6 leerá estos tokens, camino del hito M1 (capítulo 10).
 
+:::note
+**Fe de erratas (2026-10-28).** En el capítulo 7 los errores de Ki suben al nivel de rustc: la etiqueta principal lleva siempre texto, y los que tienen una corrección concreta añaden una nota, una ayuda y una edición propuesta. Por eso el `E0106` de un escape inválido tiene hoy la etiqueta «unknown escape», una ayuda y, en un string, una edición. Las tarjetas T05.28 y T05.29 están reescritas para decir lo que el código da ahora; el texto del capítulo cuenta lo que daba cuando se publicó y no se toca. El capítulo 7, en la sección «El listón: errores al nivel de rustc», lo explica.
+:::
+
 ## Teoría
 
 ### Bytes, runas y el maximal munch

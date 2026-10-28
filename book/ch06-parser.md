@@ -27,6 +27,10 @@ $ ki emit ast fib.ki
 
 Una línea por función, en S-expresiones: cada nodo entre paréntesis, con su clase delante. `_` es un tipo que el programa no escribió. Que `print` no exista no le importa al parser; los nombres son del capítulo 7. Es el hito del capítulo, camino de M1 (capítulo 10).
 
+:::note
+**Fe de erratas (2026-10-28).** En el capítulo 7 los errores de Ki suben al nivel de rustc: la etiqueta principal lleva siempre texto, y los que tienen una corrección concreta añaden una secundaria, una nota, una ayuda y una edición propuesta. Por eso los `E0201` a `E0205` de este capítulo salen hoy con texto en la etiqueta principal, con una ayuda cuando hay algo concreto que proponer y, si la corrección es mecánica (el `)` o la `}` que faltan, el `&&` de una comparación encadenada), con la edición. Las tarjetas T06.12, T06.24, T06.30, T06.38, T06.69, T06.73 y T06.74 están reescritas para decir lo que el código da ahora (las T06.12 y T06.38 las reescribe la sesión 4 del capítulo 7, y las demás esta fe de erratas); el texto del capítulo cuenta lo que daba cuando se publicó y no se toca. El capítulo 7, en la sección «El listón: errores al nivel de rustc», lo explica.
+:::
+
 ## Teoría
 
 ### La pila de una goroutine y la recursión

@@ -260,7 +260,7 @@ ref:     TestParseExpr/not_and_or
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    dos comparaciones seguidas no se asocian: se informa del segundo operador, con una ayuda que propone `&&`, y el parser sigue después de la cadena
 input:   "a < b < c"
-expect:  exactamente un diagnóstico, el error E0203 `comparison operators cannot be chained`, con el primario en el segundo `<` (bytes 6 a 7), sin texto de etiqueta ni notas, y la ayuda «use `&&`: `a < b && b < c`»; la expresión se imprime `(error)`, su nodo cubre los bytes 0 a 9 y el cursor queda en el `Eof`
+expect:  exactamente un diagnóstico, el error E0203 `comparison operators cannot be chained`, con el primario «second comparison here» en el segundo `<` (bytes 6 a 7), el secundario «first comparison here» en el primero (bytes 2 a 3), sin notas, la ayuda «use `&&`: `a < b && b < c`» y un `Insert` de `&& b ` justo antes del segundo `<`; la expresión se imprime `(error)`, su nodo cubre los bytes 0 a 9 y el cursor queda en el `Eof`
 why:     `a < b < c` compararía un `Bool` con un número, que casi nunca es lo que se quiere, y la ayuda dice
          cómo escribirlo. El error está en el segundo operador, que es donde empieza lo que sobra; el árbol es
          un nodo de error para que el comprobador de tipos no añada un segundo error sobre lo que el parser
@@ -318,7 +318,7 @@ ref:     TestParseExpr/upper_name
 kind:    unit (go test)      file: internal/syntax/parser_expr_internal_test.go
 case:    una cadena de 1024 operadores se acepta; con el 1025 se informa E0205 y toda la expresión pasa a ser un nodo de error
 input:   "1" seguido de 1024 veces " + 1"; y el mismo con 1025
-expect:  con 1024, el árbol entero (1024 niveles, `(+ (+ … 1 1) … 1)` por la izquierda) y ningún diagnóstico; con 1025, exactamente un diagnóstico, el error E0205 `expression chain is too long`, con el primario en el último `+` (un byte), sin texto de etiqueta, con la única nota «the limit is 1024 operators and calls in one expression»; la expresión se imprime `(error)` y el cursor queda en el `Eof`
+expect:  con 1024, el árbol entero (1024 niveles, `(+ (+ … 1 1) … 1)` por la izquierda) y ningún diagnóstico; con 1025, exactamente un diagnóstico, el error E0205 `expression chain is too long`, con el primario «operator or call number 1025 of this chain» en el último `+` (un byte), la única nota «the limit is 1024 operators and calls in one expression», la ayuda «split the expression with `let` bindings» y ninguna edición; la expresión se imprime `(error)` y el cursor queda en el `Eof`
 why:     el límite está en `MaxChain = 1024` y la prueba está en los dos lados: con 1024 no se informa nada
          (un `<` en vez de `<=` falla aquí) y con 1025 sí (un límite más alto falla allí). Y los 1024 niveles
          llegan al árbol, no se pierde ninguno
@@ -732,7 +732,7 @@ ref:     TestParseStmt/spans
 kind:    unit (go test)      file: internal/syntax/parser_stmt_internal_test.go
 case:    cada sitio donde el parser necesita un token y no lo encuentra da un E0201 con su mensaje y su posición
 input:   42 fuentes, una o más por cada palabra del mensaje: `expression` (`fn f() { 1 + }`, `fn f() { ; }`, `fn f() { g(,) }`…), `identifier` (`fn 1`, `fn f(1) {}`, `#[1] fn f() {}`…), `type` (`fn f(x: ) {}`, `fn f() -> {}`…), `=` (también ante el final del fichero: `fn f() { let x`), `)` (parámetros, grupos, llamadas, el tipo `()` y los atributos), `{` (un `if` sin bloque, también ante un salto de línea, un `else` sin bloque y una función sin cuerpo ni `#[extern]`), `newline`, `item` (tokens sueltos arriba del todo y tras atributos o `pub`) y los sitios de la firma y de los atributos que piden `[`, `]`, `(` o `string`
-expect:  el primer diagnóstico de cada fuente es exactamente el E0201 con ese mensaje y la etiqueta primaria sobre el token hallado: sus bytes, los del salto de línea (`\n`) o, si es el final del fichero, el span vacío que hay justo detrás del último byte; nada más en el diagnóstico (ni etiqueta secundaria, ni nota, ni ayuda)
+expect:  el primer diagnóstico de cada fuente es exactamente el E0201 con ese mensaje y la etiqueta primaria sobre el token hallado: sus bytes, los del salto de línea (`\n`) o, si es el final del fichero, el span vacío que hay justo detrás del último byte; no se compara nada más de ese diagnóstico: el texto de la etiqueta primaria lo mira T07.69 sobre las mismas filas, y la secundaria, la ayuda y la edición, T07.70, T07.71, T07.72 y T07.91
 why:     un error de sintaxis tiene que decir qué se esperaba y qué se encontró, y señalar el sitio exacto:
          si dijera `item` donde esperaba un `type`, o subrayara el token anterior al que falla, el usuario
          buscaría el fallo donde no está. Cada fila mata a un parser que se calla en ese sitio, que usa otra
@@ -777,7 +777,7 @@ ref:     TestParseStmt/malformed_blocks_terminate
 kind:    unit (go test)      file: internal/syntax/recover_test.go
 case:    una expresión que falta justo antes del `}` es un solo error, y el token hallado es ese `}`
 input:   "fn f() -> Int { 1 + }"
-expect:  exactamente un diagnóstico: el E0201 «expected expression, found `}`», con la etiqueta primaria sobre el `}` y nada más (ni etiqueta secundaria, ni nota, ni ayuda)
+expect:  exactamente un diagnóstico: el E0201 «expected expression, found `}`», con la etiqueta primaria «expected expression here» sobre el `}` y nada más (ni etiqueta secundaria, ni nota, ni ayuda, ni edición)
 why:     es el olvido más corriente al escribir una cuenta: un parser que además se quejara del `}` que viene
          detrás, o que no dijera nada, dejaría al usuario con dos errores o con ninguno por una sola omisión
 ref:     TestRecover/missing_expression_E0201
@@ -786,7 +786,7 @@ ref:     TestRecover/missing_expression_E0201
 kind:    unit (go test)      file: internal/syntax/recover_test.go
 case:    un fichero que acaba con un `{` sin cerrar da E0202 sobre el `{`, no sobre el final del fichero
 input:   "fn f() {"
-expect:  exactamente un diagnóstico: el E0202 «unclosed delimiter», con la etiqueta primaria sobre el `{` y el texto de la etiqueta «this `{` is never closed»; sin etiqueta secundaria, nota ni ayuda
+expect:  exactamente un diagnóstico: el E0202 «unclosed delimiter», con la etiqueta primaria sobre el `{` y el texto de la etiqueta «this `{` is never closed», la ayuda «close it with `}`» y un `Insert` de `}` al final del fichero (el byte 8); sin etiqueta secundaria ni nota
 why:     el parser se da cuenta al llegar al final del fichero, pero el error está donde se abrió la llave: si
          subrayara el final, el usuario tendría que buscar a mano cuál de las llaves del fichero es la que falta
 ref:     TestRecover/unclosed_brace_E0202

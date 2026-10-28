@@ -284,10 +284,10 @@ ref:     TestRenderShort/format
 kind:    unit (go test)      file: internal/diag/render_test.go
 case:    pintar con el renderizador JSON el E0301 de una sola etiqueta
 input:   el mismo E0301 "unknown name `z`" en 2:9 de `test.ki`, sin notas ni ayuda
-expect:  exactamente {"severity":"error","code":"E0301","message":"unknown name `z`","path":"test.ki","line":2,"col":9,"labels":[{"primary":true,"line":2,"col":9,"message":"not found in this scope"}],"notes":[],"help":null} más "\n"
+expect:  exactamente {"severity":"error","code":"E0301","message":"unknown name `z`","path":"test.ki","line":2,"col":9,"labels":[{"primary":true,"line":2,"col":9,"message":"not found in this scope"}],"notes":[],"help":null,"fixits":[]} más "\n"
 why:     el runner de tests de Ki lee esta salida para comparar (código, línea, columna); el orden y
-         el nombre de las claves, `"notes":[]` en lugar de `null` y `"help":null` son parte del
-         contrato con quien la consume
+         el nombre de las claves, `"notes":[]` y `"fixits":[]` en lugar de `null`, y `"help":null` son
+         parte del contrato con quien la consume
 ref:     TestRenderJSON/line
 
 [T03.26] diag.render_json_escapes                          level: core
@@ -337,12 +337,11 @@ case:    comprobar un fichero con un byte de control ASCII tras una letra, en ci
 input:   "a\x00", "a\x01", "a\x0b", "a\x0c" y "a\x1f"
 expect:  en cada caso `CheckSource` devuelve `false`; exactamente 1 diagnóstico, un error E0102 con el mensaje
          "control character U+0000 in source" (con el código del byte, en cuatro cifras hexadecimales
-         mayúsculas), la primaria sobre [1,2) y la etiqueta "not allowed in Ki source; write it as an
-         escape such as `\u{0}`" (con el byte en minúsculas y sin ceros delante)
+         mayúsculas), la primaria sobre [1,2) y la etiqueta "not allowed in Ki source"
 why:     un control invisible dentro de un identificador o una cadena es la clase de error que nadie
          encuentra mirando la pantalla; el mensaje nombra el carácter por su código y la etiqueta dice
-         cómo escribirlo a propósito. Los extremos importan: un `b < 0x1F` dejaría pasar el 0x1F, un
-         `b > 0` dejaría pasar el NUL, el byte de control más común en un binario renombrado a `.ki`,
+         que ahí no cabe; cómo escribirlo a propósito lo dicen la nota y la ayuda que añade el capítulo 7. Los
+         extremos importan: un `b < 0x1F` dejaría pasar el 0x1F, un `b > 0` dejaría pasar el NUL, el byte de control más común en un binario renombrado a `.ki`,
          y el tabulador vertical y el salto de página parecen espacio pero son controles
 ref:     TestCheckSource/control_byte_E0102
 
@@ -361,7 +360,7 @@ case:    comprobar un fichero con el byte 0x7F (DEL) tras una letra
 input:   "a\x7f"
 expect:  `CheckSource` devuelve `false`; exactamente 1 diagnóstico, un error E0102 con el mensaje
          "control character U+007F in source", la primaria sobre [1,2) y la etiqueta
-         "not allowed in Ki source; write it as an escape such as `\u{7f}`"
+         "not allowed in Ki source"
 why:     0x7F es un control que queda por encima de los 0x20 y se escapa a quien solo mira el rango bajo;
          el renderizador lo dibuja como `␡`, así que el error y la imagen cuentan lo mismo
 ref:     TestCheckSource/delete_byte_E0102
@@ -617,9 +616,10 @@ ref:     tests/errors/ch03/invalid_utf8.ki
 
 [T03.58] check.invalid_utf8_render                          level: core
 kind:    diag                file: tests/errors/ch03/invalid_utf8_render.ki
-case:    `ki check` sobre un fichero con un byte 0xFF en la línea 10
-expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 5 líneas: el byte se dibuja como U+FFFD
-         y el signo `^` queda bajo él con la etiqueta "not valid UTF-8"
+case:    `ki check` sobre un fichero con un byte 0xFF en la línea 12
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 7 líneas: el byte se dibuja como U+FFFD,
+         el signo `^` queda bajo él con la etiqueta "not valid UTF-8", y detrás vienen la nota
+         "Ki source files are UTF-8" y la ayuda "save the file as UTF-8, or delete the byte"
 why:     es la única prueba de punta a punta de cómo se ve este error en una terminal: ruta relativa a
          la raíz, número de línea de dos cifras que ensancha la columna y ninguna línea en blanco al final
 ref:     tests/errors/ch03/invalid_utf8_render.ki

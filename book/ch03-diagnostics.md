@@ -22,6 +22,10 @@ error[E0101]: invalid UTF-8 byte 0xFF
 
 Y `ki test` ejecuta los programas de prueba y compara lo que imprimen con lo que esperan sus cabeceras. Aún no hay lexer, así que el único error posible es un fichero que no es texto válido, pero el modelo de diagnósticos, sus tres formatos y el runner son los definitivos, camino del hito M1 (capítulo 10).
 
+:::note
+**Fe de erratas (2026-10-28).** En el capítulo 7 los errores de Ki suben al nivel de rustc: la etiqueta principal lleva siempre texto, y los que tienen una corrección concreta añaden una nota, una ayuda y una edición propuesta. Por eso el `E0101` de arriba sale hoy con la nota «Ki source files are UTF-8» y la ayuda «save the file as UTF-8, or delete the byte», el `E0102` ya no propone el escape en su etiqueta, y el JSON lleva siempre la clave `fixits`. Las tarjetas T03.25, T03.30, T03.32 y T03.58 están reescritas para decir lo que el código da ahora; el texto del capítulo cuenta lo que daba cuando se publicó y no se toca. El capítulo 7, en la sección «El listón: errores al nivel de rustc», lo explica.
+:::
+
 ## Teoría
 
 ### Un error de tu programa es un dato
