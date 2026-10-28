@@ -5,7 +5,7 @@
 #
 # It is the task-brief script of the subagent-driven-development skill, adapted
 # to the Ki plans, which are written in Spanish:
-#   - A task starts at a heading that matches ^#+[ \t]+Tarea[ \t]+N([^0-9]|$).
+#   - A task starts at a heading that matches ^#+[ \t]+Tarea[ \t]+N([^0-9a-z]|$).
 #     It ends at the next "Tarea" heading or at the next heading of level 1 or 2
 #     ("## Capítulo …", "## Plantilla …"), whichever comes first. Lines inside
 #     ``` fences never count as headings.
@@ -32,8 +32,10 @@ fi
 plan=$1
 n=$2
 [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
-[[ $n =~ ^[0-9]+$ ]] || { echo "the task number must be a non-negative integer: $n" >&2; exit 2; }
-n=$((10#$n))
+# A task number is digits with an optional lowercase letter, as in 32a (a task
+# inserted after the plan was written).
+[[ $n =~ ^[0-9]+[a-z]?$ ]] || { echo "the task number must be digits with an optional letter: $n" >&2; exit 2; }
+n="$((10#${n%%[a-z]}))${n##*[0-9]}"
 
 if [ $# -eq 3 ]; then
   out=$3
@@ -56,7 +58,7 @@ task=$(awk -v n="$n" '
   /^```/ { infence = !infence }
   !infence && /^#+[ \t]/ {
     if ($0 ~ /^#+[ \t]+Tarea[ \t]+[0-9]+/) {
-      intask = ($0 ~ ("^#+[ \t]+Tarea[ \t]+" n "([^0-9]|$)"))
+      intask = ($0 ~ ("^#+[ \t]+Tarea[ \t]+" n "([^0-9a-z]|$)"))
     } else if ($0 ~ /^##?[ \t]/) {
       intask = 0
     }
