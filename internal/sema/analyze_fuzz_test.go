@@ -15,14 +15,18 @@ import (
 // rendered in the three formats. RenderHuman panics for a fix-it that crosses a
 // line break or that is in another file; FuzzParse checks that the lexer and the
 // parser never build one, and this target does the same for the fix-its that the
-// later passes build: E0301 replaces a name, and E0304 and E0305 delete an
-// attribute or replace its name, with a span that has to stay on one line.
+// later passes build: E0301 replaces a name, E0304 and E0305 delete an
+// attribute or replace its name, E0404 replaces the parameters of `main` with
+// `()` and deletes its return clause, and E0406 replaces a type name, each with
+// a span that has to stay on one line. E0404 offers its edits only when each
+// piece it edits is on one line.
 //
 // The seeds are the ones that reach those fix-its, among them an attribute that
-// runs over three lines, where deleting it would cross line breaks, and one
-// with the expressions that have no names inside (`true`, `()`) and an `if` with
-// no `else`, which the walk of name resolution has to go past: a kind it forgets
-// is a panic. `go test` runs only the seeds. To search for more, run for a while with
+// runs over three lines, where deleting it would cross line breaks, a `main`
+// whose parameters or return clause run over several lines, which E0404 must
+// not edit, and one with the expressions that have no names inside (`true`,
+// `()`) and an `if` with no `else`, which the walk of name resolution has to go
+// past: a kind it forgets is a panic. `go test` runs only the seeds. To search for more, run for a while with
 // `go test ./internal/sema -run=^$ -fuzz=FuzzAnalyze -fuzztime=10s`; an input
 // that breaks a property is saved under testdata/fuzz/FuzzAnalyze and becomes a
 // seed.
@@ -47,6 +51,13 @@ func FuzzAnalyze(f *testing.F) {
 	f.Add("fn add(a Int) -> Int { a }\nfn main() { add(1) }")
 	// The leaves with no name inside, and an `if` with no `else`.
 	f.Add("fn main() { if true { () } }")
+	// E0404 on a `main` whose parameters run over three lines and one whose
+	// return clause runs over two (help only: an edit that crossed a line break
+	// would make RenderHuman panic), and E0406 with its edit on a misspelled
+	// type.
+	f.Add("fn main(\n  x: Int\n) -> Int { x }")
+	f.Add("fn main() ->\n  Int { 1 }")
+	f.Add("fn f(x: Bol) {}")
 	f.Fuzz(func(t *testing.T, src string) {
 		p := testsupport.Analyze(t, src)
 		sm := &p.Session.Sources

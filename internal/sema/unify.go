@@ -41,7 +41,11 @@ type Unifier struct {
 //
 // The labels and the note of an error write the types the way Show does, so a
 // type whose text is longer than MaxTypeText bytes appears cut, as its start
-// followed by `…`.
+// followed by `…`. Once the sink has dropped an error (Sink.Truncated) it drops
+// all the errors that follow, so Unify does not write the types at all: it
+// binds and answers as before, and only the report is skipped. (The first error
+// that does not fit is still written, and then dropped: that drop is what sets
+// Truncated.)
 //
 // An E0401 whose reason is ReasonBlockTail and whose expected type is `()`
 // also carries a help line, which says that the value at the tail is unused
@@ -126,10 +130,15 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 // that case, and then v stays unbound.
 func (u *Unifier) bind(v TypeVarID, vType, to TypeID, foundAt base.Span) bool {
 	if u.Types.Occurs(v, to) {
-		shown := u.Types.showAll(vType, to)
-		u.Sink.Report(diag.NewError(diag.E(405), "cannot construct an infinite type",
-			diag.Label{Span: foundAt, Message: "this type would contain itself"}).
-			WithNote("`" + shown[0] + "` would have to be `" + shown[1] + "`, which has no finite size"))
+		// Once the sink has dropped an error it drops everything it is given
+		// (see Unify), so the text of the types is not written: a type can have
+		// thousands of parameters, and every error after that would pay for them.
+		if !u.Sink.Truncated() {
+			shown := u.Types.showAll(vType, to)
+			u.Sink.Report(diag.NewError(diag.E(405), "cannot construct an infinite type",
+				diag.Label{Span: foundAt, Message: "this type would contain itself"}).
+				WithNote("`" + shown[0] + "` would have to be `" + shown[1] + "`, which has no finite size"))
+		}
 		return false
 	}
 	u.Types.Bind(v, to)
@@ -141,6 +150,12 @@ func (u *Unifier) bind(v TypeVarID, vType, to TypeID, foundAt base.Span) bool {
 // with the same names for their variables, so that two different variables are
 // never both `a`, and each is cut if it is long (see TypeTable.Show).
 func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) {
+	// Once the sink has dropped an error it drops everything it is given (see
+	// Unify), so the text of the types is not written: a type can have
+	// thousands of parameters, and every error after that would pay for them.
+	if u.Sink.Truncated() {
+		return
+	}
 	t := u.Types
 	shown := t.showAll(expected, found)
 	d := diag.NewError(diag.E(401), "mismatched types",
@@ -186,7 +201,8 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 	// what to call the variable, and whether to bind the value or to return it,
 	// is for the author to say. Binding works wherever a statement does;
 	// returning is offered only where the checker says it would (see
-	// Reason.CanReturn).
+	// Reason.CanReturn): it is E0404 in `main`, and no use at the end of a
+	// branch that has no `else`.
 	if r.Kind == ReasonBlockTail && t.Resolve(expected) == t.Builtin(BuiltinUnit) {
 		help := "this value is unused: bind it with `let name = …`"
 		if r.CanReturn {

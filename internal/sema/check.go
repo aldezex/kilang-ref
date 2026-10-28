@@ -1,6 +1,7 @@
 package sema
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -52,8 +53,11 @@ type TypedProgram struct {
 //
 // Signatures come first. Every function gets its type from its annotations:
 // a parameter without one gets a new variable, and a function without `->`
-// returns `()`. Only then are the bodies checked, each against the return type
-// of its function (the tail of a body is the reason ReasonBlockTail). All the
+// returns `()`. A type name that is neither `Int` nor `Bool` is E0406 (an
+// unknown type), reported once where it is written, and has the error type.
+// Then `main`, if the user's file has one, is held to its type, `() -> ()`
+// (E0404). Only then are the bodies checked, each against the return type of
+// its function (the tail of a body is the reason ReasonBlockTail). All the
 // functions of the program are one group whose variables are not generalized
 // (chapter 13 does that), so what a call or a body finds out about a parameter
 // is what every other use of the function sees.
@@ -64,11 +68,15 @@ type TypedProgram struct {
 // type has to be Int or Bool (see equality for when that is judged). If an
 // operand has the error type, so does the result. A call is checked against the
 // type of its callee: E0403 if it is not a function, E0402 if the number of
-// arguments is not the number of parameters. A callee whose type is a variable
+// arguments is not the number of parameters (unless an argument is missing,
+// which the parser has reported: see call). A callee whose type is a variable
 // that nothing has bound yet (a parameter without an annotation) is made a
-// function of the types of the arguments. A type name that is neither `Int` nor
-// `Bool` gets the error type without a word, because no pass reports an unknown
-// type name yet.
+// function of the types of the arguments, unless an argument is missing (see
+// call). The error type of an unknown type name gives no complaint of its own
+// wherever it is used, but it is still part of the types around it, so a
+// message about another mistake can write it as `{error}` (a function with a
+// parameter of an unknown type, used where an `Int` is expected, is a mismatch
+// with `({error}) -> ()`).
 //
 // infer and check call each other once per level of the tree, like Resolve:
 // Parse bounds that depth (MaxNesting levels, and the operators and calls of
@@ -86,6 +94,7 @@ func Check(mods []*syntax.Module, res *ResolvedProgram, in *base.Interner, sink 
 		errT:  tbl.Error(),
 	}
 	c.signatures()
+	c.mainSignature()
 	c.bodies()
 	c.judgeEqualities()
 	return c.tp
@@ -187,8 +196,9 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 		case "Bool":
 			return c.boolT
 		}
-		// Not a type Ki has. Nothing reports that yet, so it is the error type
-		// and the program is accepted as far as this pass can tell.
+		// Not a type Ki has: reported here, once, where it is written, and the
+		// error type from then on, which says nothing more wherever it is used.
+		c.unknownTypeError(te.Span, c.in.String(te.Name))
 		return c.errT
 	case syntax.TypeError:
 		return c.errT
@@ -197,11 +207,80 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 	}
 }
 
+// unknownTypeError reports E0406 for the type name that is written at. The
+// help and its edit are there when a type Ki has is spelled almost like it
+// (`Bol` for `Bool`), as for an unknown name.
+func (c *checker) unknownTypeError(at base.Span, name string) {
+	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
+		WithNote("the types Ki knows: `Int`, `Bool` and `()`")
+	if best, ok := suggest(name, []string{"Int", "Bool"}); ok {
+		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
+	}
+	c.sink.Report(d)
+}
+
+// mainSignature reports E0404 if the `main` of the user's file does not have the
+// type `() -> ()`. A file without a `main` is not for this pass to report (that
+// is E0303, which comes with `ki run`), and one that defines it twice is held to
+// the first, as Resolve is. A return type that is not a type Ki has gives no
+// E0404 of its own: it is E0406, and the error type, which never gives one.
+//
+// The primary label is on the name and says what is wrong with the signature:
+// how many parameters there are, what is returned, or both. The help names the
+// same pieces, and each comes with the fix-it that removes it, the parameters
+// as `()` and the return clause with the blanks just before its `->` (a
+// comment between the `)` and them stays). A signature that runs over several
+// lines has the help and no fix-its, since an edit is of one line, and so does
+// a signature with two things wrong when only one could be edited, so that the
+// help never promises more than the fix-its do. Only the pieces that the help
+// names count: an empty parameter list or a `-> ()` that runs over lines is not
+// what is wrong, and does not take the edit of the other piece away.
+func (c *checker) mainSignature() {
+	if !c.res.HasMain {
+		return
+	}
+	def := c.res.Defs.Get(c.res.Main)
+	it := c.mods[def.Module].ItemNodes.Get(def.Item)
+	fn := c.tp.Types.Node(c.tp.DefTypes.Get(c.res.Main))
+	var declared, remove []string
+	var fixits []diag.FixIt
+	oneLine := true
+	if len(fn.Params) > 0 {
+		declared = append(declared, "with "+strconv.Itoa(len(fn.Params))+" parameter(s)")
+		remove = append(remove, "the parameters")
+		fixits = append(fixits, diag.Replace(it.ParamList, "()"))
+		oneLine = oneLine && it.ParamListOneLine
+	}
+	// The return type of a signature is never a variable, so it needs no
+	// resolving.
+	if fn.Ret != c.unitT && !c.isError(fn.Ret) {
+		ret := c.tp.Types.Show(fn.Ret)
+		declared = append(declared, "returning `"+ret+"`")
+		remove = append(remove, "`-> "+ret+"`")
+		fixits = append(fixits, diag.Delete(it.RetClause))
+		oneLine = oneLine && it.RetClauseOneLine
+	}
+	if len(declared) == 0 {
+		return
+	}
+	d := diag.NewError(diag.E(404), "`main` must be `fn main()`",
+		diag.Label{Span: def.Span, Message: "declared here " + strings.Join(declared, " and ")}).
+		WithNote("it takes no parameters and returns `()`").
+		WithHelp("remove " + strings.Join(remove, " and "))
+	if oneLine {
+		for _, f := range fixits {
+			d = d.WithFixIt(f)
+		}
+	}
+	c.sink.Report(d)
+}
+
 // bodies is the second pass: it checks the body of every function that has one
 // against the function's return type. The reason is the tail of the body, and
 // its secondary label is on the return type, or on the name of the function
 // when it has none. A value at that tail where `()` is wanted can be returned
-// by giving the function a return type, which Reason.CanReturn says.
+// by giving the function a return type, which Reason.CanReturn says, for every
+// function but the `main` of the program: E0404 holds its type to `() -> ()`.
 func (c *checker) bodies() {
 	for id, def := range c.res.Defs.All() {
 		m := c.mods[def.Module]
@@ -214,8 +293,9 @@ func (c *checker) bodies() {
 		if it.HasRet {
 			because = m.Types.Get(it.Ret).Span
 		}
+		isMain := c.res.HasMain && id == c.res.Main
 		c.check(it.Body, c.tp.Types.Node(c.tp.DefTypes.Get(id)).Ret,
-			Reason{Kind: ReasonBlockTail, Because: because, CanReturn: true})
+			Reason{Kind: ReasonBlockTail, Because: because, CanReturn: !isMain})
 	}
 }
 
@@ -348,13 +428,31 @@ func (c *checker) condition(id syntax.ExprID) {
 	c.check(id, c.boolT, Reason{Kind: ReasonIfCondition})
 }
 
+// unreadThen reports whether e is an `if` with no `else` whose `then` branch is
+// an error node: the parser could not read it and has said so. Without the
+// `else` such an `if` would be `()`, but nothing in the program says so, and
+// where the place expects another type that `()` would be a second E0401 that
+// goes away as soon as the branch is written. So the `if` has the error type,
+// as an operation with an operand of that type does (see binary). The branch is
+// not visited: it has the error type from the start (see signatures). The rule
+// is about the branch only: inferIf and checkIf call it after c.condition, so a
+// condition that is not a `Bool` is still reported.
+func (c *checker) unreadThen(e syntax.Expr) bool {
+	return !e.HasElse && c.m.Exprs.Get(e.Then).Kind == syntax.ExprError
+}
+
 // inferIf is the type of an `if` where nothing is expected of it. Without an
 // `else` it is `()`, and then the `then` branch has to be `()` too: the missing
 // `else` stands for the other branch, so the secondary label is on the `if`
 // keyword. With an `else`, the type of the `then` branch is the type of the
-// `if` (see elseBranch).
+// `if` (see elseBranch). If the parser could not read the `then` branch of an
+// `if` with no `else`, the `if` has the error type (see unreadThen); its
+// condition is checked all the same.
 func (c *checker) inferIf(e syntax.Expr) TypeID {
 	c.condition(e.Cond)
+	if c.unreadThen(e) {
+		return c.errT
+	}
 	if !e.HasElse {
 		keyword := base.Span{File: e.Span.File, Lo: e.Span.Lo, Hi: e.Span.Lo + ifKeywordLen}
 		c.check(e.Then, c.unitT, Reason{Kind: ReasonIfBranches, Because: keyword})
@@ -374,8 +472,16 @@ func (c *checker) inferIf(e syntax.Expr) TypeID {
 // With an `else`, the `then` branch is inferred and the `else` branch is
 // checked against it (see elseBranch), and the result is unified with the
 // expected type on the whole `if`.
+//
+// An `if` with no `else` whose `then` branch the parser could not read (see
+// unreadThen) is neither: it has the error type, which fits every place, and
+// the checker adds nothing for the branch. Its condition is checked first, as
+// in every other `if`.
 func (c *checker) checkIf(e syntax.Expr, expected TypeID, r Reason) (TypeID, bool) {
 	c.condition(e.Cond)
+	if c.unreadThen(e) {
+		return c.errT, true
+	}
 	if !e.HasElse {
 		if !c.u.Unify(expected, c.unitT, e.Span, r) {
 			c.infer(e.Then)
@@ -524,6 +630,11 @@ func (c *checker) eqKindOf(ty TypeID) eqKind {
 // rejectedEqualityError reports E0401 for the left operand of `==` or `!=`,
 // which is written at and has the type ty, a type the operator does not work on.
 func (c *checker) rejectedEqualityError(at base.Span, ty TypeID, op string) {
+	// Once the sink has dropped an error it drops this one too, so the text of
+	// the type is not written (see Unifier.mismatch).
+	if c.sink.Truncated() {
+		return
+	}
 	c.sink.Report(diag.NewError(diag.E(401), "mismatched types",
 		diag.Label{Span: at, Message: "expected `Int` or `Bool`, found `" + c.tp.Types.Show(ty) + "`"}).
 		WithNote("`" + op + "` works on `Int` and `Bool` here"))
@@ -561,7 +672,21 @@ func (c *checker) call(e syntax.Expr) TypeID {
 			// Which argument is extra or missing is not for the compiler to
 			// say, so the arguments are not compared with the parameters. They
 			// still have a type of their own, which may be wrong.
-			c.arityError(e, node)
+			//
+			// The count itself is judged only when no argument is missing. The
+			// parser leaves a node of error where it could not read one, and
+			// that node is not necessarily an argument: a stray comma
+			// (`g(1,,2)`) makes the list one longer than the author meant, and
+			// the E0402 would go away when the comma is mended. The parser's
+			// error is the one report of that slip, and the E0402 comes back
+			// once no argument is missing, even if the list was too long
+			// without the node as well (`g(1, 2, 3,,)`). Nothing else excuses
+			// the count: an argument that is complete and wrong (an unknown
+			// name has the error type) or that breaks off (`2 +`) is an
+			// argument all the same.
+			if !slices.ContainsFunc(args, c.missingArg) {
+				c.arityError(e, node)
+			}
 			c.inferAll(args)
 			return node.Ret
 		}
@@ -577,6 +702,18 @@ func (c *checker) call(e syntax.Expr) TypeID {
 			types[i] = c.infer(arg)
 		}
 		ret := c.tp.Types.FreshVar(Origin{Span: e.Span, Note: "result of this call"})
+		if slices.ContainsFunc(args, c.missingArg) {
+			// The list as read is not the list the author meant (`x(1,,2)` has
+			// three entries), and a function of that list would become what
+			// every other use of the callee is checked against: `x(1, 2)` would
+			// be an E0402 for a function of three parameters that nobody wrote,
+			// and `f(h)` with a function h of two an E0401 whose type has the
+			// node of error in it. The parser has reported the slip, so the
+			// callee is left as it is. What is hidden comes back once the comma
+			// is mended: a callee that already has a type that is not a
+			// function (`x(x + 1,,2)`) is an E0401 then, as for any call.
+			return ret
+		}
 		// If the callee is still an unbound variable, Unify binds it to this
 		// function type, and the only error it can report is the occurs check
 		// (`fn f(x) { x(x) }`). But ct was resolved before the arguments were
@@ -598,6 +735,35 @@ func (c *checker) call(e syntax.Expr) TypeID {
 		return c.errT
 	default:
 		panic("unreachable")
+	}
+}
+
+// missingArg reports whether the argument id is one that the parser reported
+// and left as a node of error, or an operation that starts with one. The node
+// is a gap (the extra comma of `g(1,,2)`), and also what the parser leaves for
+// other slips, such as a chained comparison or a group with no `)`. A stray
+// operator is read as an operation of such nodes: `g(1, +, 2)` has an argument
+// that is a sum of two missing operands, and `g(1, -, 2)` one that is a
+// negation of a missing operand. Only the start counts, the left operand of an
+// operation of two and the operand of a prefix operation, however deep. An
+// argument that begins well and breaks off (`2 +`, whose right operand is
+// missing) is an argument the author wrote.
+func (c *checker) missingArg(id syntax.ExprID) bool {
+	for {
+		e := c.m.Exprs.Get(id)
+		switch e.Kind {
+		case syntax.ExprError:
+			return true
+		case syntax.ExprBinary:
+			// Down the starts of the operations. This is a loop and not a
+			// recursion because the length of a chain is the program's (see
+			// MaxChain).
+			id = e.Lhs
+		case syntax.ExprUnary:
+			id = e.Operand
+		default:
+			return false
+		}
 	}
 }
 
@@ -644,6 +810,13 @@ const maxNoteParams = 16
 // secondary label shows where. (A function of another file, such as one of the
 // prelude, cannot be drawn under this one: RenderHuman refuses it.)
 func (c *checker) arityError(e syntax.Expr, fn Type) {
+	// Once the sink has dropped an error it drops this one too, and writing the
+	// note is not cheap even with the cut: Show pushes every parameter of each
+	// type before it gets to the cut, so the 16 types of the note cost the
+	// parameters of all 16 (see Unifier.mismatch).
+	if c.sink.Truncated() {
+		return
+	}
 	d := diag.NewError(diag.E(402),
 		"this function takes "+strconv.Itoa(len(fn.Params))+" argument(s) but "+strconv.Itoa(int(e.Args.Count))+" were supplied",
 		diag.Label{Span: e.OpSpan, Message: "supplied here"})

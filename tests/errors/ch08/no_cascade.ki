@@ -1,0 +1,3 @@
+// test: T08.45
+// run: check
+fn main() { print(nope + 1) }  // ERROR(E0301) @19

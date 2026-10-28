@@ -1,0 +1,6 @@
+// test: T08.42
+// run: check
+fn main() {
+  let x = if true { 1 } else { false }  // ERROR(E0401) @32
+  print(x)
+}

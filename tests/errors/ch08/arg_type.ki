@@ -1,0 +1,4 @@
+// test: T08.44
+// run: check
+fn fib(n: Int) -> Int { n }
+fn main() { print(fib(true)) }  // ERROR(E0401) @23
