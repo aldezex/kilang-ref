@@ -173,6 +173,8 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   .milestone, .welcome .lead { max-width: var(--text); }
   .welcome .cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
   .page > h2, .page > h3 { scroll-margin-top: 20px; }
+  /* The line height comes from pre: with the size of the text around it, the lines of code would be far apart. */
+  figure.code pre { font-size: 13.5px; line-height: 1.55; }
 }
 /* The margin column. The script (placeAsides) puts each aside just before the paragraph it follows, so the float
    starts level with that paragraph. clear keeps two asides apart and a wide block below any aside that reaches it. */
@@ -192,7 +194,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
 @media (min-width: 1760px) {
   :root { --text: 740px; --gutter: 48px; --margin-max: 440px; }
   body { font-size: 18px; }
-  .page pre code { font-size: 14px; }
+  .page pre code, figure.code pre { font-size: 14px; }
   main { display: grid; grid-template-columns: minmax(0, calc(var(--text) + var(--gutter) + var(--margin-max))) 248px; column-gap: 48px; justify-content: center; align-items: start; }
   .page { max-width: none; }
   .page:has(> .welcome) { grid-column: 1 / -1; }
