@@ -79,8 +79,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 // parseArgs reads the arguments of a command: the flag --repo (when withRepo)
 // and exactly want positional arguments (at least one when want is negative),
 // in any order, so `render out --repo d` works although the flag package stops
-// at the first argument that is not a flag. A command with flags of its own defines them in define. It prints the
-// problem and the usage line and returns ok false when the arguments are wrong.
+// at the first argument that is not a flag. A command with flags of its own
+// defines them in define. It prints the problem and the usage line and returns
+// ok false when the arguments are wrong.
 func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Writer, define ...func(*flag.FlagSet)) (repo string, pos []string, ok bool) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
