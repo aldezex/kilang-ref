@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ const vm = require("vm");
 let src = fs.readFileSync(process.argv[2], "utf8");
 const tail = /\n\s*boot\(\);\s*\}\)\(\);\s*$/;
 if (!tail.test(src)) throw new Error("the script of the page does not end with boot(); })();");
-src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, renderChapter, renderWelcome, state };\n})();\n");
+src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, chapterNavHtml, currentSection, placeAsides, renderChapter, renderWelcome, state };\n})();\n");
 
 function fakeMarked() {
   const m = { renderer: null };
@@ -70,11 +71,12 @@ function fakeMarked() {
 // A stand-in for every element the script finds by id: it only keeps what the
 // script writes.
 const elements = {};
-const fakeElement = () => ({ innerHTML: "", textContent: "", hidden: false, style: {}, querySelectorAll: () => [] });
+const fakeElement = () => ({ innerHTML: "", textContent: "", hidden: false, style: {}, children: [], querySelectorAll: () => [] });
 const sandbox = {
   marked: fakeMarked(),
   hljs: { getLanguage: () => null, highlight: () => ({ value: "" }) },
   document: {
+    documentElement: { scrollHeight: 0 },
     addEventListener() {},
     getElementById: (id) => (elements[id] = elements[id] || fakeElement()),
     querySelectorAll: () => [],
@@ -161,6 +163,38 @@ func renderWithPage(t *testing.T, texts ...string) []string {
 	}
 	return htmls
 }
+
+// sectionsMain prints what chapterHtml lists as the sections of each Markdown
+// text, and the list the page makes of them.
+const sectionsMain = `
+process.stdout.write(JSON.stringify(input.map((md) => {
+  const { html, sections } = page.chapterHtml(md);
+  return { html, sections, nav: page.chapterNavHtml(sections, 5) };
+})));
+`
+
+// currentMain prints the answer of currentSection for each case of its input.
+const currentMain = `
+process.stdout.write(JSON.stringify(input.map((c) => page.currentSection(c.tops, c.atBottom))));
+`
+
+// asidesMain runs placeAsides on a fake page with the children its input names,
+// a tag and an optional class ("ASIDE.from"), for each of the steps of its
+// input, true for a wide screen. It prints the children after each step.
+const asidesMain = `
+const nodes = input.children.map((name) => {
+  const [tagName, cls] = name.split(".");
+  return { name, tagName, classList: { contains: (c) => c === cls },
+    get previousElementSibling() { const i = root.children.indexOf(this); return i > 0 ? root.children[i - 1] : null; },
+    after(el) { root.children.splice(root.children.indexOf(el), 1); root.children.splice(root.children.indexOf(this) + 1, 0, el); } };
+});
+const root = { children: nodes,
+  insertBefore(el, before) { this.children.splice(this.children.indexOf(el), 1); this.children.splice(this.children.indexOf(before), 0, el); } };
+process.stdout.write(JSON.stringify(input.steps.map((wide) => {
+  page.placeAsides(root, wide);
+  return root.children.map((n) => n.name);
+})));
+`
 
 // numbered returns n lines, "linea 1" to "linea n", joined by newlines.
 func numbered(n int) string {
@@ -385,6 +419,109 @@ func TestPage(t *testing.T) {
 		}
 		if strings.Contains(views.Chapter, "Hito:") {
 			t.Errorf("the milestone is no longer a chip: %.900q", views.Chapter)
+		}
+	})
+
+	t.Run("the_list_of_sections_has_the_h2_and_h3_of_the_running_text", func(t *testing.T) {
+		type section struct {
+			ID    string `json:"id"`
+			Level int    `json:"level"`
+			HTML  string `json:"html"`
+		}
+		var got []struct {
+			HTML     string    `json:"html"`
+			Sections []section `json:"sections"`
+			Nav      string    `json:"nav"`
+		}
+		md := "# Uno\n## Dos\n### Tres `a<b`\n#### Cuatro\n:::more Detalle\n## En un pliegue\n:::\n:::exercise\n### En un ejercicio\n:::\n## Cinco\n"
+		runPageScript(t, sectionsMain, []string{md, "Solo texto.\n"}, &got)
+		want := []section{{"sec-1", 2, "Dos"}, {"sec-2", 3, "Tres `a<b`"}, {"sec-3", 2, "Cinco"}}
+		if len(got[0].Sections) != len(want) {
+			t.Fatalf("want the sections %v, got %v", want, got[0].Sections)
+		}
+		for i, w := range want {
+			if got[0].Sections[i] != w {
+				t.Errorf("section %d: want %v, got %v", i, w, got[0].Sections[i])
+			}
+		}
+		for _, w := range []string{
+			"<h1>Uno</h1>", `<h2 id="sec-1">Dos</h2>`, `<h3 id="sec-2">Tres `, `<h2 id="sec-3">Cinco</h2>`,
+			"<h4>Cuatro</h4>", "<h2>En un pliegue</h2>", "<h3>En un ejercicio</h3>",
+		} {
+			if !strings.Contains(got[0].HTML, w) {
+				t.Errorf("want %q in %.600q", w, got[0].HTML)
+			}
+		}
+		wantNav := `<h2>En este capítulo</h2><ol><li class="level-2"><a href="#ch05" data-sec="sec-1">Dos</a></li>` +
+			`<li class="level-3"><a href="#ch05" data-sec="sec-2">Tres ` + "`a<b`" + `</a></li>` +
+			`<li class="level-2"><a href="#ch05" data-sec="sec-3">Cinco</a></li></ol>`
+		if got[0].Nav != wantNav {
+			t.Errorf("want the list\n%s\ngot\n%s", wantNav, got[0].Nav)
+		}
+		if len(got[1].Sections) != 0 || got[1].Nav != "" {
+			t.Errorf("a text with no headings has no list: %v, %q", got[1].Sections, got[1].Nav)
+		}
+	})
+
+	t.Run("the_current_section_is_the_last_heading_that_went_past_the_line", func(t *testing.T) {
+		line := 140 // SECTION_LINE of the page
+		cases := []struct {
+			name     string
+			Tops     []int `json:"tops"`
+			AtBottom bool  `json:"atBottom"`
+			want     int
+		}{
+			{"none_past_the_line_yet", []int{line + 1, 900}, false, 0},
+			{"exactly_on_the_line", []int{line, 900}, false, 0},
+			{"second_on_the_line", []int{-500, line, 900}, false, 1},
+			{"second_just_under_the_line", []int{-500, line + 1, 900}, false, 0},
+			{"all_past_the_line", []int{-900, -500, -1}, false, 2},
+			{"the_end_of_the_page_marks_the_last", []int{-500, 300, 500}, true, 2},
+			{"no_sections", []int{}, false, -1},
+			{"no_sections_at_the_end_of_the_page", []int{}, true, -1},
+		}
+		var got []int
+		runPageScript(t, currentMain, cases, &got)
+		for i, c := range cases {
+			if got[i] != c.want {
+				t.Errorf("%s: want %d, got %d", c.name, c.want, got[i])
+			}
+		}
+	})
+
+	t.Run("asides_go_before_their_paragraph_on_a_wide_screen_and_back", func(t *testing.T) {
+		children := []string{
+			"P.1", "ASIDE.from", "ASIDE.note", "H2", "ASIDE.note", "P.2", "UL", "ASIDE.from",
+			"FIGURE", "ASIDE.from", "P.3", "ASIDE.bug", "OL", "ASIDE.note", "SECTION", "P.4", "BLOCKQUOTE", "ASIDE.from",
+		}
+		wideOrder := []string{
+			"ASIDE.from", "ASIDE.note", "P.1", "H2", "ASIDE.note", "P.2", "ASIDE.from", "UL",
+			"FIGURE", "ASIDE.from", "P.3", "ASIDE.bug", "ASIDE.note", "OL", "SECTION", "P.4", "ASIDE.from", "BLOCKQUOTE",
+		}
+		var got [][]string
+		runPageScript(t, asidesMain, map[string]any{"children": children, "steps": []bool{false, true, true, false, true}}, &got)
+		for i, want := range [][]string{children, wideOrder, wideOrder, children, wideOrder} {
+			if !slices.Equal(got[i], want) {
+				t.Errorf("step %d:\n want %v\n  got %v", i, want, got[i])
+			}
+		}
+	})
+
+	t.Run("the_grid_of_the_home_page_stays_on_the_home_page", func(t *testing.T) {
+		// The fold of the cards has the class cards too: a bare .cards rule made it a
+		// grid, with its table squeezed into one narrow track.
+		if !bytes.Contains(indexHTML, []byte("\n.welcome .cards {")) || bytes.Contains(indexHTML, []byte("\n.cards {")) {
+			t.Error("the grid of the cards of the home page has to be under .welcome")
+		}
+	})
+
+	t.Run("the_styles_and_the_script_agree_on_the_margin_column", func(t *testing.T) {
+		// The script moves the asides at the width where the styles float them.
+		const query = "(min-width: 1380px)"
+		for _, s := range []string{"@media " + query + " {", `MARGIN_QUERY = "` + query + `"`} {
+			if !bytes.Contains(indexHTML, []byte(s)) {
+				t.Errorf("the page does not contain %q", s)
+			}
 		}
 	})
 }

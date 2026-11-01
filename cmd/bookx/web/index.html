@@ -4,7 +4,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: a fixed table of contents on the left (the whole book, part by part), one reading column on the right. */
+/* Layout: a fixed table of contents on the left (the whole book, part by part) and one reading column on the right.
+   On a wide screen the page beside it has a margin column for the asides, and code, tables and folds span both;
+   on a wider one the list of the chapter's sections comes after them. See the media queries at the end. */
 :root {
   --paper: #f6f7f9;
   --sheet: #ffffff;
@@ -44,10 +46,10 @@
   color-scheme: dark;
 }
 html, body { height: 100%; }
-body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 17px; line-height: 1.6; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 17px; line-height: 1.6; }
 .app { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100%; }
 /* ---------- table of contents ---------- */
-.toc { position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto; border-right: 1px solid var(--rule);
+.toc { box-sizing: border-box; position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto; border-right: 1px solid var(--rule);
   background: var(--sheet); font-family: var(--font-ui); font-size: 14px; padding-block: 20px 40px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: 16px; }
 .brand { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
@@ -89,6 +91,8 @@ main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-
 .page a { color: var(--accent); }
 .page code { font-family: var(--font-code); font-size: 0.86em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 4px; }
 .page pre code { background: none; padding: 0; font-size: 13.5px; }
+/* The reader types what the page shows: no ligature may turn |> into a triangle or => into an arrow. */
+code { font-variant-ligatures: none; }
 .page blockquote { margin: 16px 0; padding-left: 14px; border-left: 3px solid var(--rule); color: var(--ink-soft); }
 .page hr { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
 .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); }
@@ -138,23 +142,72 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
 .end { margin-top: 48px; padding: 18px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; font-family: var(--font-ui); }
 .btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: var(--sheet); cursor: pointer; text-decoration: none; display: inline-block; }
 .btn.secondary { background: none; color: var(--accent); }
-.btn:focus-visible, .copy:focus-visible, .toc a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.page a.btn:not(.secondary) { color: var(--sheet); }
+.btn:focus-visible, .copy:focus-visible, .toc a:focus-visible, .chapter-nav a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .status { font-family: var(--font-ui); font-size: 13px; color: var(--ink-soft); }
 .welcome { display: grid; gap: 14px; }
 .welcome h1 { font-size: 44px; line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
 .welcome .lead { font-size: 19px; color: var(--ink-soft); }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
-.card { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); text-decoration: none; color: var(--ink); font-family: var(--font-ui); }
+.welcome .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+.card { display: grid; align-content: start; gap: 4px; padding: 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); text-decoration: none; color: var(--ink); font-family: var(--font-ui); }
+.page a.card { color: var(--ink); }
 .card:hover { border-color: var(--accent); }
 .card .eyebrow { font-size: 11px; }
 .card b { font-family: var(--font-body); font-size: 17px; line-height: 1.3; }
 .card small { color: var(--ink-soft); }
 .loading { color: var(--ink-soft); font-family: var(--font-ui); }
+.chapter-nav { display: none; }
 @media (max-width: 860px) {
   .app { grid-template-columns: minmax(0, 1fr); }
   .toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   .chapter-head h1 { font-size: 30px; }
+}
+/* ---------- a desktop screen: about 80 characters of text, and wide blocks that use what is left ---------- */
+@media (min-width: 861px) {
+  :root { --text: 700px; --gutter: 36px; --margin-max: 420px; }
+  main { padding-left: max(40px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
+  .page { max-width: none; margin: 0; }
+  .page > * { box-sizing: border-box; max-width: var(--text); }
+  .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .chapter-head, .page > .end, .page > .welcome { max-width: none; }
+  .milestone, .welcome .lead { max-width: var(--text); }
+  .welcome .cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .page > h2, .page > h3 { scroll-margin-top: 20px; }
+}
+/* The margin column. The script (placeAsides) puts each aside just before the paragraph it follows, so the float
+   starts level with that paragraph. clear keeps two asides apart and a wide block below any aside that reaches it. */
+@media (min-width: 1380px) {
+  .page { max-width: calc(var(--text) + var(--gutter) + var(--margin-max)); }
+  .page > h2 { clear: both; }
+  .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end { clear: right; }
+  .page > aside.from, .page > aside.note {
+    float: right; clear: right; max-width: none; width: calc(100% - var(--text) - var(--gutter));
+    margin: 6px 0 20px; padding: 2px 0 2px 14px; border-width: 0 0 0 3px; border-radius: 0; background: none;
+    font-size: 15px; line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .page > aside.from .box-label, .page > aside.note .box-label { margin-bottom: 4px; }
+  .page > aside.from > p, .page > aside.note > p { margin: 0.5em 0; }
+}
+/* Room for a third column: the sections of the chapter, always in sight. */
+@media (min-width: 1760px) {
+  :root { --text: 740px; --gutter: 48px; --margin-max: 440px; }
+  body { font-size: 18px; }
+  .page pre code { font-size: 14px; }
+  main { display: grid; grid-template-columns: minmax(0, calc(var(--text) + var(--gutter) + var(--margin-max))) 248px; column-gap: 48px; justify-content: center; align-items: start; }
+  .page { max-width: none; }
+  .page:has(> .welcome) { grid-column: 1 / -1; }
+  .chapter-nav:not([hidden]) { display: block; position: sticky; top: 32px; max-height: calc(100vh - 64px); overflow-y: auto;
+    padding-left: 16px; border-left: 1px solid var(--rule); font-family: var(--font-ui); font-size: 13.5px; line-height: 1.35; }
+  .chapter-nav h2 { margin: 0 0 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+  .chapter-nav ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+  .chapter-nav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--ink-soft); text-decoration: none; }
+  .chapter-nav a:hover { background: var(--accent-soft); }
+  .chapter-nav a[aria-current] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .chapter-nav .level-2 { margin-top: 6px; }
+  .chapter-nav .level-2 a { color: var(--ink); }
+  .chapter-nav .level-2 a[aria-current] { color: var(--accent); }
+  .chapter-nav .level-3 a { padding-left: 20px; }
+  .chapter-nav code { font-family: var(--font-code); font-size: 0.9em; }
 }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 </style>
@@ -172,6 +225,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   </nav>
   <main>
     <article class="page" id="page"><p class="loading">Cargando el libro…</p></article>
+    <nav class="chapter-nav" id="chapter-nav" aria-label="En este capítulo" hidden></nav>
   </main>
 </div>
 
@@ -182,7 +236,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   "use strict";
   // Progress keys carry the edition, so marks from another edition never show up here.
   const EDITION = "go";
-  const state = { outline: null, manifest: null, available: new Map(), progress: {}, chapterCache: new Map(), current: null };
+  const state = { outline: null, manifest: null, available: new Map(), progress: {}, chapterCache: new Map(), current: null, sections: [] };
   const store = { db: null, uid: null };
   const $ = (id) => document.getElementById(id);
   const pad = (n) => String(n).padStart(2, "0");
@@ -199,7 +253,12 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   // The bodies of these containers sit in a closed fold already: a long block inside them stays open.
   const FOLDED_KINDS = new Set(["solution", "answer", "more"]);
   let foldLong = true; // chapterHtml turns it off while it renders the body of a folded container
+  let sections = null; // chapterHtml points it at its list while it renders running text
   const FFFD_MARKER = "%%U+FFFD%%";
+  // The width at which the styles float the asides into the margin column.
+  const MARGIN_QUERY = "(min-width: 1380px)";
+  // A heading is the current section once its top is this many pixels from the top of the window, or fewer.
+  const SECTION_LINE = 140;
 
   // ---------- progress: the db capability when the viewer has it, browser storage otherwise ----------
   const LOCAL_KEY = "ki-book-progress-" + EDITION + "-v1";
@@ -285,6 +344,13 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     const cases = (body.match(/<tr>/g) || []).length;
     return `<details class="fold cards"><summary>Tarjetas de test · ${cases} casos</summary><div class="fold-body">${table}</div></details>`;
   };
+  // The h2 and h3 of the running text get an id and enter the list of sections, not those inside a container.
+  renderer.heading = function (text, level) {
+    if (!sections || (level !== 2 && level !== 3)) return `<h${level}>${text}</h${level}>\n`;
+    const id = "sec-" + (sections.length + 1);
+    sections.push({ id, level, html: text });
+    return `<h${level} id="${id}">${text}</h${level}>\n`;
+  };
   marked.setOptions({ renderer, gfm: true });
 
   function splitContainers(md) {
@@ -324,8 +390,10 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     const body = md.replace(/^---\n[\s\S]*?\n---\n/, "");
     let exercise = 0;
     const out = [];
+    const list = [];
     for (const b of splitContainers(body)) {
       foldLong = !FOLDED_KINDS.has(b.kind);
+      sections = b.kind === "" ? list : null;
       const inner = marked.parse(b.text);
       switch (b.kind) {
         case "": out.push(inner); break;
@@ -342,7 +410,55 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
         default: out.push(`<aside class="box ${esc(b.kind)}"><div class="box-label"><span>${esc(CONTAINER_LABEL[b.kind] || b.kind)}</span></div>${inner}</aside>`);
       }
     }
-    return { html: out.join("\n"), exercises: exercise };
+    return { html: out.join("\n"), exercises: exercise, sections: list };
+  }
+
+  // ---------- the margin column and the sections of the chapter ----------
+  // A float starts where it stands in the flow, so an aside that follows its paragraph would sit beside the next one.
+  // On a wide screen it goes just before the paragraph or list it follows; otherwise it goes back to its own place.
+  const ASIDE_ANCHORS = new Set(["P", "UL", "OL", "BLOCKQUOTE"]);
+  let movedAsides = []; // in the order they were moved, each with the block it follows
+  function placeAsides(page, wide) {
+    while (movedAsides.length) {
+      const { aside, anchor } = movedAsides.pop();
+      anchor.after(aside);
+    }
+    if (!wide) return;
+    for (const el of [...page.children]) {
+      if (el.tagName !== "ASIDE" || !(el.classList.contains("from") || el.classList.contains("note"))) continue;
+      const anchor = el.previousElementSibling;
+      if (!anchor || !ASIDE_ANCHORS.has(anchor.tagName)) continue;
+      page.insertBefore(el, anchor);
+      movedAsides.push({ aside: el, anchor });
+    }
+  }
+  function chapterNavHtml(list, n) {
+    if (!list.length) return "";
+    const items = list.map((s) => `<li class="level-${s.level}"><a href="#ch${pad(n)}" data-sec="${s.id}">${s.html}</a></li>`);
+    return `<h2>En este capítulo</h2><ol>${items.join("")}</ol>`;
+  }
+  // The index of the last heading past the line, given the tops of the headings in the window; at the end of the page,
+  // the last one, because a short last section may never reach the line. -1 if there are no sections.
+  function currentSection(tops, atBottom) {
+    if (atBottom) return tops.length - 1;
+    let current = tops.length ? 0 : -1;
+    tops.forEach((top, i) => { if (top <= SECTION_LINE) current = i; });
+    return current;
+  }
+  function markSection() {
+    const nav = $("chapter-nav");
+    if (nav.hidden) return;
+    const tops = state.sections.map((s) => $(s.id).getBoundingClientRect().top);
+    const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+    const current = state.sections[currentSection(tops, atBottom)];
+    nav.querySelectorAll("a[data-sec]").forEach((a) => {
+      if (a.dataset.sec !== current.id) { a.removeAttribute("aria-current"); return; }
+      a.setAttribute("aria-current", "location");
+      // The list scrolls by itself when it does not fit in the window; the page must not move for this.
+      const box = nav.getBoundingClientRect(), link = a.getBoundingClientRect();
+      if (link.top < box.top) nav.scrollTop -= box.top - link.top + 24;
+      else if (link.bottom > box.bottom) nav.scrollTop += link.bottom - box.bottom + 24;
+    });
   }
 
   // ---------- views ----------
@@ -382,6 +498,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   }
   function renderWelcome() {
     state.current = null;
+    $("chapter-nav").hidden = true;
     renderToc();
     const t = totals();
     const sorted = [...state.available.keys()].sort((a, b) => a - b);
@@ -411,6 +528,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     const info = state.available.get(n);
     if (!info) { renderWelcome(); return; }
     state.current = n;
+    $("chapter-nav").hidden = true;
     renderToc();
     $("page").innerHTML = `<p class="loading">Cargando el capítulo ${n}…</p>`;
     let md = state.chapterCache.get(n);
@@ -426,7 +544,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
       }
     }
     if (state.current !== n) return;
-    const { html, exercises } = chapterHtml(md);
+    const { html, exercises, sections: list } = chapterHtml(md);
     info.exercises = exercises;
     const sessions = (info.tags || []).filter((t) => t.startsWith("ch" + pad(n) + "-")).length;
     const keys = [...state.available.keys()];
@@ -447,9 +565,15 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
           ${nextCh ? `<a class="btn secondary" href="#ch${pad(nextCh)}">Capítulo ${nextCh} →</a>` : ""}
         </span>
       </div>`;
+    movedAsides = [];
+    placeAsides($("page"), window.matchMedia(MARGIN_QUERY).matches);
+    state.sections = list;
+    $("chapter-nav").innerHTML = chapterNavHtml(list, n);
+    $("chapter-nav").hidden = !list.length;
     refreshChapterMarks();
     renderOverall();
     window.scrollTo(0, 0);
+    markSection();
   }
   function refreshChapterMarks() {
     const n = state.current;
@@ -481,6 +605,13 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     refreshChapterMarks(); renderToc();
   });
   document.addEventListener("click", (ev) => {
+    // The hash names the chapter (route), so the list of sections scrolls without touching it.
+    const section = ev.target.closest && ev.target.closest("a[data-sec]");
+    if (section) {
+      ev.preventDefault();
+      $(section.dataset.sec).scrollIntoView();
+      return;
+    }
     const copy = ev.target.closest && ev.target.closest("button.copy");
     if (copy) {
       const pre = copy.closest("figure").querySelector("pre");
@@ -500,10 +631,14 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     if (m) renderChapter(Number(m[1])); else renderWelcome();
   }
   window.addEventListener("hashchange", route);
+  // A browser fires scroll at most once per frame, and this only reads the tops of a few headings.
+  window.addEventListener("scroll", markSection, { passive: true });
+  window.addEventListener("resize", markSection);
 
   // ---------- boot ----------
   async function boot() {
     state.progress = loadLocal();
+    window.matchMedia(MARGIN_QUERY).addEventListener("change", (ev) => placeAsides($("page"), ev.matches));
     try {
       const [outline, manifest] = await Promise.all([
         fetch("book/outline.json").then((r) => r.json()),
