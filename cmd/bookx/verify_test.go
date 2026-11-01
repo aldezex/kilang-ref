@@ -671,6 +671,45 @@ func TestVerify(t *testing.T) {
 			{"containers in sequence are fine",
 				func(f *fixture) {},
 				func(f *fixture) []string { return nil }},
+			{":::more with a title, in sequence, is fine",
+				func(f *fixture) {
+					f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n:::more Los códigos de salida\nTexto.\n:::\n\n:::from Rust\nTexto.\n:::\n")
+				},
+				func(f *fixture) []string { return nil }},
+			{":::more inside an open :::exercise",
+				func(f *fixture) {
+					f.edit(ch1, "Cambia el código de salida.\n:::", "Cambia el código de salida.\n:::more Detalle\nTexto.\n:::")
+				},
+				func(f *fixture) []string {
+					return []string{want("%s:%d: nested container :::more", ch1, f.lineOf(ch1, ":::more"))}
+				}},
+			{":::exercise inside an open :::more",
+				func(f *fixture) {
+					f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n:::more Detalle\nTexto.\n:::exercise\nOtro.\n:::\n")
+				},
+				func(f *fixture) []string {
+					return []string{want("%s:%d: nested container :::exercise", ch1, f.lineOf(ch1, "Otro.")-1)}
+				}},
+			{":::more that is never closed",
+				func(f *fixture) { f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n:::more Detalle\nTexto.\n") },
+				func(f *fixture) []string {
+					return []string{want("%s:%d: unclosed container", ch1, f.lineOf(ch1, ":::more"))}
+				}},
+			{":::more without a title",
+				func(f *fixture) { f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n:::more\nTexto.\n:::\n") },
+				func(f *fixture) []string {
+					return []string{want("%s:%d: container :::more needs a title", ch1, f.lineOf(ch1, ":::more"))}
+				}},
+			{":::more with only spaces after it",
+				func(f *fixture) { f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n:::more   \nTexto.\n:::\n") },
+				func(f *fixture) []string {
+					return []string{want("%s:%d: container :::more needs a title", ch1, f.lineOf(ch1, ":::more"))}
+				}},
+			{":::more inside a code fence does not count",
+				func(f *fixture) {
+					f.edit(ch1, "Devuelve 1.\n:::\n", "Devuelve 1.\n:::\n\n```text\n:::more\n```\n")
+				},
+				func(f *fixture) []string { return nil }},
 		})
 	})
 

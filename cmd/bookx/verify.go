@@ -364,6 +364,8 @@ func (b *book) checkProse(c *chapter) []ScanError {
 // nested, and each one is closed. Lines inside a fenced code block do not
 // count. A `:::kind` line that appears while another container is open is a
 // problem and does not open anything, so its own closing line is not needed.
+// A `:::more` container is the one kind that needs an argument, because its
+// title is the summary of the fold that the page shows: `:::more <title>`.
 func checkContainers(p string, lines []string) []ScanError {
 	var out []ScanError
 	var open fence
@@ -386,6 +388,9 @@ func checkContainers(p string, lines []string) []ScanError {
 				out = append(out, ScanError{Path: p, Line: n, Message: "nested container :::" + m[1]})
 			} else {
 				cur, curLine = m[1], n
+				if cur == "more" && strings.TrimSpace(m[2]) == "" {
+					out = append(out, ScanError{Path: p, Line: n, Message: "container :::more needs a title"})
+				}
 			}
 		} else if strings.TrimSpace(line) == ":::" {
 			cur = ""
