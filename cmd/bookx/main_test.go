@@ -65,7 +65,7 @@ func repoFromFixture(t *testing.T, f *fixture) string {
 
 func TestRun(t *testing.T) {
 	t.Run("usage_errors", func(t *testing.T) {
-		const top = "usage: bookx <command> [args]\ncommands: verify, render, regions, testlist, web\n"
+		const top = "usage: bookx <command> [args]\ncommands: verify, render, regions, testlist, web, words\n"
 		rows := []struct {
 			name   string
 			args   []string
@@ -81,6 +81,8 @@ func TestRun(t *testing.T) {
 			{"regions without a tag", []string{"regions"}, "bookx regions: want 1 argument(s), found 0\nusage: bookx regions <tag> [--repo DIR]\n"},
 			{"testlist without a file", []string{"testlist"}, "bookx testlist: want 1 argument(s), found 0\nusage: bookx testlist <go-test-json-file>\n"},
 			{"testlist has no --repo", []string{"testlist", "--repo", "d", "f"}, "bookx testlist: flag provided but not defined: -repo\nusage: bookx testlist <go-test-json-file>\n"},
+			{"words without a file", []string{"words"}, "bookx words: want at least 1 argument(s), found 0\nusage: bookx words <file>...\n"},
+			{"words has no --repo", []string{"words", "--repo", "d", "f"}, "bookx words: flag provided but not defined: -repo\nusage: bookx words <file>...\n"},
 		}
 		for _, r := range rows {
 			code, stdout, stderr := runBookx(t, r.args...)
@@ -230,6 +232,33 @@ func TestRun(t *testing.T) {
 		code, stdout, stderr = runBookx(t, "testlist", file)
 		if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "bookx testlist: go test -json output: ") {
 			t.Errorf("testlist of a file that is not JSON: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+		}
+	})
+
+	t.Run("words_prints_the_flow_words_of_each_file", func(t *testing.T) {
+		dir := t.TempDir()
+		a, b := filepath.Join(dir, "a.md"), filepath.Join(dir, "b.md")
+		writeFile(t, dir, "a.md", "---\nchapter: 1\n---\nUno dos tres.\n```\nx y\n```\n")
+		writeFile(t, dir, "b.md", "Cuatro cinco.\n:::solution\nseis siete\n:::\n")
+		code, stdout, stderr := runBookx(t, "words", b, a)
+		if want := "2 " + b + "\n3 " + a + "\n"; code != 0 || stdout != want || stderr != "" {
+			t.Errorf("words: exit %d, stdout %q, stderr %q; want exit 0 and %q", code, stdout, stderr, want)
+		}
+
+		// A file that cannot be read is reported and the others still count.
+		missing := filepath.Join(dir, "missing.md")
+		_, readErr := os.ReadFile(missing)
+		code, stdout, stderr = runBookx(t, "words", a, missing, b)
+		wantOut, wantErr := "3 "+a+"\n2 "+b+"\n", "bookx words: "+readErr.Error()+"\n"
+		if code != 1 || stdout != wantOut || stderr != wantErr {
+			t.Errorf("words with a missing file: exit %d, stdout %q, stderr %q; want exit 1, stdout %q, stderr %q", code, stdout, stderr, wantOut, wantErr)
+		}
+
+		// An empty file has zero words and is still listed.
+		writeFile(t, dir, "empty.md", "")
+		code, stdout, stderr = runBookx(t, "words", filepath.Join(dir, "empty.md"))
+		if want := "0 " + filepath.Join(dir, "empty.md") + "\n"; code != 0 || stdout != want || stderr != "" {
+			t.Errorf("words of an empty file: exit %d, stdout %q, stderr %q; want exit 0 and %q", code, stdout, stderr, want)
 		}
 	})
 }

@@ -7,7 +7,7 @@
 // and return values and errors, and never touch git or the disk. Around them,
 // Git reads the tags of a repository, verify and render check and resolve the
 // book through the small repoReader interface, and run (this file) is the
-// command line: verify, render, web, regions and testlist.
+// command line: verify, render, web, regions, testlist and words.
 package main
 
 import (
@@ -45,6 +45,7 @@ var commandUsage = map[string]string{
 	"regions":  "usage: bookx regions <tag> [--repo DIR]",
 	"testlist": "usage: bookx testlist <go-test-json-file>",
 	"web":      "usage: bookx web <out-dir> [--repo DIR] [--all]",
+	"words":    "usage: bookx words <file>...",
 }
 
 // run is main without the process around it: it runs the command in args,
@@ -63,20 +64,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cmd = runTestlist
 		case "web":
 			cmd = runWeb
+		case "words":
+			cmd = runWords
 		}
 	}
 	if cmd == nil {
 		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
-		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words")
 		return exitUsage
 	}
 	return cmd(args[1:], stdout, stderr)
 }
 
 // parseArgs reads the arguments of a command: the flag --repo (when withRepo)
-// and exactly want positional arguments, in any order, so `render out --repo d`
-// works although the flag package stops at the first argument that is not a
-// flag. A command with flags of its own defines them in define. It prints the
+// and exactly want positional arguments (at least one when want is negative),
+// in any order, so `render out --repo d` works although the flag package stops
+// at the first argument that is not a flag. A command with flags of its own defines them in define. It prints the
 // problem and the usage line and returns ok false when the arguments are wrong.
 func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Writer, define ...func(*flag.FlagSet)) (repo string, pos []string, ok bool) {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
@@ -99,7 +102,11 @@ func parseArgs(name string, args []string, want int, withRepo bool, stderr io.Wr
 		}
 		pos, args = append(pos, args[0]), args[1:]
 	}
-	if len(pos) != want {
+	if want < 0 && len(pos) == 0 {
+		fmt.Fprintf(stderr, "bookx %s: want at least 1 argument(s), found 0\n%s\n", name, commandUsage[name])
+		return "", nil, false
+	}
+	if want >= 0 && len(pos) != want {
 		fmt.Fprintf(stderr, "bookx %s: want %d argument(s), found %d\n%s\n", name, want, len(pos), commandUsage[name])
 		return "", nil, false
 	}
