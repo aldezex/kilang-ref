@@ -187,6 +187,13 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const CONTAINER_LABEL = { exercise: "Ejercicio", solution: "Solución", review: "Pregunta", answer: "Respuesta", note: "Nota", bug: "Bug encontrado" };
   const MODE_LABEL = { test: "test de referencia", file: "fichero", diff: "cambio", listing: "fragmento" };
+  // A code block longer than this many lines renders inside a closed fold.
+  const FOLD_LINES = 30;
+  // The header that `bookx` writes for {{cards}}, as the text of its cells.
+  const CARDS_HEADER = "Id Caso Por qué Esperado Nivel";
+  // The bodies of these containers sit in a closed fold already: a long block inside them stays open.
+  const FOLDED_KINDS = new Set(["solution", "answer", "more"]);
+  let foldLong = true; // chapterHtml turns it off while it renders the body of a folded container
   const FFFD_MARKER = "%%U+FFFD%%";
 
   // ---------- progress: the db capability when the viewer has it, browser storage otherwise ----------
@@ -260,10 +267,18 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     if (attrs.mode === "test") {
       return `<details class="fold reftest"><summary>Test de referencia${attrs.title ? " · " + esc(attrs.title) : ""}${attrs.hint ? " · " + esc(attrs.hint) : ""}</summary><div class="fold-body">${figure}</div></details>`;
     }
+    // marked hands over the lines between the fences, so a blank last line counts as a line.
+    const lines = code.split("\n").length;
+    if (foldLong && lines > FOLD_LINES) {
+      return `<details class="fold long"><summary>${esc(attrs.title || lang || "texto")} · ${lines} líneas</summary><div class="fold-body">${figure}</div></details>`;
+    }
     return figure;
   };
   renderer.table = function (header, body) {
-    return `<div class="table-wrap"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
+    const table = `<div class="table-wrap"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
+    if (header.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() !== CARDS_HEADER) return table;
+    const cases = (body.match(/<tr>/g) || []).length;
+    return `<details class="fold cards"><summary>Tarjetas de test · ${cases} casos</summary><div class="fold-body">${table}</div></details>`;
   };
   marked.setOptions({ renderer, gfm: true });
 
@@ -305,6 +320,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     let exercise = 0;
     const out = [];
     for (const b of splitContainers(body)) {
+      foldLong = !FOLDED_KINDS.has(b.kind);
       const inner = marked.parse(b.text);
       switch (b.kind) {
         case "": out.push(inner); break;
@@ -316,6 +332,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
         case "solution": out.push(`<details class="fold"><summary>Solución del ejercicio ${exercise}</summary><div class="fold-body">${inner}</div></details>`); break;
         case "review": out.push(`<section class="box review"><div class="box-label"><span>Pregunta de repaso</span></div>${inner}</section>`); break;
         case "answer": out.push(`<details class="fold"><summary>Respuesta</summary><div class="fold-body">${inner}</div></details>`); break;
+        case "more": out.push(`<details class="fold more"><summary>${esc(b.arg).replace(/`([^`]+)`/g, "<code>$1</code>")}</summary><div class="fold-body">${inner}</div></details>`); break;
         case "from": out.push(`<aside class="box from"><div class="box-label"><span>Si vienes de ${esc(b.arg || "otro lenguaje")}</span></div>${inner}</aside>`); break;
         default: out.push(`<aside class="box ${esc(b.kind)}"><div class="box-label"><span>${esc(CONTAINER_LABEL[b.kind] || b.kind)}</span></div>${inner}</aside>`);
       }

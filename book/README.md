@@ -53,7 +53,7 @@ Una directiva se escribe con dobles llaves, **sola en su línea** (con sangría 
 | `{{listing TAG REGION}}` | La región marcada con ese id en el código de la etiqueta. |
 | `{{diff TAG..TAG RUTA}}` | Los cambios de un fichero entre dos etiquetas. |
 | `{{reftest TNN.MM}}` | El test de referencia de una tarjeta `unit`, `prop`, `example` o `bench` del capítulo, plegado en la página. |
-| `{{cards}}` | La tabla de tarjetas del capítulo: Id, Caso, Por qué, Esperado y Nivel. Cada capítulo la lleva. |
+| `{{cards}}` | La tabla de tarjetas del capítulo: Id, Caso, Por qué, Esperado y Nivel. Cada capítulo la lleva. La página la muestra plegada, bajo «Tarjetas de test · N casos». |
 
 **La prosa cita solo etiquetas de sesión** (`chNN-sK`), nunca la etiqueta del capítulo (`chNN`): mientras escribes la prosa, esa etiqueta todavía no existe. `{{reftest}}` lee el test en la etiqueta `chNN` si existe y, si no, en la última sesión del capítulo (la de mayor `K`).
 
@@ -75,9 +75,21 @@ El modo que sigue al id es `full` (el código tal cual), `hint "texto"` (un text
 
 Los contenedores empiezan con `:::tipo` en una línea y terminan con `:::` en otra:
 
-`:::exercise`, `:::solution`, `:::review`, `:::answer`, `:::from <Rust|TS|Python>`, `:::note` y `:::bug`.
+`:::exercise`, `:::solution`, `:::review`, `:::answer`, `:::from <Rust|TS|Python>`, `:::note`, `:::bug` y `:::more <título>`.
 
 Van **siempre en secuencia y nunca anidados**, porque la página solo abre un contenedor cuando no hay otro abierto. Un `:::solution` empieza **después** del `:::` que cierra su `:::exercise`, y lo mismo vale para `:::answer` y `:::review`. Las líneas dentro de una valla de código no cuentan. `bookx verify` señala `nested container :::<tipo>` y `unclosed container`.
+
+`:::more <título>` es un bloque plegado: la página lo muestra cerrado, con el título como resumen (el título admite código entre comillas invertidas). Sirve para la profundidad que no hace falta en una primera lectura, como casos límite, tablas de valores o detalle de las banderas del compilador. Su título es obligatorio: `bookx verify` señala `container :::more needs a title`. El cuerpo de un `:::more`, como el de un `:::solution` o un `:::answer`, no cuenta en el presupuesto de palabras (véase `bookx words`).
+
+## Qué pliega la página
+
+La página muestra plegado, y cerrado hasta que lo abres, todo lo que es largo o de consulta:
+
+- la tabla de `{{cards}}`, con el resumen «Tarjetas de test · N casos»;
+- cada bloque de código de más de 30 líneas, con el fichero o el título y el número de líneas como resumen (los de 30 líneas o menos quedan abiertos);
+- el `{{reftest}}`, las soluciones, las respuestas y los `:::more`.
+
+Un bloque de más de 30 líneas dentro de una solución, una respuesta o un `:::more` no se pliega otra vez: ya está dentro de un bloque plegado.
 
 ## Atributos de las vallas
 
@@ -115,8 +127,10 @@ Van **siempre en secuencia y nunca anidados**, porque la página solo abre un co
 4. El `file` de cada tarjeta existe en el código del capítulo y su `ref` aparece en él.
 5. Cada test nuevo del capítulo (el que está en `chNN.list` y no en el `ch(NN-1).list`) tiene tarjeta, y cada tarjeta que no es un `bench` tiene su test en `chNN.list`.
 6. Cada etiqueta citada está en `verified-tags.txt` con el SHA de su commit, y cada etiqueta `chNN` lleva la prosa y las tarjetas de su capítulo.
-7. Los contenedores no se anidan.
+7. Los contenedores no se anidan, todos se cierran y `:::more` lleva título.
 
 El código de un capítulo se lee en la etiqueta `chNN` si existe y, si no, en su última sesión. Un capítulo con prosa y `chNN.list` pero sin etiqueta `chNN` está *pendiente*: se comprueba con la prosa y las tarjetas del árbol de trabajo.
 
-Otros comandos: `bookx render <dir>` escribe el Markdown con las directivas resueltas (`<dir>/chNN.md`), `bookx web <dir> [--repo DIR] [--all]` escribe la página del libro (`index.html`, `book/outline.json`, `book/manifest.json` y `book/chNN.md` de cada capítulo publicado, o de todos con `--all`; solo añade y reemplaza ficheros, así que conviene darle un directorio propio), `bookx regions <etiqueta>` lista las regiones de una etiqueta y `bookx testlist <fichero>` filtra la salida de `go test -json`. `verify`, `render`, `regions` y `web` aceptan `--repo DIR` (por defecto, el directorio actual).
+Otros comandos: `bookx render <dir>` escribe el Markdown con las directivas resueltas (`<dir>/chNN.md`), `bookx web <dir> [--repo DIR] [--all]` escribe la página del libro (`index.html`, `book/outline.json`, `book/manifest.json` y `book/chNN.md` de cada capítulo publicado, o de todos con `--all`; solo añade y reemplaza ficheros, así que conviene darle un directorio propio), `bookx regions <etiqueta>` lista las regiones de una etiqueta, `bookx testlist <fichero>` filtra la salida de `go test -json` y `bookx words <fichero>…` imprime, una línea `<palabras> <fichero>` por fichero, las palabras de flujo de cada capítulo. `verify`, `render`, `regions` y `web` aceptan `--repo DIR` (por defecto, el directorio actual).
+
+Las **palabras de flujo** son las del texto corrido: no cuentan el bloque de metadatos, las vallas de código, las tablas, las directivas, las líneas `:::tipo` y `:::` de los contenedores, ni el cuerpo de `:::solution`, `:::answer` y `:::more`. Cuenta como palabra cada trozo entre espacios con alguna letra o cifra, así que un guion, una flecha o el `1.` de una lista numerada no suman. El presupuesto de un capítulo es de 4 500 palabras de flujo (`docs/superpowers/process/prose.md`).
