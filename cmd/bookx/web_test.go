@@ -157,6 +157,9 @@ func TestWeb(t *testing.T) {
 		// published, and its tags are the sessions only: ch02 does not exist.
 		f := webFixture(t)
 		delete(f.tags, "ch02")
+		// The chapter shows the cards of its last session, as the commit of a
+		// session carries the cards written so far.
+		f.setTag("ch02-s1", "book/tests/ch02.tests", f.text("book/tests/ch02.tests"))
 		var kept []string
 		for _, line := range strings.Split(f.text(verifiedTagsPath), "\n") {
 			if !strings.HasPrefix(line, "ch02 ") {

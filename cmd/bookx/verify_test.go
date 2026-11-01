@@ -281,7 +281,7 @@ func TestVerify(t *testing.T) {
 			{"a reftest of a card that is not there",
 				func(f *fixture) { f.edit(ch1, "{{reftest T01.01}}", "{{reftest T01.09}}") },
 				func(f *fixture) []string {
-					return []string{want("%s:%d: there is no card T01.09 in the cards of chapter 01", ch1, f.lineOf(ch1, "T01.09"))}
+					return []string{want("%s:%d: there is no card T01.09 in the cards of chapter 01 at tag `ch01`", ch1, f.lineOf(ch1, "T01.09"))}
 				}},
 			{"a reftest of a golden card",
 				func(f *fixture) { f.edit(ch1, "{{reftest T01.01}}", "{{reftest T01.03}}") },
@@ -481,6 +481,25 @@ func TestVerify(t *testing.T) {
 	// row of the next two tests would fail if they were: ch02.list repeats the
 	// tests of ch01.list, which need no second card, and the benchmark card
 	// T01.04 has no line in ch01.list.
+	t.Run("cards_edited_after_the_tag", func(t *testing.T) {
+		// A later chapter renames the test of T02.01 and rewrites the card in
+		// the tree. Rules 4 and 5 judge the tree against the code of the tag,
+		// and say so once; the prose, which cites the card, is rendered from
+		// the cards of the tag and has nothing to add.
+		const cardsPath = "book/tests/ch02.tests"
+		check(t, []row{
+			{"a reftest of a card whose ref changed after the tag",
+				func(f *fixture) {
+					f.edit(ch2, "{{cards}}", "{{cards}}\n\n{{reftest T02.01}}")
+					f.edit(cardsPath, "ref:     TestLexer/pipe_continues_line", "ref:     TestLexer/gone")
+					f.edit("book/tests/ch02.list", " TestLexer/pipe_continues_line\n", " TestLexer/gone\n")
+				},
+				func(f *fixture) []string {
+					return []string{want("%s:%d: card T02.01: the subtest name \"gone\" is not in `internal/syntax/lexer_test.go` (tag `ch02`)", cardsPath, f.lineOf(cardsPath, "[T02.01]"))}
+				}},
+		})
+	})
+
 	t.Run("rule5_uncarded_test", func(t *testing.T) {
 		const syntax = "github.com/aldezex/kilang/internal/syntax"
 		const listPath = "book/tests/ch02.list"
@@ -627,7 +646,12 @@ func TestVerify(t *testing.T) {
 			{"the tag has no cards",
 				func(f *fixture) { delete(f.tags["ch02"], "book/tests/ch02.tests") },
 				func(f *fixture) []string {
-					return []string{"book/tests/ch02.tests:1: tag `ch02` has no cards for the chapter"}
+					// The prose cannot show the cards of the tag either: its
+					// {{cards}} says so on its own line.
+					return []string{
+						want("%s:%d: `book/tests/ch02.tests` is not in tag `ch02`", ch2, f.lineOf(ch2, "{{cards}}")),
+						"book/tests/ch02.tests:1: tag `ch02` has no cards for the chapter",
+					}
 				}},
 			{"the working tree has no list of tests",
 				func(f *fixture) { delete(f.tree, "book/tests/ch02.list") },

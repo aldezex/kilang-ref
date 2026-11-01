@@ -43,7 +43,8 @@ func TestRender(t *testing.T) {
 	t.Run("cards_table", func(t *testing.T) {
 		f := cleanFixture(t)
 		f.setTree(ch2, "# Título\n\n{{cards}}\n\nFin.\n")
-		f.setTree("book/tests/ch02.tests", string(lines(
+		// {{cards}} reads the file in the tag of the chapter, not in the tree.
+		f.setTag("ch02", "book/tests/ch02.tests", string(lines(
 			"[T02.01] lexer.first                                       level: core",
 			"kind:    unit (go test)      file: internal/syntax/lexer_test.go",
 			"case:    usa `a | b` en una tabla",
@@ -73,8 +74,185 @@ func TestRender(t *testing.T) {
 		}, "\n"))
 
 		// A chapter with no cards still gets the header of the table.
-		f.setTree("book/tests/ch02.tests", "")
+		f.setTag("ch02", "book/tests/ch02.tests", "")
 		checkRender(t, f, "02", "# Título\n\n| Id | Caso | Por qué | Esperado | Nivel |\n|---|---|---|---|---|\n\nFin.\n")
+	})
+
+	// The cards of a chapter are those of its own moment: the file
+	// book/tests/chNN.tests in the tag chNN, or in the last session tag while
+	// the chapter has no tag yet. The tests below reword or break the working
+	// tree after the tag, as an errata of a later chapter does, and look at
+	// what the reader is shown.
+
+	// tagTable is the table that {{cards}} makes of the cards that the base
+	// fixture has in its tag ch02.
+	const tagTable = "| Id | Caso | Por qué | Esperado | Nivel |\n|---|---|---|---|---|\n" +
+		"| T02.01 | una línea que empieza por `\\|>` continúa la anterior | si el lexer insertara un Newline, el error saldría una línea más abajo | ningún Newline entre `xs` y `\\|>` | core |\n" +
+		"| T02.02 | el lexer nunca entra en pánico | el lexer lee entrada ajena | ninguna entrada hace caer el lexer | core |\n" +
+		"| T02.03 | internar dos veces el mismo texto | el resto del compilador compara números, no textos | la misma clave | core |\n"
+
+	// oneCard is a file with the card T02.01, whose expect is the text given.
+	oneCard := func(expect string) string {
+		return string(lines(
+			"[T02.01] lexer.first                                       level: core",
+			"kind:    unit (go test)      file: internal/syntax/lexer_test.go",
+			"case:    caso",
+			"expect:  "+expect,
+			"why:     motivo",
+			"ref:     TestLexer/pipe_continues_line",
+		))
+	}
+
+	t.Run("cards_are_those_of_the_chapter_tag", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{cards}}\n")
+		// A card reworded after the tag, a card added after it and a card
+		// dropped after it: none of them reaches the table.
+		f.edit("book/tests/ch02.tests", "expect:  ningún Newline entre `xs` y `|>`", "expect:  ningún Newline, y una etiqueta que ch02 no da")
+		f.edit("book/tests/ch02.tests", "[T02.03] interner.example                                  level: core", "[T02.03] interner.example                                  level: stretch")
+		f.setTree("book/tests/ch02.tests", f.text("book/tests/ch02.tests")+"\n"+string(lines(
+			"[T02.04] lexer.later                                       level: core",
+			"kind:    prop                file: internal/syntax/lexer_test.go",
+			"case:    otro",
+			"expect:  otro",
+			"why:     otro",
+			"ref:     FuzzLater",
+		)))
+		checkRender(t, f, "02", tagTable)
+
+		// The same tree, read through a tag that has the reworded card, shows
+		// it: the table follows the tag and not a copy made at some other time.
+		f.setTag("ch02", "book/tests/ch02.tests", oneCard("lo que dice ch02"))
+		got, problems := f.render("02")
+		if len(problems) != 0 || !strings.Contains(got, "| T02.01 | caso | motivo | lo que dice ch02 | core |") || strings.Contains(got, "T02.02") {
+			t.Errorf("render = %q with problems %q, want the single card of the tag", got, problems)
+		}
+	})
+
+	t.Run("an_unfinished_chapter_reads_its_last_session_tag", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{cards}}\n")
+		// ch02 has no chapter tag. Its sessions are s1, s2 and s10, and only
+		// the last one by number (s10; a sort of the names would say s2) has
+		// the cards the reader is shown.
+		delete(f.tags, "ch02")
+		f.setTag("ch02-s1", "book/tests/ch02.tests", oneCard("de s1"))
+		f.setTag("ch02-s2", "book/tests/ch02.tests", oneCard("de s2"))
+		f.setTag("ch02-s10", "book/tests/ch02.tests", oneCard("de s10"))
+		got, problems := f.render("02")
+		want := "| Id | Caso | Por qué | Esperado | Nivel |\n|---|---|---|---|---|\n| T02.01 | caso | motivo | de s10 | core |\n"
+		if got != want || len(problems) != 0 {
+			t.Errorf("render = %q with problems %q, want %q", got, problems, want)
+		}
+
+		// The chapter tag, once it exists, takes over from the sessions.
+		f.setTag("ch02", "book/tests/ch02.tests", oneCard("de ch02"))
+		if got, _ := f.render("02"); !strings.Contains(got, "| de ch02 |") {
+			t.Errorf("with the chapter tag, render = %q, want the card of ch02", got)
+		}
+	})
+
+	t.Run("reftest_reads_the_card_of_the_tag", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{reftest T02.01}}\n\n{{reftest T02.03}}\n")
+		// After the tag the tree renames the test of T02.01 and drops T02.03:
+		// the reader of ch02 is still shown both tests, found where the cards
+		// of the tag say they are.
+		f.edit("book/tests/ch02.tests", "ref:     TestLexer/pipe_continues_line", "ref:     TestLexer/renamed_later")
+		cut := strings.Index(f.text("book/tests/ch02.tests"), "[T02.03]")
+		f.setTree("book/tests/ch02.tests", f.text("book/tests/ch02.tests")[:cut])
+		got, problems := f.render("02")
+		if len(problems) != 0 {
+			t.Errorf("problems = %q, want none", problems)
+		}
+		for _, hint := range []string{`hint="T02.01 lexer.pipe_continues_line"`, `hint="T02.03 interner.example"`} {
+			if !strings.Contains(got, hint) {
+				t.Errorf("render has no %s:\n%s", hint, got)
+			}
+		}
+
+		// A card that the tree has and the tag does not is not there for the
+		// reader, and the message says where it looked.
+		f.setTree(ch2, "{{reftest T02.04}}\n")
+		f.setTree("book/tests/ch02.tests", f.text("book/tests/ch02.tests")+string(lines(
+			"[T02.04] lexer.later                                       level: core",
+			"kind:    prop                file: internal/syntax/lexer_test.go",
+			"case:    otro", "expect:  otro", "why:     otro", "ref:     FuzzLex",
+		)))
+		_, problems = f.render("02")
+		if want := []string{ch2 + ":1: there is no card T02.04 in the cards of chapter 02 at tag `ch02`"}; !slices.Equal(problems, want) {
+			t.Errorf("problems = %q, want %q", problems, want)
+		}
+	})
+
+	t.Run("cards_missing_from_the_tag_are_a_problem", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{cards}}\n\n{{reftest T02.01}}\n")
+		delete(f.tags["ch02"], "book/tests/ch02.tests")
+		_, problems := f.render("02")
+		want := []string{
+			ch2 + ":1: `book/tests/ch02.tests` is not in tag `ch02`",
+			ch2 + ":3: `book/tests/ch02.tests` is not in tag `ch02`",
+		}
+		if !slices.Equal(problems, want) {
+			t.Errorf("problems = %q, want %q", problems, want)
+		}
+
+		// A chapter that is still written is read at its last session tag, and
+		// the message names that one.
+		delete(f.tags, "ch02")
+		_, problems = f.render("02")
+		if len(problems) != 2 || !strings.HasSuffix(problems[0], ": `book/tests/ch02.tests` is not in tag `ch02-s1`") {
+			t.Errorf("problems = %q, want the file missing from tag ch02-s1", problems)
+		}
+	})
+
+	t.Run("cards_of_the_tag_that_do_not_parse_are_reported_once", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{cards}}\n\n{{reftest T02.02}}\n\n{{reftest T02.03}}\n")
+		f.editTag("ch02", "book/tests/ch02.tests", "ref:     TestLexer/pipe_continues_line\n", "ref:     TestLexer/pipe_continues_line\nextra:   no\n")
+		got, problems := f.render("02")
+		// The error is in the file of the tag, which the path says, and it is
+		// one error, not one for each directive that reads the cards. The card
+		// with the problem is not in the table and the others are.
+		tagged, err := f.Show("ch02", "book/tests/ch02.tests")
+		if err != nil {
+			t.Fatal(err)
+		}
+		line := 1 + strings.Count(string(tagged[:strings.Index(string(tagged), "extra:")]), "\n")
+		wantProblems := []string{want("ch02:book/tests/ch02.tests:%d: card T02.01: unknown field `extra:`", line)}
+		if !slices.Equal(problems, wantProblems) {
+			t.Errorf("problems = %q, want %q", problems, wantProblems)
+		}
+		if strings.Contains(got, "| T02.01 |") || !strings.Contains(got, "| T02.02 |") || !strings.Contains(got, `hint="T02.02 lexer.fuzz"`) {
+			t.Errorf("render = %q, want T02.02 and not T02.01", got)
+		}
+
+		// Either directive alone reports it too.
+		for _, directive := range []string{"{{cards}}", "{{reftest T02.02}}"} {
+			f.setTree(ch2, directive+"\n")
+			if _, problems := f.render("02"); !slices.Equal(problems, wantProblems) {
+				t.Errorf("%s alone: problems = %q, want %q", directive, problems, wantProblems)
+			}
+		}
+	})
+
+	t.Run("a_chapter_with_no_tag_shows_the_cards_of_the_tree", func(t *testing.T) {
+		f := cleanFixture(t)
+		f.setTree(ch2, "{{cards}}\n\n{{reftest T02.01}}\n")
+		// With no chapter tag and no session tag there is no moment to read
+		// the cards at, so the cards of the tree are shown, and the reftest
+		// has no code to read.
+		delete(f.tags, "ch02")
+		delete(f.tags, "ch02-s1")
+		f.setTree("book/tests/ch02.tests", oneCard("de la copia de trabajo"))
+		got, problems := f.render("02")
+		if !strings.Contains(got, "| T02.01 | caso | motivo | de la copia de trabajo | core |") {
+			t.Errorf("render = %q, want the card of the tree", got)
+		}
+		if want := []string{ch2 + ":3: chapter 02 has no tag `ch02` and no session tag `ch02-sK` to read the test from"}; !slices.Equal(problems, want) {
+			t.Errorf("problems = %q, want %q", problems, want)
+		}
 	})
 
 	t.Run("code_fence_attrs", func(t *testing.T) {

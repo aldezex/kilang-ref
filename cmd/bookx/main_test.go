@@ -186,6 +186,51 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	t.Run("render_shows_the_cards_of_the_tag", func(t *testing.T) {
+		// The working tree rewords T02.01 and breaks T02.02 after the tag
+		// ch02: the book is rendered from git's copy of the file at the tag,
+		// so the reader sees neither change, and the broken card of the tree is
+		// a problem for verify and not for the page.
+		dir := repoFromFixture(t, cleanFixture(t))
+		cards, err := os.ReadFile(filepath.Join(dir, "book/tests/ch02.tests"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		edited := strings.Replace(string(cards), "ningún Newline entre `xs` y `|>`", "ningún Newline, hoy", 1)
+		edited = strings.Replace(edited, "kind:    prop ", "kind:    nope ", 1)
+		if edited == string(cards) {
+			t.Fatal("the edit changed nothing")
+		}
+		writeFile(t, dir, "book/tests/ch02.tests", edited)
+
+		out := filepath.Join(t.TempDir(), "out")
+		code, stdout, stderr := runBookx(t, "render", out, "--repo", dir)
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("render: exit %d, stdout %q, stderr %q; want a quiet exit 0", code, stdout, stderr)
+		}
+		ch2, err := os.ReadFile(filepath.Join(out, "ch02.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"| T02.01 | una línea que empieza por `\\|>` continúa la anterior | si el lexer insertara un Newline, el error saldría una línea más abajo | ningún Newline entre `xs` y `\\|>` | core |\n",
+			"| T02.02 | el lexer nunca entra en pánico |",
+		} {
+			if !strings.Contains(string(ch2), want) {
+				t.Errorf("ch02.md does not contain %q", want)
+			}
+		}
+		if strings.Contains(string(ch2), "hoy") {
+			t.Error("ch02.md shows the card of the working tree")
+		}
+
+		// Verify, on the other hand, goes on reading the tree.
+		code, stdout, _ = runBookx(t, "verify", "--repo", dir)
+		if want := "book/tests/ch02.tests:10: card T02.02: unknown kind `nope`: want unit, prop, example, bench, golden, diag or run\n"; code != 1 || !strings.Contains(stdout, want) {
+			t.Errorf("verify: exit %d, stdout %q; want exit 1 with %q", code, stdout, want)
+		}
+	})
+
 	t.Run("regions_lists_the_markers_of_a_tag", func(t *testing.T) {
 		dir := repoFromFixture(t, cleanFixture(t))
 		code, stdout, stderr := runBookx(t, "regions", "ch02-s1", "--repo", dir)

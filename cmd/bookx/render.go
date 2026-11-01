@@ -84,6 +84,56 @@ func cardsTable(cards []Card) []string {
 	return lines
 }
 
+// momentCards are the cards that {{cards}} and {{reftest}} show for a chapter.
+type momentCards struct {
+	cards []Card
+	// tag is the tag the cards were read at; it is "" when the chapter has no
+	// tag at all and the cards are those of the working tree.
+	tag string
+	// msg is why the file of cards could not be read at the tag; "" when it
+	// could. Every directive that needs the cards reports it.
+	msg string
+	// errs are the problems of the file at the tag, with the path
+	// "<tag>:<file>". They belong to the chapter and not to a directive, so
+	// renderChapter reports them once.
+	errs []ScanError
+}
+
+// cardsOfMoment returns the cards of chapter c as they were at its own moment:
+// the file book/tests/chNN.tests in the tag chNN when that tag exists, and
+// otherwise in the last session tag chNN-sK, the one that c.CodeTag names, for
+// a chapter that is still being written. A later chapter may rewrite a card of
+// this one in the working tree (a label that gains text, a usage line that
+// gains a command). The reader of this chapter has the code of its own tag,
+// which still does the old thing, so the table has to show the card as that tag
+// has it. The cards of the working tree are what rules 4 and 5 of verify check;
+// they are shown only for a chapter with no tag at all, which has no moment to
+// read.
+func (b *book) cardsOfMoment(c *chapter) *momentCards {
+	if c.moment != nil {
+		return c.moment
+	}
+	m := &momentCards{tag: c.CodeTag}
+	c.moment = m
+	if c.CodeTag == "" {
+		m.cards = c.Cards
+		return m
+	}
+	file := "book/tests/ch" + c.NN + ".tests"
+	text, msg := b.readInTag(c.CodeTag, file)
+	if msg != "" {
+		m.msg = msg
+		return m
+	}
+	cards, errs := parseCards(file, text)
+	for _, e := range errs {
+		e.Path = c.CodeTag + ":" + e.Path
+		m.errs = append(m.errs, e)
+	}
+	m.cards = cards
+	return m
+}
+
 // renderChapter resolves the directives of the prose of chapter c and returns
 // the Markdown with each directive replaced by what it stands for, together
 // with the problems it found: a directive that is badly written, is not alone
@@ -104,6 +154,9 @@ func (b *book) renderChapter(c *chapter) (string, []ScanError) {
 	byLine := map[int][]Directive{}
 	for _, d := range ds {
 		byLine[d.Line] = append(byLine[d.Line], d)
+	}
+	if slices.ContainsFunc(ds, func(d Directive) bool { return d.Kind == DirCards || d.Kind == DirRefTest }) {
+		problems = append(problems, b.cardsOfMoment(c).errs...)
 	}
 
 	var out []string
@@ -170,7 +223,11 @@ func (b *book) checkCitedTag(c *chapter, tag string, line int) string {
 func (b *book) resolve(c *chapter, d Directive) ([]string, string) {
 	switch d.Kind {
 	case DirCards:
-		return cardsTable(c.Cards), ""
+		m := b.cardsOfMoment(c)
+		if m.msg != "" {
+			return nil, m.msg
+		}
+		return cardsTable(m.cards), ""
 
 	case DirFile:
 		if msg := b.checkCitedTag(c, d.Tag, d.Line); msg != "" {
@@ -235,11 +292,19 @@ func (b *book) resolve(c *chapter, d Directive) ([]string, string) {
 		return fenceBlock(info, diff), ""
 
 	case DirRefTest:
-		i := slices.IndexFunc(c.Cards, func(card Card) bool { return card.ID == d.Target })
-		if i < 0 {
-			return nil, fmt.Sprintf("there is no card %s in the cards of chapter %s", d.Target, c.NN)
+		m := b.cardsOfMoment(c)
+		if m.msg != "" {
+			return nil, m.msg
 		}
-		card := c.Cards[i]
+		i := slices.IndexFunc(m.cards, func(card Card) bool { return card.ID == d.Target })
+		if i < 0 {
+			at := ""
+			if m.tag != "" {
+				at = fmt.Sprintf(" at tag `%s`", m.tag)
+			}
+			return nil, fmt.Sprintf("there is no card %s in the cards of chapter %s%s", d.Target, c.NN, at)
+		}
+		card := m.cards[i]
 		if card.Kind != "unit" && card.Kind != "prop" && card.Kind != "example" && card.Kind != "bench" {
 			return nil, fmt.Sprintf("card %s is a `%s` card: {{reftest}} shows the Go test of a unit, prop, example or bench card", card.ID, card.Kind)
 		}
@@ -283,9 +348,11 @@ func (b *book) readInTag(tag, p string) ([]byte, string) {
 // chNN.md, and nothing else. When any directive of any chapter does not
 // resolve, it writes nothing and returns the problems. Problems with the cards
 // of a chapter count too, because {{cards}} and {{reftest}} would show an
-// incomplete table.
+// incomplete table. They are the problems of the file of cards at the tag of
+// the chapter; the file of the working tree is not shown, so only `bookx
+// verify` reads it.
 func renderBook(tree fs.FS, repo repoReader, dir string) ([]ScanError, error) {
-	b, loadProblems, err := loadBook(tree, repo)
+	b, _, err := loadBook(tree, repo) // the problems of the working tree are for verify
 	if err != nil {
 		return nil, err
 	}
@@ -295,11 +362,6 @@ func renderBook(tree fs.FS, repo repoReader, dir string) ([]ScanError, error) {
 	for _, c := range b.sortedChapters() {
 		if c.Prose == "" {
 			continue
-		}
-		for _, p := range loadProblems {
-			if p.Path == c.Tests {
-				problems = append(problems, p)
-			}
 		}
 		md, ps := b.renderChapter(c)
 		problems = append(problems, ps...)

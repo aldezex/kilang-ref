@@ -72,8 +72,12 @@ type chapter struct {
 	HasTag   bool   // the tag chNN exists
 	Sessions []string
 	CodeTag  string // chNN if it exists, else the last session tag, else ""
-	Cards    []Card
+	Cards    []Card // the cards of the working tree: rules 4 and 5 judge these
 	CardErrs []ScanError
+
+	// moment is what the reader of the chapter is shown as its cards, read the
+	// first time it is asked for (see cardsOfMoment).
+	moment *momentCards
 }
 
 // Active reports whether the chapter is part of the book: it has prose or its
