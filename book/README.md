@@ -81,6 +81,8 @@ Van **siempre en secuencia y nunca anidados**, porque la página solo abre un co
 
 `:::more <título>` es un bloque plegado: la página lo muestra cerrado, con el título como resumen (el título admite código entre comillas invertidas). Sirve para la profundidad que no hace falta en una primera lectura, como casos límite, tablas de valores o detalle de las banderas del compilador. Su título es obligatorio: `bookx verify` señala `container :::more needs a title`. El cuerpo de un `:::more`, como el de un `:::solution` o un `:::answer`, no cuenta en el presupuesto de palabras (véase `bookx words`).
 
+En una pantalla ancha, `:::from` y `:::note` salen en la columna del margen, a la altura del párrafo o la lista que siguen; en una estrecha, debajo de él. Por eso cada uno va justo detrás del párrafo que comenta.
+
 ## Qué pliega la página
 
 La página muestra plegado, y cerrado hasta que lo abres, todo lo que es largo o de consulta:
@@ -133,4 +135,4 @@ El código de un capítulo se lee en la etiqueta `chNN` si existe y, si no, en s
 
 Otros comandos: `bookx render <dir>` escribe el Markdown con las directivas resueltas (`<dir>/chNN.md`), `bookx web <dir> [--repo DIR] [--all]` escribe la página del libro (`index.html`, `book/outline.json`, `book/manifest.json` y `book/chNN.md` de cada capítulo publicado, o de todos con `--all`; solo añade y reemplaza ficheros, así que conviene darle un directorio propio), `bookx regions <etiqueta>` lista las regiones de una etiqueta, `bookx testlist <fichero>` filtra la salida de `go test -json` y `bookx words <fichero>…` imprime, una línea `<palabras> <fichero>` por fichero, las palabras de flujo de cada capítulo. `verify`, `render`, `regions` y `web` aceptan `--repo DIR` (por defecto, el directorio actual).
 
-Las **palabras de flujo** son las del texto corrido: no cuentan el bloque de metadatos, las vallas de código, las tablas, las directivas, las líneas `:::tipo` y `:::` de los contenedores, ni el cuerpo de `:::solution`, `:::answer` y `:::more`. Cuenta como palabra cada trozo entre espacios con alguna letra o cifra, así que un guion, una flecha o el `1.` de una lista numerada no suman. El presupuesto de un capítulo es de 4 500 palabras de flujo (`docs/superpowers/process/prose.md`).
+Las **palabras de flujo** son las del texto corrido: no cuentan el bloque de metadatos, las vallas de código, las tablas, las directivas, las líneas `:::tipo` y `:::` de los contenedores, ni el cuerpo de `:::solution`, `:::answer` y `:::more`. Cuenta como palabra cada trozo entre espacios con alguna letra o cifra, así que un guion, una flecha o el `1.` de una lista numerada no suman. El presupuesto de un capítulo es de 3 000 palabras de flujo (`docs/superpowers/process/prose.md`).
