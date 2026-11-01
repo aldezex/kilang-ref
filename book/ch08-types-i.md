@@ -8,7 +8,7 @@ milestone: errores de tipo con dos etiquetas y su origen
 
 ## Objetivo
 
-Al terminar, `ki check` sabe qué tipo tiene cada expresión de un programa y, cuando dos no encajan, lo dice con dos etiquetas: la del sitio que está mal y la del sitio que explica por qué se esperaba otra cosa.
+Al terminar, `ki check` sabe qué tipo tiene cada expresión y, cuando dos no encajan, lo dice con dos etiquetas: el sitio que está mal y el que explica por qué se esperaba otra cosa.
 
 ```console
 $ cat fib.ki
@@ -30,73 +30,104 @@ error[E0401]: mismatched types
   |             ^^^^ expected `Int`, found `Bool`
 ```
 
-La primaria está en el `true`; la secundaria, cinco líneas más arriba, es el origen de la expectativa. Ese es el hito del capítulo, camino de M1 (capítulo 10). Por el camino nacen E0401 a E0406, cada uno con su entrada en `docs/errors`, y una regla para todo el compilador: una equivocación, un error.
+La secundaria es el origen de la expectativa: ese es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406, con su entrada en `docs/errors`, y una regla para todo el compilador: una equivocación, un error.
 
 ## Teoría
 
 ### Los tipos como datos: una tabla que solo crece
 
-Para el comprobador, un tipo es un dato más: `Int`, `Bool`, `()`, una función `(Int, Bool) -> Int` o una variable que todavía no se sabe qué es. `internal/sema` los guarda como el resto del compilador guarda sus nodos: en un `base.IdVec[TypeID, Type]` (capítulo 4), y un tipo nombra a otros por id, nunca por puntero.
+Un tipo es un dato más: `Int`, `Bool`, `()`, una función `(Int, Bool) -> Int` o una variable por resolver. `internal/sema` los guarda en un `base.IdVec[TypeID, Type]` (capítulo 4), y un tipo nombra a otros por id, nunca por puntero.
 
-La tabla construye cada tipo **una vez** (*hash-consing*): pedir dos veces `(Int) -> Int` da el mismo id, así que saber si dos tipos son el mismo es comparar dos números (mientras ninguna variable ligada esté por medio; `Unify`, más abajo, resuelve antes de comparar). Para eso, `Fun` busca en un map antes de crear un nodo. La clave tendría que ser «estos parámetros, este resultado, estos efectos (en la Parte I, ninguno)», y los parámetros son un slice. En Go 1.27, `map[[]TypeID]TypeID` no compila: `invalid map key type []TypeID`, y un `funKey` con un campo `[]TypeID` tampoco (`invalid map key type funKey`): una clave tiene que admitir `==`. Así que `funKey` lleva los parámetros en un `string` con cuatro bytes por id. `encodeIDs` los escribe con `binary.LittleEndian.PutUint32`, de `encoding/binary`, que pone un `uint32` en cuatro bytes (`word[:]` es un slice sobre el array `[4]byte` entero). El ancho fijo importa: en decimal y pegados, `[1, 12]` y `[11, 2]` darían los dos `"112"`.
+**Hash-consing.** La tabla construye cada tipo una vez, así que comparar dos tipos es comparar dos ids, mientras ninguna variable ligada esté por medio (`Unify`, más abajo, resuelve antes).
 
-El otro lado de compartir es que nadie puede cambiar lo compartido. Go no tiene valores `const` compuestos: `const pair = [2]int{1, 2}` da `[2]int{…} (value of type [2]int) is not constant`, y lo mismo un slice o un struct. Tampoco hay un `&` de solo lectura. Así que la inmutabilidad es una convención que el código hace barata: los tipos son ids, la tabla solo crece (no hay `Delete`) y `Fun` guarda su propia copia de los parámetros (`slices.Clone`), por si quien llama reutiliza su slice. Lo que no puede impedir es que alguien escriba en el slice que `Node` devuelve: `tbl.Node(f).Params[0] = boolT` convierte `(Int) -> Int` en `(Bool) -> Int`, y `Fun([Int], Int)` sigue devolviendo ese id.
+**La clave de `Fun`.** Para eso, `Fun` busca en un map antes de crear un nodo. La clave son los parámetros, el resultado y los efectos (en la Parte I, ninguno).
+
+Una clave tiene que admitir `==`: un slice no sirve, ni un struct con un slice. Así que `funKey` lleva los parámetros en un `string`, cuatro bytes por id (`encodeIDs`). El ancho fijo importa: en decimal y pegados, `[1, 12]` y `[11, 2]` darían los dos `"112"`.
+
+**Inmutabilidad por convención.** Nadie debe cambiar lo compartido, pero Go no tiene valores `const` compuestos ni un `&` de solo lectura. Así que los tipos son ids, la tabla solo crece (no hay `Delete`) y `Fun` guarda su propia copia de los parámetros (`slices.Clone`), por si quien llama reutiliza su slice.
 
 :::from Rust
-`HashMap<FunKey, TypeId>` con `params: Vec<TypeId>` y `#[derive(Hash, PartialEq, Eq)]` compila; Go obliga a codificar. Y en Rust `const PAIR: [i32; 2] = [1, 2];` y `const SIZES: &[i32] = &[1, 2, 3];` compilan (rustc 1.97.1). Lo que en Rust garantiza el préstamo compartido `&[TypeId]`, aquí lo garantiza la disciplina: devolver ids y copiar al entrar.
+Una clave con `Vec<TypeId>` compila; Go obliga a codificar. Lo que garantiza el préstamo compartido `&[TypeId]`, aquí lo garantiza la disciplina: devolver ids y copiar al entrar.
+:::
+
+:::more Los mensajes del compilador, `encoding/binary` y lo que la convención no impide
+Un campo en minúscula de `TypeTable` (`t.types`), desde otro paquete, da `t.types undefined (cannot refer to unexported field types)`. En Go 1.27, `map[[]TypeID]TypeID` da `invalid map key type []TypeID`, y un `funKey` con un campo `[]TypeID`, `invalid map key type funKey`. `const pair = [2]int{1, 2}` da `[2]int{…} (value of type [2]int) is not constant`, y lo mismo un slice o un struct. En Rust, con `#[derive(Hash, PartialEq, Eq)]`, la clave compila, y también `const PAIR: [i32; 2] = [1, 2];` y `const SIZES: &[i32] = &[1, 2, 3];` (rustc 1.97.1).
+
+`encodeIDs` usa `binary.LittleEndian.PutUint32`, de `encoding/binary`, que pone un `uint32` en cuatro bytes; `word[:]` es un slice sobre el array `[4]byte` entero.
+
+La convención no impide que alguien escriba en el slice que `Node` devuelve: `tbl.Node(f).Params[0] = boolT` convierte `(Int) -> Int` en `(Bool) -> Int`, y `Fun([Int], Int)` sigue devolviendo ese id.
 :::
 
 ### Union-find sobre slices
 
-Una variable de tipo es un nodo `TypeVariable` de la tabla con un `Var TypeVarID`, que indexa otro `IdVec`, el de los registros `TypeVar`. Un registro dice si la variable está ligada (`IsBound`) y a qué tipo (`Bound`). Es un bosque *union-find* (`Bind` une, `Resolve` busca) sin punteros: el enlace al padre es un id.
+Una variable de tipo es un nodo `TypeVariable` cuyo `Var` indexa otro `IdVec` de registros `TypeVar`: si está ligada (`IsBound`) y a qué (`Bound`). Es un bosque *union-find* sin punteros: el enlace al padre es un id.
 
-- **`Bind(v, to)`** liga: escribe el enlace. No comprueba nada; eso es trabajo de quien llama.
-- **`Resolve(id)`** sigue los enlaces hasta un tipo que no es una variable ligada, en dos bucles: el primero encuentra el final; el segundo, la **compresión de caminos**, liga cada variable del camino directamente a ese final, de modo que la siguiente consulta da un solo paso. `vars.Ptr` (capítulo 4) es lo que deja escribir el registro en su sitio.
-- **`Rank` y `Level`** se guardan y nadie los lee: la interfaz ya es la final, y esperan al capítulo 13.
+- **`Bind(v, to)`** une: escribe el enlace y no comprueba nada.
+- **`Resolve(id)`** busca: sigue los enlaces hasta un tipo que no es una variable ligada. Un segundo bucle, la **compresión de caminos**, liga cada variable del camino a ese final, y la siguiente consulta da un solo paso. `vars.Ptr` (capítulo 4) deja escribir el registro en su sitio.
 
 ### Lo que ve otro paquete
 
-Los campos de `TypeTable` empiezan por minúscula, así que fuera de `sema` no existen. Desde otro paquete, `t.types` da `t.types undefined (cannot refer to unexported field types)`. Los tests que necesitan mirar `tbl.vars` (si una variable quedó ligada, a qué) viven por eso en `types_internal_test.go` y `unify_internal_test.go`, en `package sema`.
+Los campos de `TypeTable` empiezan por minúscula, así que fuera de `sema` no existen.
 
-Un anticipo del capítulo 14, el *embedding*, con tipos de juguete: un struct puede llevar otro sin nombre de campo, `type Mark struct { Range; Text string }`, y si `Range` tiene `Lo`, `Hi` y un método `Len`, `m.Lo` y `m.Len()` son los de su `Range`, promovidos, mientras `m.Range` sigue nombrando el campo entero.
+Un anticipo del capítulo 14, el *embedding*: un struct puede llevar otro sin nombre de campo, `type Mark struct { Range; Text string }`. Si `Range` tiene `Lo` y un método `Len`, `m.Lo` y `m.Len()` son de `Range`, promovidos, y `m.Range` nombra el campo entero.
 
 :::from Python
-Un `_types` es una convención que cualquiera puede saltarse; en Go, la minúscula la impone el compilador. Y el embedding no es herencia: `Mark` no es un `Range`, y una función que pide un `Range` necesita `m.Range`.
+Un `_types` se puede saltar; la minúscula la impone el compilador. El embedding no es herencia: quien pide un `Range` necesita `m.Range`.
 :::
 
 ### Unificación de Robinson y el occurs check
 
-Comprobar `fn double(x) -> Int { x * 2 }` es plantear ecuaciones: el `*` quiere `Int` a cada lado, así que el tipo de `x`, una variable `a`, tiene que ser `Int`. **Unificar** dos tipos (`x ~ y`) es hacerlos iguales ligando variables, y el algoritmo de Robinson lo hace mirando sus cabezas (el nodo de fuera), ya resueltas:
+Comprobar es plantear ecuaciones: en `fn double(x) -> Int { x * 2 }`, el `*` quiere `Int` a cada lado, así que el tipo de `x`, una variable, tiene que ser `Int`. **Unificar** dos tipos (`x ~ y`) es hacerlos iguales ligando variables. El algoritmo de Robinson mira sus cabezas (el nodo de fuera), ya resueltas:
 
 1. Si son el mismo id, ya está.
-2. Si una es el tipo de error, también (más abajo, por qué).
+2. Si una es el tipo de error, también (más abajo).
 3. Si una es una variable sin ligar, se liga a la otra.
 4. Si las dos son funciones con el mismo número de parámetros, se unifican sus partes.
 5. Si no, no hay unificación posible: E0401.
 
-El paso 3 tiene una trampa: `a ~ (a) -> Int` no tiene solución, porque `a` tendría que contenerse a sí misma: su texto no tendría fin (`Show`, que escribe un tipo como texto, lo cortaría en `…`), y ningún tipo finito es solución. Antes de ligar, el **occurs check** (`Occurs`) mira si la variable aparece dentro del tipo; si aparece, es E0405, «cannot construct an infinite type». Y el paso 1 va antes que todo por la misma razón: `Occurs(a, a)` es verdadero, así que `a ~ a` daría un E0405 falso si llegara al paso 3.
+**El occurs check.** `a ~ (a) -> Int` no tiene solución: `a` tendría que contenerse a sí misma, y ningún tipo finito es solución. Antes de ligar, `Occurs` mira si la variable aparece dentro del tipo; si aparece, es E0405. El paso 1 va primero por lo mismo: `Occurs(a, a)` es verdadero, y `a ~ a` daría un E0405 falso.
 
-La tabla construye cada tipo una vez, así que un tipo puede contener el mismo tipo dos veces en cada nivel: `(t, t) -> Int`, con `t` el nivel de abajo. Cuarenta niveles son cuarenta nodos y 2⁴⁰ caminos. Un recorrido que baje por cada camino tardaría horas, y un programa de unas cuarenta líneas lo construye: `p0`…`p40` son los parámetros sin anotación de una sola función, y llamar a uno, `p1(p0, p0)`, lo liga a una función de los tipos de sus argumentos (sesión 3); `p2(p1, p1)` sube otro nivel. Por eso `Occurs` y `Unify` llevan un conjunto de lo ya visitado, con valores de tipo `struct{}`, que no ocupan nada (el valor se escribe `struct{}{}`): el primero, un `map[TypeID]struct{}` de las funciones ya miradas; el segundo, uno de pares (`map[pair]struct{}`), porque la misma función puede encontrarse con dos distintas (T08.12). El map es `nil` hasta que hace falta: leerlo da el valor cero (capítulo 4). Y los dos usan su propia pila en vez de llamarse a sí mismos, porque la profundidad de un tipo la decide el programa que se compila (capítulo 6).
+**Compartir también explota.** Como cada tipo existe una vez, `(t, t) -> Int`, con `t` el nivel de abajo, lleva el mismo nodo dos veces. Cuarenta niveles son cuarenta nodos y 2⁴⁰ caminos, y unas cuarenta líneas lo construyen. Recorrer cada camino tardaría horas.
+
+Por eso `Occurs` y `Unify` llevan un conjunto de lo ya visitado, un map con valores `struct{}`, que no ocupan nada (el valor se escribe `struct{}{}`). Y usan pila propia, sin recursión, porque la profundidad de un tipo la decide el programa que se compila (capítulo 6).
+
+:::more El programa de cuarenta líneas, y qué guarda cada conjunto
+`p0`…`p40` son los parámetros sin anotación de una sola función. Llamar a uno, `p1(p0, p0)`, lo liga a una función de los tipos de sus argumentos (sesión 3); `p2(p1, p1)` sube otro nivel.
+
+`Occurs` guarda un `map[TypeID]struct{}` de las funciones ya miradas; `Unify`, uno de pares (`map[pair]struct{}`), porque la misma función puede encontrarse con dos distintas (T08.12). El map es `nil` hasta que hace falta: leerlo da el valor cero (capítulo 4).
+:::
 
 ### Comprobación bidireccional
 
-`infer` deduce el tipo de una expresión de lo que lleva dentro: `1` es `Int`, `n < 2` es `Bool`. `check` recibe el tipo que su sitio espera y, cuando puede, lo pasa hacia dentro: un bloque se lo da a su cola; un `if` con `else` compara su rama `else` con la `then`, y el resultado con lo esperado, sobre el `if` entero. Las dos se encuentran en `Unify`, cuando ya no hay hacia dónde empujar. La diferencia se ve en dónde cae el error. En `let x: Bool = { 1 }`, inferir el bloque y comparar después lo pondría sobre las llaves; empujar la expectativa lo pone sobre el `1`, la expresión que está mal.
+`infer` deduce el tipo de una expresión de lo que lleva dentro: `n < 2` es `Bool`.
 
-Las funciones son, en este capítulo, un solo grupo **monomórfico**: primero se crean todas las firmas (un parámetro sin anotación recibe una variable nueva) y después se comprueban los cuerpos. Lo que un cuerpo o una llamada aprende de un parámetro lo ve cada uso de la función, y una llamada a una función definida más abajo encuentra su firma. La generalización, que permite usar una misma función con tipos distintos, llega en el capítulo 13.
+`check` recibe el tipo que su sitio espera y, cuando puede, lo pasa hacia dentro. Un bloque se lo da a su cola. Un `if` con `else` compara su rama `else` con la `then`, y el resultado con lo esperado, sobre el `if` entero. Las dos se encuentran en `Unify`, cuando ya no hay hacia dónde empujar.
+
+En `let x: Bool = { 1 }`, inferir y comparar pondría el error sobre las llaves; empujar la expectativa, sobre el `1`, la expresión que está mal.
+
+Las funciones son aquí un solo grupo **monomórfico**: primero todas las firmas (un parámetro sin anotación recibe una variable nueva), después los cuerpos.
+
+Lo que un cuerpo o una llamada aprende de un parámetro lo ve cada uso de la función, y una llamada a una función definida más abajo encuentra su firma. La generalización (una función con tipos distintos) llega en el capítulo 13.
 
 ### Procedencia y mensajes al estilo de Elm y de rustc
 
-El listón es el del capítulo 7: una secundaria en el sitio que explica el error, que aquí es el **origen** de la expectativa: la anotación, el tipo de retorno, el parámetro, la otra rama. Cada llamada a `Unify` lleva un `Reason`: una clase (`ReasonKind`), el sitio que lo explica (`Because`) y, para un operador, su texto y su aridad. Si la unificación falla, la razón elige la secundaria del capítulo 7: «expected because of this annotation», «the parameter is declared here», «the other branch has type `Int`». Una condición de `if` no tiene ningún sitio que la explique, y lleva una nota con la regla en su lugar.
+El listón es el del capítulo 7: una secundaria en el sitio que explica el error, aquí el **origen** de la expectativa: la anotación, el tipo de retorno, el parámetro, la otra rama. Cada `Unify` lleva un `Reason`: una clase (`ReasonKind`), ese sitio (`Because`) y, para un operador, su texto y su aridad.
 
-Un mensaje enseña dos tipos con los mismos nombres de variable: si cada uno empezara en `a`, `expected (a) -> Int, found (a, a) -> Int` parecería hablar de la misma variable. `showAll` escribe los dos con una sola numeración, por orden de aparición en el texto.
+Si falla, la razón elige la secundaria: «expected because of this annotation». Una condición de `if` no tiene ningún sitio que la explique, y lleva una nota con la regla. Una cola de función con valor donde se espera `()` lleva además una ayuda: ligarlo con `let` o, si devolverlo lo arregla (`CanReturn`), devolverlo.
+
+Un mensaje enseña dos tipos: si cada uno empezara en `a`, `expected (a) -> Int, found (a, a) -> Int` parecería hablar de la misma variable. `showAll` los escribe con una sola numeración, por orden de aparición.
 
 ### El tipo de error, que unifica en silencio
 
-Un nombre desconocido ya dio su E0301. Si el comprobador le inventara un tipo, `nope + 1` añadiría un E0401 por el mismo descuido, y en un programa grande el error de verdad quedaría enterrado. `TypeErr` (que `Show` escribe `{error}`) es el tipo de todo lo que una fase anterior no pudo entender: un `ExprError` del parser, un `ResError` del resolvedor, un nombre de tipo desconocido (que la sesión 4 informa como E0406). `Unify` lo da por igual a cualquier otro sin decir nada y sin ligar variables (una variable ligada al error taparía los errores de después), y una operación con un operando de tipo error tiene tipo error (salvo un `==` rechazado por su operando izquierdo, sesión 3, que es `Bool`).
+Si el comprobador inventara un tipo para un nombre desconocido, que ya dio su E0301, `nope + 1` añadiría un E0401 por el mismo descuido, y el error de verdad quedaría enterrado.
+
+`TypeErr` (`Show`, que escribe un tipo, lo escribe `{error}`) es el tipo de lo que una fase anterior no entendió: un `ExprError`, un `ResError`, un nombre de tipo desconocido. `Unify` lo da por igual a cualquier otro, en silencio y sin ligar variables: una variable ligada al error taparía los errores de después.
+
+Una operación con un operando de tipo error tiene tipo error (salvo un `==` rechazado por su operando izquierdo, sesión 3: `Bool`).
 
 ### Una goroutine que vigila: `within`
 
-Los tests de 40 niveles tienen un problema propio: un recorrido equivocado no falla, se cuelga, y `go test` lo corta a los diez minutos con un panic que nombra el test y vuelca las pilas, pero no la fila ni el motivo, y el binario entero muere. `within.Run`, de `internal/testsupport/within`, ejecuta el trabajo en otra goroutine y espera con un `select`. Su paquete solo importa `testing` y `time`, así que lo usan también los tests de `package sema`, que no pueden importar `testsupport`. En pequeño, con el plazo como argumento:
+Un recorrido equivocado de 40 niveles no falla, se cuelga: `go test` lo corta a los diez minutos sin decir la fila ni el motivo, y el binario entero muere. `within.Run` ejecuta el trabajo en otra goroutine y espera con un `select`. En pequeño:
 
 ```go
 func within(t *testing.T, d time.Duration, work func()) {
@@ -114,7 +145,11 @@ func within(t *testing.T, d time.Duration, work func()) {
 }
 ```
 
-`go f()` lanza `f` en una goroutine nueva (lo que `wg.Go` hacía en el capítulo 1). `make(chan struct{})` crea un canal; `close(done)` lo cierra, y recibir de un canal cerrado (`<-done`) no espera. `time.Duration` cuenta nanosegundos; `time.After(d)` devuelve un canal que recibe un valor pasado `d`. `select` espera al primero de sus casos que pueda avanzar. Un test que llama a `within(t, 100*time.Millisecond, func() { select {} })` (un `select` sin casos no avanza nunca) falla a la décima de segundo con `not finished after 100ms`; `within.Run` toma su plazo, 10 segundos, de `within.Deadline`. El `t.Fatalf` va en la goroutine del test y no dentro del `go func()`: `go vet` rechaza ese con `call to (*testing.T).Fatalf from a non-test goroutine`.
+- `go f()` lanza `f` en una goroutine nueva (como `wg.Go`, capítulo 1).
+- `make(chan struct{})` crea un canal; `close(done)` lo cierra, y recibir de un canal cerrado (`<-done`) no espera.
+- `time.Duration` cuenta nanosegundos; `time.After(d)` devuelve un canal que recibe un valor pasado `d`.
+- `select` espera al primero de sus casos que pueda avanzar.
+- `t.Fatalf` va en la goroutine del test: dentro del `go func()`, `go vet` lo rechaza.
 
 :::from Rust
 Es `thread::spawn` con un `mpsc::channel` y `rx.recv_timeout(d)`. Como en Go, el hilo colgado no se puede matar desde fuera: solo se deja de esperarlo.
@@ -124,9 +159,23 @@ Es `thread::spawn` con un `mpsc::channel` y `rx.recv_timeout(d)`. Como en Go, el
 
 {{cards}}
 
-Úsalas como siempre: escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`.
+Escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`.
 
-Casi todos los tests viven en tres sitios. `types_internal_test.go` (`TestTypeTable`) y `unify_internal_test.go` (`TestUnify`) son `package sema`, porque leen `tbl.vars`. `check_test.go` (`TestCheck`) es `package sema_test`: pasa cada fuente por `testsupport.Analyze`, que desde la sesión 3 también comprueba tipos, y reutiliza los ayudantes de `scope_test.go` y `resolve_test.go`. Las tarjetas describen el final del capítulo: T08.17 y T08.20 cambian en la sesión 3, y T08.19 y T08.23 en la 4; en su sesión se escriben como en `git show ref/ch08-sK:book/tests/ch08.tests`.
+Casi todos van en `types_internal_test.go` (`TestTypeTable`) y `unify_internal_test.go` (`TestUnify`), en `package sema` porque leen `tbl.vars`, y en `check_test.go` (`TestCheck`), en `package sema_test`.
+
+Las tarjetas describen el final del capítulo: T08.17 y T08.20 cambian en la sesión 3, y T08.19 y T08.23 en la 4; en su sesión se escriben como en `git show ref/ch08-sK:book/tests/ch08.tests`.
+
+:::more `within` y los ayudantes de test, sesión por sesión
+Al cortar un test colgado, `go test` da un panic que nombra el test y vuelca las pilas, pero no la fila ni el motivo.
+
+**`within`.** Un test que llama a `within(t, 100*time.Millisecond, func() { select {} })` (un `select` sin casos no avanza nunca) falla a la décima de segundo con `not finished after 100ms`; `within.Run`, de `internal/testsupport/within`, toma su plazo, 10 segundos, de `within.Deadline`. Su paquete solo importa `testing` y `time`, así que lo usan también los tests de `package sema`, que no pueden importar `testsupport`. El mensaje de `go vet` es `call to (*testing.T).Fatalf from a non-test goroutine`.
+
+- **Sesión 1, `types_internal_test.go`.** `varID` da la variable de un tipo y falla si no lo es; `varOf`, su registro; `bind` liga; `funMaker` abrevia `Fun` con la fila vacía; `distinctIDs` falla por cada par de tipos con el mismo id; y `checkFunKeysTellIdsApart` crea funciones sobre ids que confundirían una clave decimal o de uno o dos bytes por id, y exige un id por función y ningún nodo de más.
+- **Sesión 2, `unify_internal_test.go`.** `unifyEnv`, con `newUnifyEnv`, es una tabla con los tres tipos predefinidos a mano; `fn(ret, params...)`, con el resultado primero, y `fresh` crean funciones y variables; `isUnbound` mira el registro; `unify` llama a `Unify` con un sink propio; `check` exige la respuesta y los diagnósticos campo por campo con `reflect.DeepEqual`; `annotated` es la razón de un `let` anotado, y `badAnnotated`, `check` con ella; `annotatedLabel`, `unusedHelp` y `unusedBindHelp` son los textos esperados; `wantMismatch`, `withBecause` y `wantInfinite` construyen el E0401 y el E0405 esperados; `panics`, con `defer` y `recover`, dice si una función hace panic.
+- **Sesión 3, `check_test.go`.** Pasa cada fuente por `testsupport.Analyze` y reutiliza los ayudantes de `scope_test.go` y `resolve_test.go`. `wantDiags` exige exactamente esos diagnósticos, ordenados por posición y comparados campo por campo; `mismatch`, `secondary`, `arityError` y `notCallable` construyen los esperados; `exprType` da el tipo de la expresión de un span; `bindEdit` aplica la ligadura que propone la ayuda, para volver a comprobar el programa; `unusedHelp` y `unusedBindHelp` repiten los textos de `unify_internal_test.go`, que este paquete no ve.
+- **Sesión 3, `export_internal_test.go`.** `VarOrigin` deja a `check_test.go` leer el `Origin` de una variable: lo exportado en un `_test.go` de `package sema` lo ve `sema_test`, y la API no cambia.
+- **Sesión 4, `check_test.go`.** `mainError` y `unknownType` construyen el E0404 y el E0406 esperados, y `onlyDiag` exige que haya uno solo. Los tests de E0404 aplican la edición de cada fila con `ApplyFixits` y vuelven a comprobar el resultado.
+:::
 
 ## Implementación
 
@@ -134,7 +183,7 @@ Casi todos los tests viven en tres sitios. `types_internal_test.go` (`TestTypeTa
 
 #### Los tests, en rojo
 
-T08.01–T08.09. La interfaz, completa:
+1. **Escribe T08.01–T08.09.** La interfaz, completa:
 
 ```go
 type TypeID uint32; type RowID uint32; type TypeVarID uint32
@@ -164,34 +213,37 @@ const Deadline = 10 * time.Second
 func Run(t *testing.T, what string, work func())
 ```
 
-La clase de una variable se llama `TypeVariable` y no `TypeVar`: con los dos nombres, Go diría `TypeVar redeclared in this block`.
-
-Copia `internal/testsupport/within` de `ref/ch08-s1` (es código de test, como `testsupport`). Sobre `ch07-s4`, el test no compila: `types_internal_test.go:23:31: undefined: TypeTable`. Escribe las declaraciones, `MaxTypeText` y métodos que devuelvan el valor cero (`Resolve` devuelve su `id`, `Show` devuelve `""`), con un `NewTypeTable` que ya cree la fila de efectos vacía (`t.rows.Push(Row{})`): sin ella, `fun_types_hash_cons` lee `tbl.rows.Get(empty)` y corta el binario con `index out of range [0] with length 0`. Así fallan los nueve subtests, ninguno con panic; el primero, con `Int and Bool have the same id, 0`.
-
-Los ayudantes de `types_internal_test.go`: `varID` da la variable de un tipo y falla si no lo es; `varOf`, su registro; `bind` liga; `funMaker` abrevia `Fun` con la fila vacía; `distinctIDs` falla por cada par de tipos con el mismo id; y `checkFunKeysTellIdsApart` crea funciones sobre ids que confundirían una clave decimal o de uno o dos bytes por id, y exige un id por función y ningún nodo de más.
+2. **Copia `internal/testsupport/within`** de `ref/ch08-s1` (es código de test, como `testsupport`).
+3. **Míralo fallar.** Sobre `ch07-s4`, el test no compila: `types_internal_test.go:23:31: undefined: TypeTable`.
+4. **Escribe las declaraciones, `MaxTypeText` y métodos que devuelvan el valor cero** (`Resolve` devuelve su `id`, `Show` devuelve `""`). `NewTypeTable` crea la fila de efectos vacía (`t.rows.Push(Row{})`; en la Parte I, ninguna función tiene otra): sin ella, `fun_types_hash_cons` corta el binario. Fallan los nueve subtests, ninguno con panic.
 
 #### El código
 
 {{file ch08-s1 internal/sema/types.go}}
 
-- **`Fun`** busca la clave antes de copiar nada: pedir otra vez una función que ya existe no añade nodo. `Fun(nil, …)` y `Fun([]TypeID{}, …)` dan la misma clave, `""`, así que son el mismo tipo. Si `encodeIDs` escribiera los ids en decimal, T08.02 fallaría con `Fun([1 0], 0) and Fun([10], 0) have the same id, 401`.
-- **`Resolve`**: si el segundo bucle recolocara solo el primer eslabón, la cadena de cinco de T08.08 lo vería en las variables 1 a 3.
-- **`Occurs`** mira cada función una vez (`seen`). Sin esa guarda, la fila de 40 niveles de T08.09 falla a los diez segundos con `Occurs on the types of 40 levels: not finished after 10s, when it should take well under a second`.
-- **`Show`** escribe con una pila de piezas: un `id` por escribir o un texto tal cual. Una función apila su resultado, ` -> `, `)` y los parámetros del último al primero, para que salgan en el orden del texto. `varName` da `a`…`z`, `a1`… (T08.05). Y corta: si con la pieza siguiente el texto pasara de `MaxTypeText` bytes, escribe `…` y para (T08.03); y una variable solo se numera cuando su nombre se escribe, cosa que fija T08.13 en la sesión 2, con `showAll`.
+**`Show`** escribe con una pila de piezas: un `id` por escribir o un texto tal cual. Una función apila sus partes de la última a la primera, para que salgan en orden.
+
+:::more Sesión 1, los porqués: el nombre `TypeVariable`, la fila vacía, `Fun`, `Resolve`, `Show`, `Rank` y `Level`
+- La clase de una variable se llama `TypeVariable` y no `TypeVar`: con los dos nombres, Go diría `TypeVar redeclared in this block`.
+- Sin la fila vacía, el panic es `index out of range [0] with length 0`. Con ella, el primer subtest falla con `Int and Bool have the same id, 0`.
+- **`Fun`** busca la clave antes de copiar nada: pedir otra vez una función que ya existe no añade nodo. `Fun(nil, …)` y `Fun([]TypeID{}, …)` dan la misma clave, `""`, así que son el mismo tipo.
+- En `Resolve`, si el segundo bucle recolocara solo el primer eslabón, la cadena de cinco de T08.08 lo vería en las variables 1 a 3.
+- En `Show`, una función apila su resultado, ` -> `, `)` y los parámetros; y si con la pieza siguiente el texto pasara de `MaxTypeText` bytes, escribe `…` y para (T08.03).
+- `varName` da `a`…`z`, `a1`… (T08.05), y una variable solo se numera cuando su nombre se escribe (T08.13, con `showAll`).
+- **`Rank` y `Level`** se guardan y nadie los lee: la interfaz ya es la final, y esperan al capítulo 13.
+:::
 
 {{reftest T08.08}}
 
-El mensaje de la etiqueta: `ch08-s1: the type table`.
-
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch08-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch08-s1`; compárate con `ref/ch08-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch08-s1` (mensaje: `ch08-s1: the type table`); compárate con `ref/ch08-s1`.
 
 ### Sesión 2: unificación con procedencia (≈ 2,5 h)
 
 #### Los tests, en rojo
 
-T08.10–T08.20. La interfaz:
+1. **Escribe T08.10–T08.19** (T08.17, como en `ref/ch08-s2`). La interfaz:
 
 ```go
 type ReasonKind uint8 // ReasonAnnotation, ReasonLetAnnotation, ReasonReturnType, ReasonBlockTail,
@@ -202,48 +254,58 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 func (t *TypeTable) showAll(ids ...TypeID) []string // one set of names for all of them
 ```
 
-Sobre `ch08-s1` no compila: `unify_internal_test.go:65:52: undefined: Reason`. Copia `reason.go` entero y escribe un `Unify` que devuelva `true`: fallan nueve de los diez subtests de `TestUnify`, sin panic. `same_type_ok` ya pasa, porque decir que sí sin ligar nada es lo correcto para dos tipos iguales.
-
-Los ayudantes de `unify_internal_test.go`: `unifyEnv`, con `newUnifyEnv`, es una tabla con los tres tipos predefinidos a mano; `fn(ret, params...)`, con el resultado primero, y `fresh` crean funciones y variables; `isUnbound` mira el registro; `unify` llama a `Unify` con un sink propio; `check` exige la respuesta y los diagnósticos campo por campo con `reflect.DeepEqual`; `annotated` es la razón de un `let` anotado, y `badAnnotated`, `check` con ella; `annotatedLabel`, `unusedHelp` y `unusedBindHelp` son los textos esperados; `wantMismatch`, `withBecause` y `wantInfinite` construyen el E0401 y el E0405 esperados; `panics`, con `defer` y `recover`, dice si una función hace panic.
+2. **Míralos fallar.** Sobre `ch08-s1` no compila: `unify_internal_test.go:65:52: undefined: Reason`.
+3. **Copia `reason.go` entero y escribe un `Unify` que devuelva `true`.** Fallan nueve de los diez subtests de `TestUnify`, sin panic.
 
 #### El código
 
 {{file ch08-s2 internal/sema/reason.go}}
 
-{{file ch08-s2 internal/sema/unify.go}}
+**El catálogo antes de que nadie llame a `Unify`.** E0401 y E0405 nacen con sus entradas en `docs/errors`, pero `ki check` todavía no comprueba tipos, y sus ejemplos erróneos no pueden dar su código.
 
-{{diff ch08-s1..ch08-s2 internal/sema/types.go}}
+Con la palabra de valla `pending=<valor>`, el ejemplo se ejecuta y solo se le pide no dar su código, y el test **falla** el día que lo da: `` now reports E0401: remove `pending` ``.
 
-- **Resolver antes de comparar.** Sin el `if e == f`, `Int ~ Int` cae en el `default` y da «expected `Int`, found `Int`» (T08.10).
-- **El orden.** Se apila el resultado y luego los parámetros del último al primero. Si los apilaras en orden, en `(p, p) -> Int` contra `(Int, Bool) -> Int` el error saldría en el primer parámetro y T08.12 diría `p resolves to Bool, want Int`.
-- **Una equivocación, un diagnóstico.** La primera parte que no cuadra termina `Unify`, y la etiqueta escribe con `showAll` los dos tipos que recibió `Unify`, no la parte que falló, cortados como los corta `Show`.
-- **`bind`** hace el occurs check; si falla, la variable queda sin ligar y la nota usa `showAll(vType, to)`, así que la variable que se contiene se llama `a` aunque en el tipo aparezca después: `y ~ (x, y) -> Int` dice `` `a` would have to be `(b, a) -> Int` ``.
-- **La ayuda** solo sale con `ReasonBlockTail` y `()` esperado, y sin fix-it: «this value is unused: bind it with `let name = …`», más «, or return it from the function» si la razón lleva `CanReturn`. Cómo llamar al valor, y si devolverlo, lo decides tú.
-- **`indefinite`** elige «a» o «an» por la primera letra del tipo: `!1` dice «`!` expects a `Bool` operand» (T08.14).
+El valor dice quién hará alcanzable el código: en la referencia, `T36`, el nombre que llevaba la sesión 3; en tu repo, vale `pending=ch08-s3`.
 
-**El catálogo antes de que nadie llame a `Unify`.** E0401 y E0405 nacen en esta sesión, y con ellos sus entradas en `docs/errors`; pero `ki check` todavía no comprueba tipos, así que sus ejemplos erróneos no pueden dar su código, y `erroneous_examples_report_their_code` fallaría con `reports [], want at least one E0401`. La palabra de valla `pending=<valor>` lo resuelve: el ejemplo se ejecuta, no se le pide nada salvo no dar su código, y el test **falla** el día que lo da, con `` now reports E0401: remove `pending` ``. Es una marca que caduca. El valor dice quién hará alcanzable el código; en la referencia es `T36`, el nombre que llevaba la sesión 3 de este capítulo, y en tu repo puedes escribir `pending=ch08-s3`.
+El orden que funciona:
 
-El orden que funciona: primero `TestErrorDocs/pending_word` (T08.20), que en rojo falla cinco veces, la primera porque la valla tiene `` the unknown word "pending=T36" ``; después `parseDoc` y `exampleProblems`; después los dos ficheros del catálogo; y por último `unify.go`, que sin ellos da `the source builds E0401, and docs/errors/E0401.md does not exist`.
+1. **Escribe `TestErrorDocs/pending_word`** (T08.20).
+2. **Cambia `parseDoc` y `exampleProblems`** (T07.86, T07.87: `git show ref/ch08-s2:book/tests/ch07.tests`).
+3. **Escribe las dos entradas:** `E0401.md` (siete pares, uno por sitio) y `E0405.md`.
+4. **Por último, `unify.go`:** el test exige una entrada por cada código de la fuente, y al revés.
 
 {{diff ch08-s1..ch08-s2 tests/errors_docs_test.go}}
 
 {{file ch08-s2 docs/errors/E0405.md}}
 
-`E0401.md` tiene siete pares, uno por sitio que explica la expectativa (la anotación de un `let`, el tipo de retorno, la cola `()`, el argumento, la otra rama, la condición y el operando), con la misma marca y el mismo párrafo. Este cambio toca tarjetas del capítulo 7: T07.86 y T07.87 enumeran las palabras de la valla y en `ch08-s2` aprenden `pending=`; T07.87 cambia otra vez en la sesión 3, cuando la marca desaparece, y T07.94 en la 4, cuando `FuzzAnalyze` gana tres semillas del E0404 y el E0406. La tabla del capítulo 7 las muestra como eran en `ch07-s4`; las de ahora están en `git show ref/ch08-s4:book/tests/ch07.tests`.
+{{file ch08-s2 internal/sema/unify.go}}
+
+{{diff ch08-s1..ch08-s2 internal/sema/types.go}}
+
+- **Una equivocación, un diagnóstico.** La primera parte que no cuadra termina `Unify`, y la etiqueta escribe los dos tipos que recibió `Unify`, no la parte que falló.
+- **`bind`,** en minúscula, hace el occurs check que `Bind` no hace; si falla, la variable queda sin ligar.
+
+:::more Sesión 2, los porqués: el orden de `Unify`, la ayuda, `pending=` y los siete sitios de `E0401.md`
+- `same_type_ok` ya pasa con el `Unify` que devuelve `true`, porque decir que sí sin ligar nada es lo correcto para dos tipos iguales.
+- **El orden.** Se apilan el resultado y los parámetros del último al primero. Apilados en orden, en `(p, p) -> Int` contra `(Int, Bool) -> Int` el error saldría en el primer parámetro, y T08.12 diría `p resolves to Bool, want Int`.
+- **La ayuda** solo sale con `ReasonBlockTail` y `()` esperado, y sin fix-it: «this value is unused: bind it with `let name = …`», más «, or return it from the function» si la razón lleva `CanReturn`. Cómo llamar al valor, y si devolverlo, lo decides tú.
+- **`indefinite`** elige «a» o «an» por la primera letra del tipo: `!1` dice «`!` expects a `Bool` operand» (T08.14).
+- **El catálogo.** Sin `pending=`, `erroneous_examples_report_their_code` fallaría con `reports [], want at least one E0401`. T08.20 en rojo falla cinco veces, la primera porque la valla tiene `` the unknown word "pending=T36" ``.
+- **`E0401.md`** tiene siete pares; sus sitios son la anotación de un `let`, el tipo de retorno, la cola `()`, el argumento, la otra rama, la condición y el operando, todos con la misma marca y el mismo párrafo.
+- **T07.86, T07.87 y T07.94.** T07.86 y T07.87, que enumeran las palabras de la valla, aprenden `pending=`: las tarjetas de esta sesión están en `git show ref/ch08-s2:book/tests/ch07.tests`. T07.87 cambia otra vez en la sesión 3, cuando la marca desaparece, y T07.94 en la 4, cuando `FuzzAnalyze` gana tres semillas del E0404 y el E0406. La tabla del capítulo 7 las muestra como eran en `ch07-s4`.
+:::
 
 {{reftest T08.11}}
 
-El mensaje de la etiqueta: `ch08-s2: unification with provenance`.
-
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch08-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch08-s2`; compárate con `ref/ch08-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch08-s2` (mensaje: `ch08-s2: unification with provenance`); compárate con `ref/ch08-s2`.
 
 ### Sesión 3: el comprobador bidireccional (≈ 2,5 h)
 
 #### Los tests, en rojo
 
-T08.21–T08.37. La interfaz:
+1. **Escribe T08.21–T08.37** (T08.23, como en `ref/ch08-s3`) **y pon T08.17 como en su tarjeta.** La interfaz:
 
 ```go
 // package sema
@@ -260,57 +322,67 @@ func DefType(t *testing.T, p *Program, name string) string
 func VarOrigin(t *TypeTable, v TypeVarID) Origin
 ```
 
-Copia `testsupport` entero:
+2. **Copia `testsupport` entero:**
 
 {{diff ch08-s2..ch08-s3 internal/testsupport/compile.go}}
 
-`Analyze` comprueba tipos desde ahora, y algunos tests del capítulo 7 analizaban fuentes que no tipan (`fn f(a: Int) { a }` devuelve `Int` donde se espera `()`). Cuatro llamadas de `scope_test.go` y una de `resolve_test.go` pasan a `testsupport.Resolve`, que solo resuelve nombres.
+`Analyze` comprobará tipos, y algunos tests del capítulo 7 analizaban fuentes que no tipan. **Pasa a `testsupport.Resolve`,** que solo resuelve nombres, cuatro llamadas de `scope_test.go` y una de `resolve_test.go`.
 
-Sobre `ch08-s2` no compila: `compile.go:83:47: p.Frontend.Typed undefined`. Añade el campo, haz que `Session.Analyze` llame a `Check` y escribe un `Check` que cree las tablas con el tipo de error en cada entrada (una por expresión de cada módulo, por `Def` y por `Local`). Fallan los dieciséis subtests de `TestCheck`, `TestUnify/mismatch_has_reason_label` y `TestParseExpr/call_arg_list_span`, sin panic.
-
-Los ayudantes de `check_test.go`: `wantDiags` exige exactamente esos diagnósticos, ordenados por posición y comparados campo por campo; `mismatch`, `secondary`, `arityError` y `notCallable` construyen los esperados; `exprType` da el tipo de la expresión de un span; `bindEdit` aplica la ligadura que propone la ayuda, para volver a comprobar el programa; `unusedHelp` y `unusedBindHelp` repiten los textos de `unify_internal_test.go`, que este paquete no ve. `VarOrigin` le deja leer el `Origin` de una variable: lo exportado en un `_test.go` de `package sema` lo ve `sema_test`, y la API no cambia.
+3. **Míralos fallar.** Sobre `ch08-s2` no compila: `compile.go:83:47: p.Frontend.Typed undefined`.
+4. **Añade el campo, haz que `Session.Analyze` llame a `Check` y escribe un `Check`** que cree las tablas con el tipo de error en cada entrada (expresiones, `Def`, `Local`). Fallan los dieciséis subtests de `TestCheck`, `TestUnify/mismatch_has_reason_label` y `TestParseExpr/call_arg_list_span`, sin panic.
 
 #### El código
 
 {{file ch08-s3 internal/sema/check.go}}
 
-- **`signatures`** rellena primero todas las tablas con el tipo de error y después da a cada `Def` su firma. Una expresión que el parser descartó conserva ese tipo, y no el id 0, que es `Int` (T08.21).
-- **`check` e `infer`** son la teoría, y `checkAt` es inferir y unificar, con el error en la expresión entera. `stmts` comprueba un `let` anotado con `check`: con `checkAt`, `let x: Int = if true { 1 }` daría dos errores en lugar de uno, y T08.28 lo dice (`let annotation: 2 diagnostics, want 1`).
-- **`checkIf`** sin `else`: primero `()` contra lo esperado, sobre el `if` entero; si falla, la rama solo se infiere; si no, se comprueba contra `()` sin `CanReturn`: la rama no es lo que devuelve la función. **`elseBranch`** devuelve el tipo de error si las ramas no cuadran, para que el `if` no dé otro error donde se usa: si devolviera el de `then`, T08.35 contaría dos.
-- **`call`**: una función con otra aridad es E0402 sobre la lista de argumentos, y su nota escribe los 16 primeros parámetros (`maxNoteParams`) y `…` si hay más, porque cada llamada mala la repite; un valor que no lo es, E0403; un parámetro sin anotación, una variable, se liga a una función de los tipos de los argumentos, y por ahí llega E0405 en `fn g(x) { x(x) }`.
-- **`equality`** no pasa por `Unify` para su regla propia: `==` sobre una función o `()` es un solo E0401 con nota en el operando izquierdo, y el derecho solo se infiere. Si es aún una variable sin ligar, se apunta, y `judgeEqualities` lo juzga tras todos los cuerpos: así, con `fn same(x, y) -> Bool { x == y }`, `same(f, f)` da el mismo error esté `same` delante o detrás de `main`, y `x == y` entre dos parámetros que nada liga se acepta (T08.30, T08.31).
+- **`Check`** corre `signatures`, `bodies` y `judgeEqualities`; `check` e `infer` son la teoría.
+- **`checkIf`** sin `else` compara primero `()` con lo esperado, sobre el `if` entero; si falla, la rama solo se infiere.
+- **`elseBranch`** devuelve el tipo de error si las ramas no cuadran, para que el `if` no dé otro error donde se usa (T08.35).
+- **`call`**: otra aridad es E0402 sobre la lista de argumentos, que guarda el parser; un valor que no es función, E0403. Un parámetro sin anotación se liga a una función de los tipos de los argumentos.
+- **`equality`**: `==` sobre una función o `()` es un solo E0401 con nota en el operando izquierdo. Si es aún una variable sin ligar, `judgeEqualities` lo juzga tras todos los cuerpos (T08.30, T08.31).
 
 {{diff ch08-s2..ch08-s3 internal/sema/unify.go}}
 
-Una secundaria en otro fichero no se puede dibujar bajo la primaria: el parámetro de `print` está en `std/prelude.ki`, y `RenderHuman` hace panic con una etiqueta así. `Unify` la omite, igual que con el span cero, que es «ningún sitio».
+`Unify` omite una secundaria en otro fichero: el parámetro de `print` está en `std/prelude.ki`, y `RenderHuman` hace panic con una etiqueta así.
 
 {{diff ch08-s2..ch08-s3 internal/syntax/parser_expr.go}}
 
 {{diff ch08-s2..ch08-s3 internal/driver/pipeline.go}}
 
-El comprobador no tiene el texto, y «el final de la función llamada (el `Callee`) más uno» apuntaría a un blanco en `f (x)` o al `)` de `(f)(x)`: por eso el parser guarda el span de la lista (T08.37).
+**El catálogo se pone al día solo.** Con `Check` en `Analyze`, `TestErrorDocs` falla con ocho `` now reports …: remove `pending` ``, pide `E0402.md` y `E0403.md`, y los ejemplos corregidos de E0201 y E0203 ya no están limpios.
 
-**El catálogo se pone al día solo.** En cuanto `Check` entra en `Analyze`, `TestErrorDocs` falla con ocho `` now reports …: remove `pending` `` (siete de E0401 y el de E0405), pide `E0402.md` y `E0403.md`, y encuentra que los ejemplos corregidos de E0201 y E0203 ya no están limpios: `fn main() { 1 + 2 }` devuelve un `Int` donde se espera `()`, y `print(1 < 2 && 2 < 3)` pasa un `Bool` a `print`, que pide un `Int`. Quita las ocho marcas y los dos párrafos que decían que `ki check` no comprobaba tipos, escribe las dos entradas nuevas y cambia esos ejemplos a `let sum = 1 + 2` y `let ok = 1 < 2 && 2 < 3`, y sus gemelos erróneos del mismo modo. `E0401.md` gana además dos pares, los de `==` entre funciones. E0405 tampoco queda pendiente: T08.36 ya lo da.
+1. **Quita las ocho marcas** y los dos párrafos que decían que `ki check` no comprobaba tipos.
+2. **Escribe las dos entradas nuevas.** `E0403.md` sigue el molde de `E0402.md`.
+3. **Cambia esos ejemplos** a `let sum = 1 + 2` y `let ok = 1 < 2 && 2 < 3`, y sus gemelos erróneos igual.
+4. **Añade a `E0401.md` dos pares,** los de `==` entre funciones.
 
 {{diff ch08-s2..ch08-s3 docs/errors/E0405.md}}
 
 {{file ch08-s3 docs/errors/E0402.md}}
 
-`E0403.md` sigue el mismo molde.
+:::more Sesión 3, los porqués: `signatures`, `checkAt`, `checkIf`, `call`, `equality` y el catálogo
+- **El rojo.** Esas cinco llamadas analizan fuentes que no tipan: `fn f(a: Int) { a }`, por ejemplo, devuelve `Int` donde se espera `()`; otra pasa un `()` donde se pide un `Int`. Las tablas del `Check` provisional tienen una entrada por expresión de cada módulo, por `Def` y por `Local`.
+- **`signatures`** rellena primero todas las tablas con el tipo de error y después da a cada `Def` su firma. Una expresión que el parser descartó conserva ese tipo, y no el id 0, que es `Int` (T08.21).
+- **`checkAt`** es inferir y unificar, con el error en la expresión entera. `stmts` comprueba un `let` anotado con `check`: con `checkAt`, `let x: Int = if true { 1 }` daría dos errores en lugar de uno, y T08.28 lo dice (`let annotation: 2 diagnostics, want 1`).
+- **`checkIf`**, si `()` cuadra, comprueba la rama contra `()` sin `CanReturn`: la rama no es lo que devuelve la función.
+- **`Unify`** también omite la secundaria con el span cero, «ningún sitio».
+- **`call`**: la nota del E0402 escribe los 16 primeros parámetros (`maxNoteParams`) y `…` si hay más, porque cada llamada mala la repite. Ligar el parámetro es lo que da el E0405 de `fn g(x) { x(x) }`.
+- **El span de la lista.** El comprobador no tiene el texto, y «el final de la función llamada (el `Callee`) más uno» apuntaría a un blanco en `f (x)` o al `)` de `(f)(x)`: por eso lo guarda el parser (T08.37).
+- **`equality`** no pasa por `Unify` para su regla propia, y en el `==` rechazado el operando derecho solo se infiere. Una variable sin ligar se apunta para `judgeEqualities`: así, con `fn same(x, y) -> Bool { x == y }`, `same(f, f)` da el mismo error esté `same` delante o detrás de `main`, y `x == y` entre dos parámetros que nada liga se acepta.
+- **El catálogo.** Las ocho marcas son siete de E0401 y la de E0405, que tampoco queda pendiente: T08.36 ya lo da. `fn main() { 1 + 2 }` devuelve un `Int` donde se espera `()`, y `print(1 < 2 && 2 < 3)` pasa un `Bool` a `print`, que pide un `Int`.
+:::
 
 {{reftest T08.28}}
 
-El mensaje de la etiqueta: `ch08-s3: the bidirectional checker`.
-
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch08-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch08-s3`; compárate con `ref/ch08-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch08-s3` (mensaje: `ch08-s3: the bidirectional checker`); compárate con `ref/ch08-s3`.
 
 ### Sesión 4: errores legibles, sin cascadas, y `main` (≈ 2 h)
 
 #### Los tests, en rojo
 
-T08.38–T08.48. La interfaz:
+1. **Escribe T08.38–T08.48 y pon T08.23 como en su tarjeta.** La interfaz:
 
 ```go
 // package syntax
@@ -321,15 +393,29 @@ func (p *parser) blanksBefore(hi uint32) uint32
 func ApplyFixits(src string, d diag.Diagnostic) string
 ```
 
+Copia `fixits.go`:
+
 {{file ch08-s4 internal/testsupport/fixits.go}}
 
-Los tests de E0404 aplican la edición de cada fila y vuelven a comprobar el resultado. En `check_test.go`, `mainError` y `unknownType` construyen el E0404 y el E0406 esperados, y `onlyDiag` exige que haya uno solo. Añade también a `analyze_fuzz_test.go` las tres semillas de T07.94.
+2. **Añade a `analyze_fuzz_test.go` las tres semillas de T07.94** (`git show ref/ch08-s4:book/tests/ch07.tests`).
+3. **Míralos fallar.** Sobre `ch08-s3` no compila: `parser_test.go:217:75: it.ParamList undefined`.
+4. **Añade los cuatro campos, sin rellenarlos.** Fallan los tests de `main`, E0406, cascadas tras un error de sintaxis, spans de la firma y T08.48; otros ya pasan.
 
-Sobre `ch08-s3` no compila: `parser_test.go:217:75: it.ParamList undefined`. Con los cuatro campos y el valor cero, fallan `TestCheck/main_params_E0404`, `TestCheck/main_return_E0404`, las dos filas de `main` de `TestCheck/fn_without_arrow_returns_unit`, diecisiete filas de `TestCheck/syntax_error_has_no_type_error` (un E0401 o un E0402 de más, como `reported [E0201 E0401], want [E0201]` o `[E0201 E0402]`; cuatro también `has the if with type "()", want {error}`) y `TestParser/signature_spans`, y `TestCheck/unknown_type_E0406` falla en cada fila (`Bol: 0 diagnostics, want 1`). T08.48 falla con `mismatch: … want at most a quarter`. `no_cascade_after_unknown_name` y los cuatro golden de `tests/errors/ch08` ya pasan: el comprobador de la sesión 3 cumple la regla del tipo de error para los nombres, y estas tarjetas la fijan. Si quitas de `binary` la propagación del tipo de error, la primera dice `reported [E0301 E0401], want [E0301]`.
+:::more Qué falla sobre `ch08-s3`, test por test
+- `TestCheck/main_params_E0404`, `TestCheck/main_return_E0404` y las dos filas de `main` de `TestCheck/fn_without_arrow_returns_unit`.
+- Diecisiete filas de `TestCheck/syntax_error_has_no_type_error`: un E0401 o un E0402 de más, como `reported [E0201 E0401], want [E0201]` o `[E0201 E0402]`; cuatro también `has the if with type "()", want {error}`.
+- `TestParser/signature_spans`.
+- `TestCheck/unknown_type_E0406`, en cada fila: `Bol: 0 diagnostics, want 1`.
+- T08.48: `mismatch: … want at most a quarter`.
+
+`no_cascade_after_unknown_name` y los cuatro golden de `tests/errors/ch08` ya pasan: el comprobador de la sesión 3 cumple la regla del tipo de error para los nombres, y estas tarjetas la fijan.
+:::
+
+Un golden de `tests/errors/ch08` (T08.42–T08.45):
 
 {{file ch08-s4 tests/errors/ch08/if_branches_render.ki}}
 
-Diez líneas de cabecera llevan el error a la línea 12, y el número de dos cifras ensancha el margen: es lo que el comparador de anotaciones no vería. `if_branch_mismatch.ki` tiene el mismo programa con `// ERROR(E0401) @32`.
+La cabecera lleva el error a la línea 12, y el número de dos cifras ensancha el margen: es lo que el comparador de anotaciones no vería.
 
 #### El código
 
@@ -341,29 +427,35 @@ Diez líneas de cabecera llevan el error a la línea 12, y el número de dos cif
 
 {{diff ch08-s3..ch08-s4 internal/sema/unify.go}}
 
-- **Por qué el parser.** El comprobador no tiene el texto, y `fn main (x)` o `fn main()->Int` son válidos: no puede buscar el `(` ni el `->`. El parser guarda los dos spans, y `oneLine`, que ahora comparten `attr` e `item`, dice si un salto de línea cae dentro.
-- **`RetClause`** empieza en los blancos justo antes del `->` (`blanksBefore`), no en el `)`: así un comentario entre los dos sobrevive. Si empezara en el `)`, T08.41 diría `the fix-it gives "fn main() { 1 }", want "fn main() /* c */ { 1 }"`.
-- **`mainSignature`** corre entre las firmas y los cuerpos, y solo juzga el primer `main` del fichero, el mismo al que se refieren los nombres. Una firma en varias líneas lleva la ayuda sin ediciones: una edición es de una línea.
-- **E0406.** `typeOf` informa un nombre de tipo desconocido una vez, donde se escribe, y desde ahí es el tipo de error: `fn f(x: Bol) {}` da ``unknown type `Bol` `` con «did you mean `Bool`?» y su edición; `Itn`, a dos ediciones de `Int`, no la lleva. Su entrada, `docs/errors/E0406.md`, tiene dos pares. Y `bodies` no da `CanReturn` a `main`, que E0404 ata a `() -> ()`, y `E0401.md` gana el par de un valor sin usar en `main`.
-- **`unreadThen`.** El `()` de un `if` sin `else` cuya rama el parser no pudo leer no lo ha escrito nadie: ese `if` tiene el tipo de error. La condición y, con `else`, la otra rama se comprueban igual (T08.39).
-- **`missingArg`.** `g(1,,2)` deja un nodo de error que alarga la lista: su E0402 se iría al borrar la coma. Mientras falte un argumento, `call` no juzga la cuenta (`c.missingArg` es un valor de método) ni liga un parámetro sin anotación (`x(1,,2)` sería una función de tres parámetros que nadie escribió); los demás se comprueban igual. Un operador suelto también falta: `g(1, +, 2)` es una suma sin operandos. `2 +` y `-2` cuentan, porque solo se mira el principio: mirando la derecha, T08.39 diría `reported [E0201], want [E0201 E0402]`.
-- **El sink lleno.** `show` apila todos los parámetros de una función antes de cortar, y un error que se va a perder no debe pagarlo: si el sink ya perdió uno (`Truncated`, capítulo 3), el `mismatch` y el `bind` de `unify.go`, `rejectedEqualityError` y `arityError` no escriben tipos; `Unify` responde igual. T08.48 mide los bytes reservados, más estables que el reloj: `runtime.ReadMemStats(&m)` rellena un `runtime.MemStats`, y `TotalAlloc`, que solo crece, se resta entre dos lecturas.
+- **E0404 y el parser.** `main` tiene que ser `fn main()`, y quitar lo que sobra necesita dos spans. El comprobador no tiene el texto, y `fn main (x)` o `fn main()->Int` son válidos: no puede buscar el `(` ni el `->`. El parser guarda ambos spans, y `oneLine` dice si hay un salto de línea dentro.
+- **E0406.** `typeOf` informa un nombre de tipo desconocido una vez, y desde ahí es el tipo de error. `docs/errors/E0406.md` tiene dos pares; `E0401.md` gana el de un valor sin usar en `main`.
+- **Cascadas tras un error de sintaxis.** Un `if` sin `else` cuya rama el parser no pudo leer tiene el tipo de error (`unreadThen`). Mientras falte un argumento, `call` no juzga la cuenta (`missingArg`).
+- **El sink lleno.** Si ya perdió un error (`Truncated`, capítulo 3), los tipos de otro que se va a perder no se escriben; `Unify` responde igual (T08.48).
 
 {{file ch08-s4 docs/errors/E0404.md}}
 
 {{diff ch08-s3..ch08-s4 docs/errors/E0402.md}}
 
-{{reftest T08.38}}
+:::more Sesión 4, los porqués: `RetClause`, `mainSignature`, E0406, `unreadThen`, `missingArg` y el sink
+- **`oneLine`** lo comparten ahora `attr` e `item`.
+- **`if_branch_mismatch.ki`** tiene el mismo programa que el golden de arriba, con `// ERROR(E0401) @32`.
+- **`RetClause`** empieza en los blancos justo antes del `->` (`blanksBefore`), no en el `)`: así un comentario entre los dos sobrevive (T08.41).
+- **`mainSignature`** corre entre las firmas y los cuerpos, y solo juzga el primer `main` del fichero, el mismo al que se refieren los nombres. Una firma en varias líneas lleva la ayuda sin ediciones: una edición es de una línea. `bodies` no da `CanReturn` a `main`, que E0404 ata a `() -> ()`.
+- **E0406.** `fn f(x: Bol) {}` da ``unknown type `Bol` `` con «did you mean `Bool`?» y su edición; `Itn`, a dos ediciones de `Int`, no la lleva.
+- **`unreadThen`.** El `()` de un `if` sin `else` cuya rama el parser no pudo leer no lo ha escrito nadie: ese `if` tiene el tipo de error. La condición y, con `else`, la otra rama se comprueban igual (T08.39).
+- **`missingArg`.** `g(1,,2)` deja un nodo de error que alarga la lista: mientras falte un argumento, `call` no juzga la cuenta, porque ese E0402 se iría al borrar la coma. `c.missingArg` es un valor de método. Tampoco liga un parámetro sin anotación (`x(1,,2)` sería una función de tres parámetros que nadie escribió); los demás se comprueban igual. Un operador suelto también falta: `g(1, +, 2)` es una suma sin operandos. `2 +` y `-2` cuentan, porque solo se mira el principio: mirando la derecha, T08.39 diría `reported [E0201], want [E0201 E0402]`.
+- **El sink lleno.** `show` apila todos los parámetros de una función antes de cortar, y un error que se va a perder no debe pagarlo: no escriben tipos el `mismatch` y el `bind` de `unify.go`, `rejectedEqualityError` y `arityError`. T08.48 mide los bytes reservados, más estables que el reloj: `runtime.ReadMemStats(&m)` rellena un `runtime.MemStats`, y `TotalAlloc`, que solo crece, se resta entre dos lecturas.
+:::
 
-El mensaje de la etiqueta: `ch08-s4: readable errors, no cascades, main`.
+{{reftest T08.38}}
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch08-s4` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch08-s4`; compárate con `ref/ch08-s4`.
+Al terminar: tus tests en verde, commit y etiqueta `ch08-s4` (mensaje: `ch08-s4: readable errors, no cascades, main`); compárate con `ref/ch08-s4`.
 
 ## Ejecútalo
 
-Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da exactamente lo de arriba y sale con 1. Un fichero con cuatro equivocaciones:
+Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da lo de arriba y sale con 1. Un fichero con cuatro equivocaciones:
 
 ```console
 $ cat bad.ki
@@ -416,7 +508,7 @@ $ echo $?
 1
 ```
 
-La línea 8 tiene dos problemas en apariencia (`nope` y un `Int` donde se espera `Bool`) y un solo error: la suma tiene tipo error y la anotación no se queja. Un tipo infinito, y el formato corto:
+La línea 8 parece tener dos problemas y da un solo error: la suma tiene tipo error y la anotación no se queja. Un tipo infinito, y el formato corto:
 
 ```console
 $ cat inf.ki
@@ -683,20 +775,26 @@ Porque una marca que no molesta se queda para siempre: el ejemplo seguiría sin 
 
 ## Resumen
 
-- Un tipo es un id en una tabla que solo crece; el hash-consing hace que la igualdad de tipos, resueltas las variables, sea comparar números.
-- Un slice no puede ser clave de un map; `funKey` lleva los parámetros en un `string` de cuatro bytes por id.
-- Go no tiene `const` compuestos: la inmutabilidad es una convención (ids, copia al entrar, nadie escribe en `Node(id).Params`).
-- Las variables son un union-find sobre `IdVec`, con compresión de caminos en `Resolve`; `Rank` y `Level` esperan al capítulo 13.
-- Unificar es Robinson: resolver, comparar, ligar con occurs check y bajar por las partes, con pila propia y un conjunto de visitados.
-- La comprobación bidireccional empuja la expectativa hasta la cola de un bloque, y el error cae en la expresión que está mal.
-- Cada `Unify` lleva un `Reason`, y la razón elige la secundaria, la nota o la ayuda: el origen del error.
+- Un tipo es un id en una tabla que solo crece; con hash-consing, la igualdad de tipos, resueltas las variables, es comparar ids.
+- Un slice no puede ser clave de un map: `funKey` usa un `string`.
+- Go no tiene `const` compuestos: la inmutabilidad es una convención.
+- Las variables son un union-find sobre `IdVec`, con compresión de caminos.
+- Unificar es resolver, comparar, ligar con occurs check y bajar por las partes.
+- La comprobación bidireccional empuja la expectativa hacia la expresión que está mal.
+- Cada `Unify` lleva un `Reason`, que elige la secundaria, la nota o la ayuda: el origen del error.
 - El tipo de error unifica en silencio y se propaga: una equivocación, un error.
-- `pending=` deja nacer una entrada del catálogo antes de que su código sea alcanzable, y obliga a quitarla en cuanto sobra.
+- `pending=` deja nacer una entrada del catálogo antes de que su código sea alcanzable, y caduca.
 
 ## Go en el trabajo
 
-**Los mensajes, revisados como producto.** La *rustc-dev-guide* describe los UI tests: «UI tests store the expected output from the compiler in `.stderr` and `.stdout` snapshots next to the test». Además, «UI tests require that errors are also annotated within the source», porque los `.stderr` se generan solos (con `--bless`, y después se leen a mano) y las anotaciones «ensure that no additional unexpected errors are generated». Es la pareja de Ki: `if_branches_render.ki` guarda el texto entero, que `ki test --update` reescribe, y su gemelo `if_branch_mismatch.ki` fija el código y la posición de todos los errores del fichero. Go hace algo parecido con menos texto: `src/go/types/check_test.go` lee comentarios `/* ERROR "pattern" */` tras el token del error y exige que el patrón sea una subcadena del mensaje en esa posición.
+**Los mensajes, revisados como producto.** Los UI tests de rustc guardan la salida esperada junto al test y exigen anotar los errores en la fuente. En Ki, `if_branches_render.ki` guarda el texto entero, y `if_branch_mismatch.ki` fija el código y la posición de todos los errores.
 
-**Claves compuestas.** `go/types` también hace hash-consing: su `Context` reutiliza instancias genéricas idénticas, sin garantizarlo siempre, con un `map[string][]ctxtEntry` cuya clave escribe `instanceHash`, porque una lista de argumentos de tipo no puede ser clave.
+**Claves compuestas.** `go/types` también hace hash-consing de instancias genéricas, con claves `string`, porque una lista de argumentos de tipo no puede ser clave.
 
-Y la forma de la clave decide qué código corre en cada búsqueda. `mapfast`, en `src/cmd/compile/internal/walk/walk.go`, elige caminos rápidos del runtime para claves de 4 u 8 bytes que se comparan como memoria y para strings; cualquier otra clave va por el camino general, `mapaccess2`, que llama a las funciones de hash e igualdad del tipo. En esta máquina, con 1 000 claves ya construidas, buscar un struct de dos `uint32` y un `string`, la forma de `funKey`, costó unos 14,3 ns, y el mismo contenido en un solo `string`, unos 8,7. `funKey` se queda como struct por legibilidad: su coste está en construir la clave (ejercicio 4).
+:::more Las fuentes y la medida: rustc-dev-guide, `go/types` y `mapfast`
+**rustc.** La *rustc-dev-guide*: «UI tests store the expected output from the compiler in `.stderr` and `.stdout` snapshots next to the test». Además, «UI tests require that errors are also annotated within the source», porque los `.stderr` se generan solos (con `--bless`, y después se leen a mano) y las anotaciones «ensure that no additional unexpected errors are generated». En Ki, el texto de `if_branches_render.ki` lo reescribe `ki test --update`.
+
+**Go.** `src/go/types/check_test.go` lee comentarios `/* ERROR "pattern" */` tras el token del error y exige que el patrón sea una subcadena del mensaje en esa posición. El `Context` de `go/types` reutiliza instancias genéricas idénticas, sin garantizarlo siempre, con un `map[string][]ctxtEntry` cuya clave escribe `instanceHash`.
+
+**La forma de la clave** decide qué código corre: hay caminos rápidos para claves de 4 u 8 bytes que se comparan como memoria y para strings. `mapfast`, en `src/cmd/compile/internal/walk/walk.go`, los elige; cualquier otra clave va por el camino general, `mapaccess2`, que llama a las funciones de hash e igualdad del tipo. En esta máquina, con 1 000 claves ya construidas, buscar con la forma de `funKey` (dos `uint32` y un `string`) costó unos 14,3 ns, y con todo en un `string`, unos 8,7. `funKey` se queda como struct por legibilidad, aunque un `string` busque algo más rápido: su coste está en construir la clave (ejercicio 4).
+:::
