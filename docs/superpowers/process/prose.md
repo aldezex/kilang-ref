@@ -21,7 +21,7 @@ The controller does steps 0, a and d–j of the template; you do b and c.
   1. write `book/chNN-<slug>.md` (the file name the brief gives);
   2. `go build -o build/bin/bookx ./cmd/bookx && build/bin/bookx verify` must print `bookx verify: OK`. Your chapter counts as *pending*: rules 1–5 run on the working tree, rule 6 on the tags the prose cites;
   3. `build/bin/bookx web --all build/web` must render the chapter (`build/web/book/chNN.md` exists);
-  4. `wc -w book/chNN-*.md` is between 4 000 and 8 000 (section 5);
+  4. `build/bin/bookx words book/chNN-*.md` prints at most 4 500 (the flow-word budget, section 5);
   5. `git add book && git commit -m "book: chapter NN prose"`, with `NN` in two digits (`book: chapter 01 prose`): `ci/retag-all.sh` finds the chapter's commit by that exact subject;
   6. `rm -rf build` inside the worktree (your `bookx` binary, the rendered web and your scratch modules), so the controller can remove the worktree cleanly.
 - **d. Review.** A reviewer reads your chapter with `docs/superpowers/process/reviewer.md`. Corrections **amend the prose commit**: fix, `git add book && git commit --amend --no-edit`, re-run step c.2–c.4 and c.6, and append a fix report (old and new SHA of the prose commit, what changed, the `bookx verify` output) to your report file.
@@ -56,7 +56,7 @@ The chapter teaches these as a method, so the prose must model them:
 8. `## Resumen`: between 8 and 12 bullets.
 9. `## Go en el trabajo`: the brief's topic. Claims about specific projects are verified before you write them (section 5).
 
-**Containers.** `:::exercise`, `:::solution`, `:::review`, `:::answer`, `:::from <Rust|TS|Python>`, `:::note` and `:::bug` are closed with `:::`, always in sequence and **never nested**: a `:::solution` starts after the `:::` that closes its `:::exercise`. The web page does not nest containers, and rule 7 of `bookx verify` rejects nesting and unclosed containers. A `:::bug` box («Bug encontrado») is for a didactic bug a later chapter uncovered, when the controller asks for one.
+**Containers.** `:::exercise`, `:::solution`, `:::review`, `:::answer`, `:::from <Rust|TS|Python>`, `:::note`, `:::bug` and `:::more <título>` are closed with `:::`, always in sequence and **never nested**: a `:::solution` starts after the `:::` that closes its `:::exercise`. The web page does not nest containers, and rule 7 of `bookx verify` rejects nesting, unclosed containers and a `:::more` without a title. A `:::bug` box («Bug encontrado») is for a didactic bug a later chapter uncovered, when the controller asks for one. A `:::more` is a closed fold on the page, with its title as the summary (see section 5).
 
 **Directives** (`{{file}}`, `{{diff}}`, `{{listing}}`, `{{reftest}}`, `{{cards}}`) are resolved by `bookx`; never paste a listing by hand. A `{{listing}}` names a region marked in the code (`// @book <region> full|hint "texto"|solution|test` … `// @end`) that exists at the cited tag. If the chapter needs a region that does not exist, report it: adding markers changes code, which is outside `book/`.
 
@@ -66,7 +66,15 @@ The chapter teaches these as a method, so the prose must model them:
 - **Outputs of `ki`** (`## Ejecútalo`, examples in the text) come from the binary built at the worktree's `HEAD`, which is the chapter's last session: `go build -o build/bin/ki ./cmd/ki`, run it, and copy the output exactly.
 - **Exercise solutions** that contain code are verified too: export the tree (`mkdir -p build/prose-chNN/ex && git archive HEAD | tar -x -C build/prose-chNN/ex`), apply the solution there, run its test, and delete the export.
 - **Claims about real projects and practice** («Go en el trabajo»: Kubernetes, CPython, Lua, a CVE…) need a primary source (the project's repository or documentation, the CVE record). Put the source in your report. If you cannot verify a claim, leave it out; never write an anecdote, number or quote from memory.
-- **Length:** between 4 000 and 8 000 words (`wc -w book/chNN-*.md`, directives and code fences included), in proportion to the chapter's hours. As a guide, about 600–750 words per hour of the chapter, kept within those bounds (a 6 h chapter near 4 000–4 500, an 11 h chapter near 7 000–8 000).
+- **Length and style: concise, with all the theory.** Álvaro, the only reader, finds the chapters tedious to follow because there is too much text in each. The balance is text that explains, loses no theory and is easy to follow. These rules replace any minimum or guide in words per hour.
+  - **Budget:** at most **4 500 flow words** per chapter, whatever its hours (`build/bin/bookx words book/chNN-*.md`). Flow words exclude the front matter, code fences, tables, directives, the `:::kind` and `:::` lines, and the bodies of `:::solution`, `:::answer` and `:::more`. A word is a run between spaces with at least one letter or digit. There is no minimum: a short chapter is valid. The page folds the cards and every code block over 30 lines by itself, so they cost the reader nothing until opened.
+  - **Lead with the idea and why it matters, then the mechanism.** One idea per paragraph, at most 4 sentences and about 60 words. Prefer sentences under 25 words. Use a short list when the content is a list.
+  - **Keep ALL theory:** every concept, every explanation of a Go construct at first use, every design reason, every command the reader runs, every output the reader must check, all exercises and all review questions. Explain code by its idea and its decisions; do not narrate it line by line.
+  - **Move depth that is real but not needed on a first read** (edge cases, exhaustive value tables, compiler flag detail) into a collapsed `:::more <short title>` block. Use at most about 6 per chapter, each with a reason to open it: it is not a dumping ground for text you could not decide to cut. It follows the rule of every container: in sequence, never nested.
+  - **Cut what teaches nothing:** restatements of what a card or a listing already says; exact version strings and verification asides («comprobado», «en esta máquina») beyond one mention; several mutants where one teaches the point; repeated warnings; narration of what the next listing shows. The verification of the first bullet of this section still happens, and goes in your report, not in the prose.
+  - **`:::from` boxes:** one or two sentences, only the contrast that helps. **Errata notes:** one sentence.
+  - **Sessions** read as short numbered steps with the reason for each, not as paragraphs of test-by-test commentary.
+  - **No new technical claims.** Rewording must not change what a sentence claims.
 - **Language:** prose in Spanish (Spain: «fichero», «ordenador»), as in the spec and the plan. Code, identifiers, comments, repository paths and compiler messages stay in English, in backticks.
 - **«Tú», with no gendered words referring to the reader.** Address the reader as «tú» throughout. Never use an adjective or participle with gender that refers to the reader: not «listo», «seguro», «preparado», «cansado», «atascado», «perdido», «nuevo en Go», «bienvenido», nor «el lector». Rephrase with verbs, nouns or impersonal forms: «si te atascas», «cuando lo tengas», «tienes la certeza», «si empiezas en Go», «quien lee». Prefer neutral forms for people in general too («quien programa en Rust», «si vienes de Python») over the generic masculine.
 
@@ -90,7 +98,7 @@ The sessions already wrote `book/tests/chNN.tests`, and `{{cards}}` renders it a
 
 Write the **full report** to the file the dispatch names (by default `.superpowers/sdd/<plan-name>/task-N-report.md`):
 
-- the chapter file, its word count, its hours, and the number of exercises, review questions and summary bullets;
+- the chapter file, its flow-word count (`bookx words`, at most 4 500), its hours, the number of `:::more` blocks, and the number of exercises, review questions and summary bullets;
 - the output of `bookx verify` and confirmation that `bookx web --all` rendered `build/web/book/chNN.md`;
 - the tags the chapter cites;
 - the verification log: one line per technical claim, with the command and the output that confirmed it; the sources for claims about real projects; how each exercise solution with code was checked;
@@ -103,7 +111,7 @@ Then **reply with only this** (under 15 lines):
 ```text
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 Commit: <sha7> book: chapter NN prose (branch prose/chNN)
-Words: <n>   bookx verify: OK | <first problem>
+Flow words: <n>   bookx verify: OK | <first problem>
 Concerns: <one line each, or "none">
 Report: <path of the report file>
 ```
