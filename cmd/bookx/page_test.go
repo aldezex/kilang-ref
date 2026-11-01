@@ -15,12 +15,13 @@ import (
 	"time"
 )
 
-// pageHarness is the Node program that runs the script of the page of the book
-// (cmd/bookx/web/index.html) without a browser. It gives the script a marked
-// that parses only what these tests write (fenced blocks, pipe tables and
-// plain lines, which become <p>), reaches the script's own chapterHtml through
-// one line it adds at the end of the script, and prints chapterHtml's answer
-// for each Markdown text it reads from stdin as a JSON list of strings.
+// pageHarness is the start of the Node programs that run the script of the page
+// of the book (cmd/bookx/web/index.html) without a browser. It gives the script
+// a marked that parses only what these tests write (fenced blocks, headings,
+// pipe tables and plain lines, which become <p>) and reaches the script's own
+// functions through one line it adds at the end of the script. Each test's
+// program goes after it, as pageMain or viewsMain do: it reads its input from
+// stdin and prints its answer as JSON.
 const pageHarness = `
 const fs = require("fs");
 const vm = require("vm");
@@ -28,7 +29,7 @@ const vm = require("vm");
 let src = fs.readFileSync(process.argv[2], "utf8");
 const tail = /\n\s*boot\(\);\s*\}\)\(\);\s*$/;
 if (!tail.test(src)) throw new Error("the script of the page does not end with boot(); })();");
-src = src.replace(tail, "\nglobalThis.__page = { chapterHtml };\n})();\n");
+src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, renderChapter, renderWelcome, state };\n})();\n");
 
 function fakeMarked() {
   const m = { renderer: null };
@@ -40,7 +41,10 @@ function fakeMarked() {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const fence = /^(` + "`{3,}" + `)(.*)$/.exec(line);
-      if (fence) {
+      const heading = /^(#{1,6}) (.*)$/.exec(line);
+      if (heading) {
+        out += m.renderer.heading(heading[2], heading[1].length, heading[2]);
+      } else if (fence) {
         const body = [];
         i++;
         while (i < lines.length && !lines[i].startsWith(fence[1])) body.push(lines[i++]);
@@ -63,24 +67,54 @@ function fakeMarked() {
   return m;
 }
 
+// A stand-in for every element the script finds by id: it only keeps what the
+// script writes.
+const elements = {};
+const fakeElement = () => ({ innerHTML: "", textContent: "", hidden: false, style: {}, querySelectorAll: () => [] });
 const sandbox = {
   marked: fakeMarked(),
   hljs: { getLanguage: () => null, highlight: () => ({ value: "" }) },
-  document: { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [] },
-  window: { addEventListener() {}, scrollTo() {} },
+  document: {
+    addEventListener() {},
+    getElementById: (id) => (elements[id] = elements[id] || fakeElement()),
+    querySelectorAll: () => [],
+  },
+  window: { addEventListener() {}, scrollTo() {}, matchMedia: () => ({ matches: false }) },
   location: { hash: "" },
   console,
 };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
-const inputs = JSON.parse(fs.readFileSync(0, "utf8"));
-process.stdout.write(JSON.stringify(inputs.map((md) => sandbox.__page.chapterHtml(md).html)));
+const page = sandbox.__page;
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
 `
 
-// renderWithPage runs chapterHtml of the page on each Markdown text and returns
-// the HTML it makes. It skips the test when Node is not installed, as in the
-// container of the CI: then only the tests of the page's source run.
-func renderWithPage(t *testing.T, texts ...string) []string {
+// pageMain prints chapterHtml's HTML for each Markdown text of its input.
+const pageMain = `
+process.stdout.write(JSON.stringify(input.map((md) => page.chapterHtml(md).html)));
+`
+
+// viewsMain shows one chapter whose title and milestone are the input, then the
+// home page, and prints what each view wrote.
+const viewsMain = `
+(async () => {
+  const c = Object.assign({ chapter: 1, file: "ch01.md", hours: 8, part: "I", tags: [] }, input);
+  page.state.outline = { parts: [{ part: "I", title: "Fundamentos", hours: 8, milestones: "M1", chapters: [{ chapter: 1, title: c.title, hours: 8 }, { chapter: 2, title: c.title, hours: 8 }] }] };
+  page.state.available.set(1, c);
+  sandbox.fetch = async () => ({ ok: true, text: async () => "---\ntitle: x\n---\nTexto.\n" });
+  await page.renderChapter(1);
+  const views = { chapter: elements.page.innerHTML, toc: elements.parts.innerHTML };
+  page.renderWelcome();
+  views.home = elements.page.innerHTML;
+  process.stdout.write(JSON.stringify(views));
+})().catch((e) => { console.error(e); process.exit(1); });
+`
+
+// runPageScript runs the script of the page under pageHarness followed by main,
+// gives it input as JSON and decodes what it prints into out. It skips the test
+// when Node is not installed, as in the container of the CI: then only the tests
+// of the page's source run.
+func runPageScript(t *testing.T, main string, input, out any) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -93,27 +127,37 @@ func renderWithPage(t *testing.T, texts ...string) []string {
 	}
 	dir := t.TempDir()
 	scriptPath, harnessPath := filepath.Join(dir, "page.js"), filepath.Join(dir, "harness.js")
-	for p, data := range map[string][]byte{scriptPath: indexHTML[start+len(open) : end], harnessPath: []byte(pageHarness)} {
+	for p, data := range map[string][]byte{scriptPath: indexHTML[start+len(open) : end], harnessPath: []byte(pageHarness + main)} {
 		if err := os.WriteFile(p, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	input, err := json.Marshal(texts)
+	data, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, harnessPath, scriptPath)
-	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stdin = bytes.NewReader(data)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("node: %v\n%s", err, stderr.String())
 	}
+	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
+		t.Fatalf("the harness printed %q: %v", stdout.String(), err)
+	}
+}
+
+// renderWithPage runs chapterHtml of the page on each Markdown text and returns
+// the HTML it makes.
+func renderWithPage(t *testing.T, texts ...string) []string {
+	t.Helper()
 	var htmls []string
-	if err := json.Unmarshal(stdout.Bytes(), &htmls); err != nil || len(htmls) != len(texts) {
-		t.Fatalf("the harness printed %q (%v), want %d strings", stdout.String(), err, len(texts))
+	runPageScript(t, pageMain, texts, &htmls)
+	if len(htmls) != len(texts) {
+		t.Fatalf("the harness printed %d strings, want %d", len(htmls), len(texts))
 	}
 	return htmls
 }
@@ -317,6 +361,30 @@ func TestPage(t *testing.T) {
 			if !strings.Contains(html, want) {
 				t.Errorf("want %q in %.400q", want, html)
 			}
+		}
+	})
+
+	t.Run("titles_and_the_milestone_render_code_spans", func(t *testing.T) {
+		var views struct{ Chapter, Toc, Home string }
+		runPageScript(t, viewsMain, map[string]string{
+			"title":     "El taller: `go test` & <b> y `a<b`",
+			"milestone": "`ki --version`, sin `cerrar",
+		}, &views)
+		const title = "El taller: <code>go test</code> &amp; &lt;b&gt; y <code>a&lt;b</code>"
+		const milestone = "<code>ki --version</code>, sin `cerrar"
+		for _, c := range []struct{ view, got, want string }{
+			{"h1", views.Chapter, "<h1>" + title + "</h1>"},
+			{"milestone line", views.Chapter, `<p class="milestone"><span>Hito</span> ` + milestone + "</p>"},
+			{"sidebar, open chapter", views.Toc, `<span class="num">1</span><span>` + title + "</span>"},
+			{"sidebar, chapter still to come", views.Toc, `<span class="num">2</span><span>` + title + "</span>"},
+			{"home card", views.Home, "<b>" + title + "</b><small>" + milestone + "</small>"},
+		} {
+			if !strings.Contains(c.got, c.want) {
+				t.Errorf("%s: want %q in %.900q", c.view, c.want, c.got)
+			}
+		}
+		if strings.Contains(views.Chapter, "Hito:") {
+			t.Errorf("the milestone is no longer a chip: %.900q", views.Chapter)
 		}
 	})
 }

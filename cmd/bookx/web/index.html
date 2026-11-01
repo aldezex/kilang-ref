@@ -70,6 +70,7 @@ body { background: var(--paper); color: var(--ink); font-family: var(--font-body
 .toc .meta { font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .toc .done .num { color: var(--ok); }
 .toc .done .num::before { content: "✓ "; }
+.toc code { font-family: var(--font-code); font-size: 0.86em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 4px; }
 /* ---------- reading column ---------- */
 main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
 .page { max-width: var(--measure); margin: 0 auto; }
@@ -79,6 +80,8 @@ main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-
 .facts { display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--font-ui); font-size: 13px; }
 .chip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 9px; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-soft); background: var(--sheet); }
 .chip b { color: var(--ink); font-weight: 500; }
+.milestone { margin: 0; font-family: var(--font-ui); font-size: 14.5px; line-height: 1.5; color: var(--ink); }
+.milestone span { margin-right: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
 .page h2 { font-size: 27px; line-height: 1.25; margin: 44px 0 12px; letter-spacing: -0.01em; text-wrap: balance; }
 .page h3 { font-size: 21px; line-height: 1.3; margin: 32px 0 10px; text-wrap: balance; }
 .page h4 { font-family: var(--font-ui); font-size: 15px; margin: 24px 0 8px; font-weight: 600; }
@@ -185,6 +188,8 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
   const pad = (n) => String(n).padStart(2, "0");
   const key = (n) => EDITION + "-ch" + pad(n);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // The titles and the milestones are plain text with `code` spans in them: they are escaped first.
+  const inlineCode = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
   const CONTAINER_LABEL = { exercise: "Ejercicio", solution: "Solución", review: "Pregunta", answer: "Respuesta", note: "Nota", bug: "Bug encontrado" };
   const MODE_LABEL = { test: "test de referencia", file: "fichero", diff: "cambio", listing: "fragmento" };
   // A code block longer than this many lines renders inside a closed fold.
@@ -332,7 +337,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
         case "solution": out.push(`<details class="fold"><summary>Solución del ejercicio ${exercise}</summary><div class="fold-body">${inner}</div></details>`); break;
         case "review": out.push(`<section class="box review"><div class="box-label"><span>Pregunta de repaso</span></div>${inner}</section>`); break;
         case "answer": out.push(`<details class="fold"><summary>Respuesta</summary><div class="fold-body">${inner}</div></details>`); break;
-        case "more": out.push(`<details class="fold more"><summary>${esc(b.arg).replace(/`([^`]+)`/g, "<code>$1</code>")}</summary><div class="fold-body">${inner}</div></details>`); break;
+        case "more": out.push(`<details class="fold more"><summary>${inlineCode(b.arg)}</summary><div class="fold-body">${inner}</div></details>`); break;
         case "from": out.push(`<aside class="box from"><div class="box-label"><span>Si vienes de ${esc(b.arg || "otro lenguaje")}</span></div>${inner}</aside>`); break;
         default: out.push(`<aside class="box ${esc(b.kind)}"><div class="box-label"><span>${esc(CONTAINER_LABEL[b.kind] || b.kind)}</span></div>${inner}</aside>`);
       }
@@ -367,9 +372,9 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
       const items = part.chapters.map((c) => {
         const avail = state.available.has(c.chapter);
         const p = state.progress[key(c.chapter)];
-        if (!avail) return `<li><span class="soon" title="En preparación"><span class="num">${c.chapter}</span><span>${esc(c.title)}</span><span class="meta">${c.hours} h</span></span></li>`;
+        if (!avail) return `<li><span class="soon" title="En preparación"><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span><span class="meta">${c.hours} h</span></span></li>`;
         const cur = state.current === c.chapter ? ' aria-current="page"' : "";
-        return `<li class="${p && p.read ? "done" : ""}"><a href="#ch${pad(c.chapter)}"${cur}><span class="num">${c.chapter}</span><span>${esc(c.title)}</span><span class="meta">${c.hours} h</span></a></li>`;
+        return `<li class="${p && p.read ? "done" : ""}"><a href="#ch${pad(c.chapter)}"${cur}><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span><span class="meta">${c.hours} h</span></a></li>`;
       }).join("");
       return `<section class="part"><h3>Parte ${part.part} · ${esc(part.title)} <small>≈ ${part.hours} h → ${esc(part.milestones)}</small></h3><ol>${items}</ol></section>`;
     }).join("");
@@ -384,7 +389,7 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     const cards = sorted.map((n) => {
       const c = state.available.get(n);
       const p = state.progress[key(n)];
-      return `<a class="card" href="#ch${pad(n)}"><span class="eyebrow">Capítulo ${n} · ${esc(c.hours)} h${p && p.read ? " · leído" : ""}</span><b>${esc(c.title)}</b><small>${esc(c.milestone)}</small></a>`;
+      return `<a class="card" href="#ch${pad(n)}"><span class="eyebrow">Capítulo ${n} · ${esc(c.hours)} h${p && p.read ? " · leído" : ""}</span><b>${inlineCode(c.title)}</b><small>${inlineCode(c.milestone)}</small></a>`;
     }).join("");
     const totalHours = state.outline ? state.outline.parts.reduce((s, p) => s + p.hours, 0) : 0;
     $("page").innerHTML = `<section class="welcome">
@@ -429,8 +434,9 @@ details.fold > .fold-body > figure.code:first-child { margin-top: 10px; }
     const nextCh = keys.filter((k) => k > n).sort((a, b) => a - b)[0];
     $("page").innerHTML = `<header class="chapter-head">
         <span class="eyebrow">Parte ${esc(info.part)} · Capítulo ${n}</span>
-        <h1>${esc(info.title)}</h1>
-        <div class="facts"><span class="chip"><b>${esc(info.hours)} h</b></span><span class="chip">${sessions} sesiones</span><span class="chip">Hito: <b>${esc(info.milestone || "")}</b></span><span class="chip">Etiquetas <b>ch${pad(n)}-s1…ch${pad(n)}</b></span></div>
+        <h1>${inlineCode(info.title)}</h1>
+        <div class="facts"><span class="chip"><b>${esc(info.hours)} h</b></span><span class="chip">${sessions} sesiones</span><span class="chip">Etiquetas <b>ch${pad(n)}-s1…ch${pad(n)}</b></span></div>
+        ${info.milestone ? `<p class="milestone"><span>Hito</span> ${inlineCode(info.milestone)}</p>` : ""}
       </header>
       ${html}
       <div class="end">
