@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +32,7 @@ const vm = require("vm");
 let src = fs.readFileSync(process.argv[2], "utf8");
 const tail = /\n\s*boot\(\);\s*\}\)\(\);\s*$/;
 if (!tail.test(src)) throw new Error("the script of the page does not end with boot(); })();");
-src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, chapterNavHtml, currentSection, placeAsides, renderChapter, renderWelcome, state };\n})();\n");
+src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, chapterNavHtml, currentSection, placeAsides, renderChapter, renderWelcome, visibleSections, state };\n})();\n");
 
 function fakeMarked() {
   const m = { renderer: null };
@@ -101,13 +103,17 @@ process.stdout.write(JSON.stringify(input.map((md) => page.chapterHtml(md).html)
 const viewsMain = `
 (async () => {
   const c = Object.assign({ chapter: 1, file: "ch01.md", hours: 8, part: "I", tags: [] }, input);
-  page.state.outline = { parts: [{ part: "I", title: "Fundamentos", hours: 8, milestones: "M1", chapters: [{ chapter: 1, title: c.title, hours: 8 }, { chapter: 2, title: c.title, hours: 8 }] }] };
+  page.state.outline = { parts: [
+    { part: "I", title: "Fundamentos", hours: 8, milestones: "M1", chapters: [{ chapter: 1, title: c.title, hours: 8 }, { chapter: 2, title: c.title, hours: 8 }] },
+    { part: "II", title: "El núcleo", hours: 8, milestones: "M2", chapters: [{ chapter: 3, title: c.title, hours: 8 }] },
+  ] };
   page.state.available.set(1, c);
   sandbox.fetch = async () => ({ ok: true, text: async () => "---\ntitle: x\n---\nTexto.\n" });
   await page.renderChapter(1);
   const views = { chapter: elements.page.innerHTML, toc: elements.parts.innerHTML };
   page.renderWelcome();
   views.home = elements.page.innerHTML;
+  views.tocHome = elements.parts.innerHTML;
   process.stdout.write(JSON.stringify(views));
 })().catch((e) => { console.error(e); process.exit(1); });
 `
@@ -173,6 +179,11 @@ process.stdout.write(JSON.stringify(input.map((md) => {
 })));
 `
 
+// visibleMain prints the answer of visibleSections for each case of its input.
+const visibleMain = `
+process.stdout.write(JSON.stringify(input.map((c) => page.visibleSections(c.list, c.current))));
+`
+
 // currentMain prints the answer of currentSection for each case of its input.
 const currentMain = `
 process.stdout.write(JSON.stringify(input.map((c) => page.currentSection(c.tops, c.atBottom))));
@@ -195,6 +206,31 @@ process.stdout.write(JSON.stringify(input.steps.map((wide) => {
   return root.children.map((n) => n.name);
 })));
 `
+
+// hueAndChroma returns the hue, in degrees, and the chroma, from 0 to 1, of a
+// #rrggbb colour. A grey near white has a high HSL saturation but a low chroma.
+func hueAndChroma(hex string) (float64, float64) {
+	var r8, g8, b8 int
+	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r8, &g8, &b8); err != nil {
+		panic(err)
+	}
+	r, g, b := float64(r8)/255, float64(g8)/255, float64(b8)/255
+	hi, lo := max(r, g, b), min(r, g, b)
+	d := hi - lo
+	if d == 0 {
+		return 0, 0
+	}
+	var hue float64
+	switch hi {
+	case r:
+		hue = math.Mod((g-b)/d+6, 6)
+	case g:
+		hue = (b-r)/d + 2
+	default:
+		hue = (r-g)/d + 4
+	}
+	return hue * 60, d
+}
 
 // numbered returns n lines, "linea 1" to "linea n", joined by newlines.
 func numbered(n int) string {
@@ -515,17 +551,80 @@ func TestPage(t *testing.T) {
 		}
 	})
 
-	t.Run("the_opener_has_the_number_of_the_chapter_and_its_part", func(t *testing.T) {
-		var views struct{ Chapter string }
-		runPageScript(t, viewsMain, map[string]string{"title": "Uno", "milestone": "m"}, &views)
-		for _, want := range []string{`<span>Capítulo</span><b class="chapter-num">1</b>`, `<span class="eyebrow">Parte I</span>`} {
-			if !strings.Contains(views.Chapter, want) {
-				t.Errorf("want %q in %.900q", want, views.Chapter)
+	t.Run("the_opener_is_plain_text_with_the_number_and_the_part", func(t *testing.T) {
+		tags := func(n int) []string {
+			ts := []string{"ch01"}
+			for i := 1; i <= n; i++ {
+				ts = append(ts, fmt.Sprintf("ch01-s%d", i))
+			}
+			return ts
+		}
+		for _, c := range []struct {
+			sessions int
+			facts    string
+		}{{3, "8 h · 3 sesiones"}, {1, "8 h · 1 sesión"}, {0, "8 h"}} {
+			var views struct{ Chapter string }
+			runPageScript(t, viewsMain, map[string]any{"title": "Uno", "milestone": "m", "tags": tags(c.sessions)}, &views)
+			for _, want := range []string{
+				`<span class="eyebrow">Parte I · Fundamentos</span>`,
+				`<b class="chapter-num" aria-label="Capítulo 1">1</b>`,
+				`<p class="facts">` + c.facts + `</p>`,
+			} {
+				if !strings.Contains(views.Chapter, want) {
+					t.Errorf("want %q in %.900q", want, views.Chapter)
+				}
+			}
+			if strings.Contains(views.Chapter, "chip") {
+				t.Errorf("the facts of the opener are plain text: %.900q", views.Chapter)
 			}
 		}
 	})
 
-	t.Run("a_comparison_names_its_language_for_the_styles", func(t *testing.T) {
+	t.Run("only_the_part_of_the_current_chapter_is_open_in_the_contents", func(t *testing.T) {
+		var views struct{ Toc, TocHome string }
+		runPageScript(t, viewsMain, map[string]any{"title": "Uno", "milestone": "m", "part": "II", "chapter": 3}, &views)
+		// The chapter stands in part II and is the first one to read, so both views open that part.
+		for view, toc := range map[string]string{"chapter": views.Toc, "home": views.TocHome} {
+			if !strings.Contains(toc, `<details class="part" name="toc-parts" data-part="II" open>`) {
+				t.Errorf("%s: want part II open in %.600q", view, toc)
+			}
+			if !strings.Contains(toc, `<details class="part" name="toc-parts" data-part="I"><summary`) {
+				t.Errorf("%s: want part I closed in %.600q", view, toc)
+			}
+			if !strings.Contains(toc, `title="Parte I · Fundamentos"`) {
+				t.Errorf("%s: a closed part cuts its name, so its summary has the whole name as a title: %.600q", view, toc)
+			}
+		}
+	})
+
+	t.Run("the_list_of_sections_shows_the_h3_of_the_current_h2_only", func(t *testing.T) {
+		type sec struct {
+			Level int `json:"level"`
+		}
+		list := []sec{{3}, {2}, {3}, {3}, {2}, {2}, {3}}
+		cases := []struct {
+			name    string
+			List    []sec `json:"list"`
+			Current int   `json:"current"`
+			want    []bool
+		}{
+			{"an_h3_before_any_h2", list, 0, []bool{true, true, false, false, true, true, false}},
+			{"on_an_h2", list, 1, []bool{false, true, true, true, true, true, false}},
+			{"on_its_second_h3", list, 3, []bool{false, true, true, true, true, true, false}},
+			{"on_an_h2_with_no_h3", list, 4, []bool{false, true, false, false, true, true, false}},
+			{"on_the_last", list, 6, []bool{false, true, false, false, true, true, true}},
+			{"no_sections", []sec{}, -1, []bool{}},
+		}
+		var got [][]bool
+		runPageScript(t, visibleMain, cases, &got)
+		for i, c := range cases {
+			if !slices.Equal(got[i], c.want) {
+				t.Errorf("%s: want %v, got %v", c.name, c.want, got[i])
+			}
+		}
+	})
+
+	t.Run("comparisons_share_one_style_and_keep_their_language_in_the_markup", func(t *testing.T) {
 		cases := []struct{ arg, lang string }{{" Rust", "rust"}, {" TS", "ts"}, {" Python", "python"}, {"", ""}, {" A&B", "a&amp;b"}}
 		var texts []string
 		for _, c := range cases {
@@ -536,14 +635,42 @@ func TestPage(t *testing.T) {
 				t.Errorf(":::from%s: want %q in %.200q", cases[i].arg, want, html)
 			}
 		}
-		for _, lang := range []string{"rust", "ts", "python"} {
-			if s := `.box.from[data-lang="` + lang + `"] {`; !bytes.Contains(indexHTML, []byte(s)) {
-				t.Errorf("the page does not contain %q", s)
-			}
+		if bytes.Contains(indexHTML, []byte(".box.from[data-lang")) {
+			t.Error("a comparison box is told apart by its label, not by a style per language")
 		}
 	})
 
-	t.Run("solutions_and_answers_take_their_colour_from_the_box_before_them", func(t *testing.T) {
+	t.Run("the_palette_is_red_and_neutrals_and_dark_is_the_same_twice", func(t *testing.T) {
+		start, end := bytes.Index(indexHTML, []byte("<style>")), bytes.Index(indexHTML, []byte("</style>"))
+		if start < 0 || end < start {
+			t.Fatal("the page has no <style>")
+		}
+		css := string(indexHTML[start:end])
+		hexes := regexp.MustCompile(`#[0-9a-fA-F]{6}\b`).FindAllString(css, -1)
+		if len(hexes) == 0 {
+			t.Fatal("the page has no colours")
+		}
+		for _, h := range hexes {
+			if hue, chroma := hueAndChroma(h); chroma > 0.1 && hue > 30 && hue < 330 {
+				t.Errorf("%s is neither a neutral nor a red (hue %.0f, chroma %.2f)", h, hue, chroma)
+			}
+		}
+		// The two dark blocks hold the same tokens: one follows the system and one follows an explicit choice.
+		block := func(from string) string {
+			i := strings.Index(css, from)
+			if i < 0 {
+				t.Fatalf("the styles do not contain %q", from)
+			}
+			rest := css[i+len(from):]
+			j := strings.Index(rest, "}")
+			return strings.Join(strings.Fields(rest[:j]), " ")
+		}
+		if a, b := block(`:root:not([data-theme="light"]) {`), block(`:root[data-theme="dark"] {`); a != b {
+			t.Errorf("the dark blocks differ:\n%s\n%s", a, b)
+		}
+	})
+
+	t.Run("solutions_and_answers_take_their_icon_from_the_box_before_them", func(t *testing.T) {
 		// Neither fold has a class of its own: the styles find them by what comes right before.
 		html := renderWithPage(t, ":::exercise\nUno.\n:::\n:::solution\nDos.\n:::\n:::review\nTres.\n:::\n:::answer\nCuatro.\n:::\n")[0]
 		html = strings.ReplaceAll(html, "\n", "")
