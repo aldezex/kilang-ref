@@ -515,6 +515,50 @@ func TestPage(t *testing.T) {
 		}
 	})
 
+	t.Run("the_opener_has_the_number_of_the_chapter_and_its_part", func(t *testing.T) {
+		var views struct{ Chapter string }
+		runPageScript(t, viewsMain, map[string]string{"title": "Uno", "milestone": "m"}, &views)
+		for _, want := range []string{`<span>Capítulo</span><b class="chapter-num">1</b>`, `<span class="eyebrow">Parte I</span>`} {
+			if !strings.Contains(views.Chapter, want) {
+				t.Errorf("want %q in %.900q", want, views.Chapter)
+			}
+		}
+	})
+
+	t.Run("a_comparison_names_its_language_for_the_styles", func(t *testing.T) {
+		cases := []struct{ arg, lang string }{{" Rust", "rust"}, {" TS", "ts"}, {" Python", "python"}, {"", ""}, {" A&B", "a&amp;b"}}
+		var texts []string
+		for _, c := range cases {
+			texts = append(texts, ":::from"+c.arg+"\nTexto.\n:::\n")
+		}
+		for i, html := range renderWithPage(t, texts...) {
+			if want := `<aside class="box from" data-lang="` + cases[i].lang + `">`; !strings.Contains(html, want) {
+				t.Errorf(":::from%s: want %q in %.200q", cases[i].arg, want, html)
+			}
+		}
+		for _, lang := range []string{"rust", "ts", "python"} {
+			if s := `.box.from[data-lang="` + lang + `"] {`; !bytes.Contains(indexHTML, []byte(s)) {
+				t.Errorf("the page does not contain %q", s)
+			}
+		}
+	})
+
+	t.Run("solutions_and_answers_take_their_colour_from_the_box_before_them", func(t *testing.T) {
+		// Neither fold has a class of its own: the styles find them by what comes right before.
+		html := renderWithPage(t, ":::exercise\nUno.\n:::\n:::solution\nDos.\n:::\n:::review\nTres.\n:::\n:::answer\nCuatro.\n:::\n")[0]
+		html = strings.ReplaceAll(html, "\n", "")
+		for _, want := range []string{`</section><details class="fold"><summary>Solución`, `</section><details class="fold"><summary>Respuesta`} {
+			if !strings.Contains(html, want) {
+				t.Errorf("want %q in %.500q", want, html)
+			}
+		}
+		for _, s := range []string{"\nsection.exercise + details.fold {", "\nsection.review + details.fold {"} {
+			if !bytes.Contains(indexHTML, []byte(s)) {
+				t.Errorf("the page does not contain %q", s)
+			}
+		}
+	})
+
 	t.Run("the_styles_and_the_script_agree_on_the_margin_column", func(t *testing.T) {
 		// The script moves the asides at the width where the styles float them.
 		const query = "(min-width: 1380px)"
