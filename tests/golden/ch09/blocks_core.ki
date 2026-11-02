@@ -1,0 +1,14 @@
+// test: T09.50
+// run: emit core
+// expect-stdout:
+// | fn main() =
+// |   let x = add_int(1, 2);
+// |   let _ = print(x);
+// |   let _1 = print(x);
+// |   print(x)
+fn main() {
+  let x = 1 + 2
+  print(x)
+  print(x)
+  print(x)
+}

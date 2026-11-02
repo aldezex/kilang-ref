@@ -42,7 +42,8 @@ const (
 
 // Var is a variable: a parameter of a function or the name a `let` binds. Core
 // is meant to bind each Var in one place only (spec 6.1); neither Builder nor
-// Program checks it.
+// Program checks it, and Lint does not check it in Part I (it is exercise 1 of
+// chapter 9).
 type Var struct {
 	Name base.Symbol
 	Rep  Rep

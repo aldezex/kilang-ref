@@ -100,31 +100,33 @@ ref:     TestGuard/captures_panic_value_and_stack
 
 [T09.09] ice.debug_hook_exits_70                           level: core
 kind:    unit (go test)      file: internal/driver/ice_test.go
-case:    con `KI_DEBUG_PANIC_IN` igual al nombre de un pase, ese pase hace un panic al empezar, el comando termina con el código 70 y stderr es el informe del ICE (el mensaje, un salto de línea y la pila) y nada más delante; vale para los cuatro pases que ejecuta algún comando y en cada comando que los ejecuta; y los diagnósticos que un pase anterior ya había encontrado no se escriben junto al informe
-input:   `KI_DEBUG_PANIC_IN=check` y `ki check` de un fichero válido (`fn main() {}`); y, con el gancho en cada pase: `ki check` con `lex`, `parse` y `resolve`, `ki emit tokens` con `lex` y `ki emit ast` con `lex` y con `parse`; y `ki check` de un fichero con un error de sintaxis (`fn main( {}`), primero sin el gancho y después con el gancho en `resolve`
+case:    con `KI_DEBUG_PANIC_IN` igual al nombre de un pase, ese pase hace un panic al empezar, el comando termina con el código 70 y stderr es el informe del ICE (el mensaje, un salto de línea y la pila) y nada más delante; vale para los seis pases que existen (`lex`, `parse`, `resolve`, `check`, `elaborate` y `lint`) y en cada comando que los ejecuta; y los diagnósticos que un pase anterior ya había encontrado no se escriben junto al informe
+input:   `KI_DEBUG_PANIC_IN=check` y `ki check` de un fichero válido (`fn main() {}`); y, con el gancho en cada pase: `ki check` con `lex`, `parse` y `resolve`, `ki emit tokens` con `lex`, `ki emit ast` con `lex` y con `parse`, y `ki emit core` con `lex`, `parse`, `resolve`, `check`, `elaborate` y `lint`; y `ki check` de un fichero con un error de sintaxis (`fn main( {}`), primero sin el gancho y después con el gancho en `resolve`
 expect:  en cada caso el código de salida es 70, stdout está vacío y stderr empieza por `internal compiler error: <pase>: debug panic requested` y un salto de línea, y lo que sigue empieza por `goroutine `; el fichero con el error de sintaxis, sin el gancho, sale con 1, deja stdout vacío y escribe un stderr que empieza por `error[E0201]: `, y con el gancho en `resolve` sale con 70 con ese mismo informe y su stderr no contiene `error[`
 why:     un ICE tiene que acabar en un informe y en un código que lo distinga de un error del
          programa (1), y la única forma de probar de verdad esa frontera sin un fallo real del
          compilador es hacer fallar a propósito el pase. Cada pase tiene su nombre en el mensaje (si
          dos pases compartieran el nombre, el informe mentiría sobre cuál falló), y `ki emit`
-         ejecuta el lexer y el parser como `ki check`: el gancho comprueba que ninguno de esos
-         comandos llama a un pase sin la frontera. Que stdout quede vacío y que la pila empiece
-         justo después del mensaje es lo que hace el informe legible por un script. Y el error que
-         el parser ya había encontrado no se escribe: es el de una compilación que se interrumpió a
-         medias, y el informe es lo único que hay que atender. Si algún día se quiere enseñarlo,
-         `catchICE` es el único sitio, y esta fila cambia con él. El mismo fichero sin el gancho
-         escribe su error, para que la fila no pase por no tener nada que escribir
+         ejecuta el lexer y el parser como `ki check`, y `ki emit core` también la elaboración y
+         Lint: el gancho comprueba que ninguno de esos comandos llama a un pase sin la frontera.
+         Que stdout quede vacío y que la pila empiece justo después del mensaje es lo que hace el
+         informe legible por un script. Y el error que el parser ya había encontrado no se
+         escribe: es el de una compilación que se interrumpió a medias, y el informe es lo único
+         que hay que atender. Si algún día se quiere enseñarlo, `catchICE` es el único sitio, y
+         esta fila cambia con él. El mismo fichero sin el gancho escribe su error, para que la
+         fila no pase por no tener nada que escribir
 ref:     TestICE/debug_hook_exits_70
 
 [T09.10] ice.debug_hook_names_one_pass                     level: core
 kind:    unit (go test)      file: internal/driver/ice_test.go
-case:    `KI_DEBUG_PANIC_IN` solo afecta al pase cuyo nombre coincide exactamente, y no a un comando que no ejecuta ese pase: `ki version`, que no ejecuta ninguno, ni `ki emit tokens`, que no llega al pase `check`
-input:   `ki check` de un fichero válido con `KI_DEBUG_PANIC_IN` igual a cadena vacía, `bogus`, `Check`, `chec`, `checks` y `check,lex`; `ki version` y `ki emit tokens` con `KI_DEBUG_PANIC_IN=check`
-expect:  en los seis casos de `ki check`, el código de salida es 0 y no se escribe nada; `ki version` sale con 0, escribe lo mismo que sin la variable y nada en stderr; `ki emit tokens` sale con 0, escribe algo en stdout y nada en stderr
+case:    `KI_DEBUG_PANIC_IN` solo afecta al pase cuyo nombre coincide exactamente, y no a un comando que no ejecuta ese pase: `ki version`, que no ejecuta ninguno, ni `ki emit tokens`, que no llega al pase `check`, ni `ki check` ni `ki emit ast`, que no llegan a elaborar
+input:   `ki check` de un fichero válido con `KI_DEBUG_PANIC_IN` igual a cadena vacía, `bogus`, `Check`, `chec`, `checks` y `check,lex`; `ki version` y `ki emit tokens` con `KI_DEBUG_PANIC_IN=check`; y `ki check` y `ki emit ast` de un fichero válido con `KI_DEBUG_PANIC_IN=elaborate` y con `KI_DEBUG_PANIC_IN=lint`
+expect:  en los seis casos de `ki check`, el código de salida es 0 y no se escribe nada; `ki version` sale con 0, escribe lo mismo que sin la variable y nada en stderr; `ki emit tokens` sale con 0, escribe algo en stdout y nada en stderr; `ki check` con el gancho en `elaborate` o en `lint` sale con 0 y no escribe nada, y `ki emit ast` sale con 0, escribe algo en stdout y nada en stderr
 why:     el gancho existe para probar la frontera sin ensuciar el uso normal: una comparación por
          prefijo, por sufijo o por «contiene» haría que `chec` o `check,lex` rompieran un `ki check`
          que nada tiene que ver, y una variable que hiciera un panic en cualquier comando, aunque no
-         ejecute el pase, rompería hasta `ki version`. La cadena vacía es la variable sin valor: no
+         ejecute el pase, rompería hasta `ki version`; y un `ki check` que elaborase sin necesitarlo
+         se rompería con el gancho en `elaborate`. La cadena vacía es la variable sin valor: no
          nombra ningún pase
 ref:     TestICE/debug_hook_names_one_pass
 
@@ -378,10 +380,280 @@ kind:    unit (go test)      file: internal/core/elaborate_test.go
 case:    `Session.Lower` devuelve el `Program` de Core del `Frontend` y ejecuta la elaboración como el pase `elaborate`: el gancho de depuración de ese nombre hace el panic antes de elaborar, y un panic de la propia elaboración sale como un `*ICE` de ese pase
 input:   `fn main() {}` analizado, con `DebugPanicIn` vacío y después igual a `elaborate`; y `fn main() { y }`, que tiene un error
 expect:  sin el gancho, `Lower` devuelve un programa con `main` y dos funciones (`print` y `main`); con el gancho, hace un panic con un `*ICE` de pase `elaborate` y valor `debug panic requested`; y con el programa que tiene un error, hace un panic con un `*ICE` cuyo `Error()` es exactamente `internal compiler error: elaborate: core: cannot elaborate a name that stands for nothing`
-why:     Cada pase corre bajo la frontera de los ICE, y `KI_DEBUG_PANIC_IN=elaborate` la
-         prueba. Ningún comando llama todavía a `Lower` (`ki emit
-         core` llega en la sesión siguiente), así que esta es la única prueba de que el pase tiene
-         nombre y está dentro de `runPass`: sin ella, un `Lower` que llamara a `Elaborate`
-         directamente pasaría todos los demás tests, y el primer fallo del elaborador sería un
-         panic de Go sin informe.
+why:     Cada pase corre bajo la frontera de los ICE. `TestICE/debug_hook_exits_70`
+         lo prueba con el gancho, a través de `ki emit core`; este test prueba `Lower` solo, sin la
+         línea de órdenes, y es el único en el que el panic no lo hace el gancho sino la propia
+         elaboración (con un programa que tiene un error, que el llamador debía haber descartado):
+         comprueba que sale como un `*ICE` del pase `elaborate` con su mensaje. Es lo que lee
+         quien depura un fallo del elaborador: un panic de Go sin informe le obligaría a deducir
+         el pase leyendo la pila.
 ref:     TestElaborate/lower_runs_under_the_elaborate_pass
+
+[T09.30] lint.accepts_elaborated_fib                       level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Lint` no encuentra ninguna violación en el Core que el elaborador hace de `fib`, con la función extern `print` del preludio dentro del programa
+input:   `fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }`
+expect:  `Lint` devuelve una lista vacía y el programa tiene exactamente dos funciones: la 0 es `print`, sin cuerpo, y la 1 es `fib`, con cuerpo
+why:     un Lint solo sirve si acepta lo que el elaborador hace de verdad: uno que rechazara `fib`
+         (un parámetro que no ve ligado, la aridad de la llamada recursiva, el `Match` que el `if`
+         se vuelve) pararía con un ICE cada comando que baja el programa. `print` está en el
+         programa y no tiene cuerpo, y es ahí donde se ve que Lint no recorre un cuerpo que no
+         existe
+ref:     TestLint/accepts_elaborated_fib
+
+[T09.31] lint.accepts_every_construct                      level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Lint` acepta el Core elaborado de cada construcción del lenguaje de la Parte I
+input:   siete programas: `!b && -a < 0`; `a && b || !a || x == 1 || a != b`; un bloque que sombrea una `x` con sentencias de expresión; `apply(g, x) { g(x) }` llamada con `print` como valor; llamadas sin argumentos (`one() + one()`); un `if` sin `else`; y un `let` cuyo valor es un `if` con un bloque con su propio `let`
+expect:  en las siete, `Lint` devuelve una lista vacía
+why:     cada regla de Lint tiene una versión demasiado estricta que rechaza algo válido, y un
+         solo programa no las encuentra todas: la aridad de una primitiva unaria (`-a` y `!b`
+         llevan un argumento, no dos), la llamada a través de una variable (`g(x)`: Lint no sabe qué
+         aridad tiene lo que `g` guarda), el ámbito de un `let` que sombrea a otro y el de un `let`
+         dentro de un brazo
+ref:     TestLint/accepts_every_construct
+
+[T09.32] lint.accepts_hand_built_shapes                    level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Lint` acepta lo que el elaborador no hace pero Core permite: una llamada a través de una variable con cualquier número de argumentos, una primitiva unaria con un argumento, una `FunRef` que no se llama y un `Match` completo de cualquier forma válida; y, aunque Core promete un solo binder por variable y ni el `Builder` ni Lint lo comprueban, una variable ligada por dos `Let` anidados, que sigue en ámbito en el cuerpo del `Let` exterior cuando el interior ya ha acabado
+input:   `Program`s hechos con el `Builder`, con una función extern de un parámetro como función 0; una variable ligada por un `Let` y llamada con tres argumentos; `neg_int` con un argumento; una `FunRef` a la función 0 sin llamada; seis `Match` sobre `true` con los brazos `true` y `false`, `false` y `true`, `_` solo, `true` y `_`, `_` y `false`, y `true`, `false` y `_`; y `let v = 1; add_int(let v = 2; v, v)`, con la misma variable `v` en los dos `Let`
+expect:  en los diez casos, `Lint` devuelve una lista vacía
+why:     la regla del `Match` es «los brazos `true` y `false`, o un `_`»: un Lint que exigiera los
+         dos brazos aunque hubiera comodín, o que mirara el orden, rechazaría un Core válido que
+         los pases siguientes podrán construir. Y una llamada por variable no tiene aridad que
+         comprobar: un Lint que mirara la función 0 por error la rechazaría. Y el ámbito cuenta
+         cuántos binders tiene cada variable en vez de guardar solo si tiene alguno: con una
+         variable ligada por dos `Let`, un conjunto la sacaría de ámbito al acabar el interior y
+         daría un `unbound variable` falso en el segundo argumento, que el `Let` exterior aún
+         sostiene. El Core del elaborador, con un binder por variable, no distingue las dos
+         cosas, y por eso solo un `Program` hecho a mano lo comprueba
+ref:     TestLint/accepts_hand_built_shapes
+
+[T09.33] lint.rejects_unbound_var                          level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    una `VarRef` a una variable que no está en ámbito da exactamente una violación, ``fun <f>: unbound variable `<v>` ``, con el nombre de la función y el de la variable, en cada sitio donde puede estar
+input:   una función cuyo cuerpo es la `VarRef` sola, o la tiene como callee, como argumento, como primer o segundo argumento de una primitiva, como condición, brazo `true` o brazo `false` de un `Match`, o como `Init` o `Body` de un `Let`; y, además: `let x = x; x`; una variable de `Let` usada en el argumento siguiente, en el cuerpo del `Let` que la tiene en su `Init` y en el brazo siguiente; un parámetro usado desde otra función; y una fuente real, `fn f(n: Int) -> Int { n }`, a la que se le quitan los parámetros de `f`
+expect:  en cada caso hecho a mano exactamente una violación, con el texto ``fun <nombre de la función>: unbound variable `<nombre de la variable sin ligar>` ``: las funciones y las variables que el test hace a mano se llaman `f<n>` y `v<n>` con su número de orden, y la violación nombra la variable `x` de los `Let` en `let x = x` y en los tres casos de la variable de un `Let` que ha acabado, y ``fun f1: unbound variable `v0` `` para el parámetro de la función 0 usado en la 1; en el caso de una variable sin más, el texto contiene `unbound`; y con la fuente real, exactamente ``fun f: unbound variable `n` ``, con los nombres del fichero
+why:     cada fila mata una forma de equivocarse: no recorrer un hijo, ligar la variable de un `Let`
+         ya en su propio `Init` (`let x = x` leería un slot que nadie ha escrito), no sacarla de ámbito
+         al acabar el `Let` (la usaría quien no debe: el argumento siguiente, el brazo siguiente), o
+         dejar los parámetros ligados en la función que viene después. La fuente real comprueba que
+         el texto usa los nombres del fichero, que es lo que quien lee el informe de un ICE tiene
+         delante para buscar la función y la variable
+ref:     TestLint/rejects_unbound_var
+
+[T09.34] lint.rejects_bad_arity                            level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    una llamada a una `FunRef` con un número de argumentos distinto del de parámetros de esa función, y una primitiva con un número distinto de su `Arity`, dan cada una exactamente una violación, también si están dentro del `Init` de un `Let`
+input:   funciones 0 (extern de dos parámetros) y 1 (sin parámetros) y la 2 con la llamada: a la 0 con 1, con 3 y con 0 argumentos; a la 1 con 1; `add_int` con 1, `lt_int` con 3, `eq_bool` con 0, `neg_int` con 2 y `not_bool` con 0; y una llamada a la 0 con 1 argumento dentro del `Init` de un `Let`
+expect:  una violación por caso: ``fun f2: call of fun `f0` with 1 argument(s), but it takes 2`` y así hasta ``fun f2: primitive not_bool with 0 argument(s), but it takes 1``, con el nombre de la función que se llama, los argumentos dados y los esperados
+why:     una aridad se equivoca por exceso y por defecto, y comprobar solo una de las dos dejaría
+         pasar la otra; y las primitivas unarias y binarias son dos clases, así que una aridad
+         fijada a 2 pasaría `neg_int(1, 2)` mal. El mensaje nombra también la función que se
+         llama (`f0`), y no solo la que llama (`f2`): `f0` es la que el intérprete leería con el
+         número de argumentos equivocado
+ref:     TestLint/rejects_bad_arity
+
+[T09.35] lint.rejects_slot_out_of_frame                    level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    el slot de un parámetro o de la variable de un `Let` tiene que ser menor que el `FrameSize` de su función; uno igual o mayor da exactamente una violación
+input:   una variable de `Let` con el slot 1 en un marco de 2 (válida), con el 2 en uno de 2, con el 100 en uno de 2, con el 0 en uno de 0 y con el 2^31 en uno de 1, y con el 1 en uno de 2^31 (válida); un parámetro con el slot 0 en un marco de 1 (válido), con el 1 en uno de 1 y con el 100 en uno de 1; el slot `MaxUint32 - 1` en un marco de `MaxUint32` (válido) y el slot `MaxUint32` en uno de `MaxUint32`; y el parámetro de una función extern con el slot 1 en un marco de 1
+expect:  los cuatro casos válidos no dan violación; en los demás, exactamente una: ``fun f<id>: variable `v0` has slot <s>, outside a frame of <n> slot(s)``
+why:     el marco es el slice que el intérprete reserva para una llamada: un slot fuera de él
+         sería un panic de Go (`index out of range`) en mitad de la ejecución, en lugar de un
+         informe de Lint. El límite es `<`: aceptar el slot igual al tamaño es el error de uno de
+         siempre, y los casos de 2^31 y de `MaxUint32` muestran que la comparación es entre
+         enteros sin signo y no pasa por uno con signo. Los parámetros se comprueban aparte de los
+         `Let` (son otra lista) y también en una extern, que no tiene cuerpo que recorrer
+ref:     TestLint/rejects_slot_out_of_frame
+
+[T09.36] lint.rejects_match_without_false_arm              level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    un `Match` que no tiene a la vez los brazos `true` y `false` y no tiene un `_` da exactamente una violación; uno dentro de otro, una cada uno
+input:   `Match` sobre `true` con solo `true`, con solo `false`, sin brazos, con `true` y `true` y con `false` y `false`; y un `Match` con solo `true` dentro del brazo `true` de otro igual
+expect:  `fun f0: match must have an arm for true and one for false, or a wildcard arm` una vez en cada uno de los cinco primeros, y dos veces en el último
+why:     un `Match` sin el brazo `false` es un `if` que no sabe qué hacer cuando la condición es
+         falsa: el intérprete llegaría al final de los brazos sin valor que devolver. Con dos
+         brazos del mismo tipo no basta tener dos: tienen que ser uno de cada, y por eso `true` y
+         `true` también se rechaza
+ref:     TestLint/rejects_match_without_false_arm
+
+[T09.37] lint.rejects_bad_function_shape                   level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    una función es normal (con cuerpo y sin nombre de extern) o extern (con nombre y sin cuerpo): una con las dos cosas, o con ninguna, da una violación, y el cuerpo de una función sin cuerpo no se recorre
+input:   tras una extern correcta, la función 1: con cuerpo y con nombre de extern `ki_print_int`; sin cuerpo y sin nombre; normal; extern; una extern cuyo campo `Body` apunta a una `VarRef` sin ligar; y una función sin cuerpo y sin nombre cuyo `Body` apunta a esa misma `VarRef`
+expect:  la primera da exactamente ``fun f1: extern `ki_print_int` has a body``; la segunda, `fun f1: has no body and no extern name`; la normal, la extern y la extern con `Body` apuntando a la `VarRef` sin ligar, ninguna violación; y la última, solo la violación de la segunda, no la de la variable
+why:     el campo `Body` de una función sin cuerpo vale 0, que es la primera expresión del
+         programa y pertenece a otra función: si Lint la recorriera, daría violaciones que no
+         son de ninguna de las dos. Y de las cuatro combinaciones de «tiene cuerpo» y «tiene
+         nombre», dos son válidas y dos no, cada una con su mensaje
+ref:     TestLint/rejects_bad_function_shape
+
+[T09.38] lint.reports_every_violation_in_order             level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Lint` da todas las violaciones, no solo la primera ni las de la primera función, función por función: primero la forma de la función, luego sus parámetros y luego su cuerpo en preorden, con las violaciones de un nodo antes que las de sus hijos y el slot de un `Let` antes que las de su `Init`
+input:   la función 0, con nombre de extern y cuerpo, un parámetro con el slot 3 en un marco de 1, y el cuerpo `let x = neg_int(1, 2); match <v> { true => <w> }` con `x` en el slot 5 y `v` y `w` sin ligar; y la función 1, cuyo cuerpo es una `VarRef` a `v`
+expect:  exactamente estas ocho líneas, en este orden: la extern con cuerpo; el slot 3; el slot 5; `neg_int` con 2 argumentos; el `Match` sin brazo `false`; `v` sin ligar; `w` sin ligar; y la `v` de la función 1
+why:     el orden es parte de lo que el informe de un ICE enseña a quien lo lee (la primera línea es
+         la causa más cercana al origen), y se pierde con un Lint que se detenga en la primera
+         violación, que vuelva a empezar la lista en cada función o que se salte la primera
+         función. Que la violación de un nodo salga antes que las de sus hijos fija que la
+         comprobación se hace al visitarlo y no al volver de él
+ref:     TestLint/reports_every_violation_in_order
+
+[T09.39] lint.long_block_no_recursion                      level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    un bloque de 100 000 sentencias se compila, pasa `Lint`, se imprime y se recorre con `Subexprs` con la pila de Go limitada a 1 MiB, tanto si las sentencias son `let` como si son expresiones
+input:   `fn main() {` seguido de 100 000 líneas `let xK = 1` y `}`; y `fn main() {` seguido de 100 000 líneas `print(1)` y `}`; todo, también la compilación, dentro de `debug.SetMaxStack(1 << 20)`
+expect:  en los dos, `Lint` devuelve 0 violaciones y `Print` devuelve exactamente `fn main() =` y sus líneas, cada una con su salto: en el primero `  let xK = 1;` y la cola `  ()`; en el segundo `  let _ = print(1);`, `  let _1 = print(1);` y así hasta `  let _99998 = print(1);`, y la cola `  print(1)`; y `Subexprs` del cuerpo de `main` del primero produce exactamente 200 001 expresiones: 100 000 `Let`, 100 000 `LitInt` y un `LitUnit`
+why:     un bloque de N sentencias es una cadena de N `Let` que ningún límite del parser acota, y
+         una recursión con un marco de Go por sentencia es el error que enseña este capítulo a no
+         cometer. Con el límite por defecto de pila de Go (1 GB) esa recursión cabría y el test no
+         la vería: con el de 1 MiB, un `Lint`, un `Print` o un `Subexprs` recursivos terminan el
+         binario de test entero con `fatal error: stack overflow`, no solo este test. El segundo
+         bloque es el caso corriente en el que `Print` tiene que dar 99 999 nombres distintos
+         a las variables `_` de las sentencias
+ref:     TestLint/long_block_no_recursion
+
+[T09.40] lint.deep_nesting_no_recursion                    level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    una expresión profunda y no larga, 100 000 primitivas cada una argumento de la siguiente, se comprueba con `Lint`, se imprime y se recorre con `Subexprs` con la pila de Go limitada a 1 MiB
+input:   un `Program` hecho con el `Builder` con una función del fichero cuyo cuerpo es `neg_int(neg_int(… neg_int(1) …))` con 100 000 `neg_int`; todo dentro de `debug.SetMaxStack(1 << 20)`
+expect:  `Lint` devuelve 0 violaciones; `Print` devuelve exactamente `fn deep() =` y, en la línea siguiente, dos espacios, 100 000 veces `neg_int(`, un `1` y 100 000 `)`; y `Subexprs` de la raíz produce 100 001 expresiones
+why:     el parser acota la profundidad de lo que lee (E0204 y E0205), así que ninguna fuente llega a
+         esto, pero un `Program` hecho a mano sí, y los recorridos no deben apoyarse en esa cota. Es la
+         otra forma de profundidad, además de la cadena de `Let` del test anterior: un `Print` que
+         escribiera los argumentos llamándose a sí mismo desbordaría la pila de 1 MiB sin que la
+         cadena de `Let` lo notara, y lo mismo un `Lint` o un `Subexprs` recursivos
+ref:     TestLint/deep_nesting_no_recursion
+
+[T09.41] subexprs.preorder_visits_every_node               level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Subexprs` visita la raíz y todo lo que hay bajo ella en preorden: un nodo antes que sus hijos, el callee de una llamada antes que sus argumentos y el `Init` de un `Let` antes que su cuerpo, la condición de un `Match` antes que sus brazos, y los brazos en su orden; empieza donde se le dice, y volver a recorrer da lo mismo
+input:   `let x = add_int(1, 2); x`, construido de abajo arriba; y una llamada cuyo callee es una `FunRef` y cuyos argumentos son un `Match` (condición, brazo `true`, brazo `false`) y una `VarRef`
+expect:  `Subexprs` del `Let` produce exactamente 5 ids: el `Let`, el `PrimCall`, el `1`, el `2` y la `VarRef`; el de la llamada, 7: la llamada, la `FunRef`, el `Match`, su condición, sus dos brazos y la `VarRef`; el del `Match`, 4 (sin lo de fuera); el de una hoja, solo ella; y un segundo recorrido del `Let` da los mismos 5
+why:     el id de un nodo es el orden en que el `Builder` lo hizo, que es de abajo arriba y no el
+         de un recorrido, así que una pila que apilara los hijos sin darles la vuelta, o un
+         `Match` que visitara las ramas antes que la condición, daría otro orden con los mismos
+         ids, sin ningún panic.
+ref:     TestSubexprs/preorder_visits_every_node
+
+[T09.42] subexprs.stops_when_the_loop_breaks               level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    un bucle `for … range` sobre `Subexprs` que hace `break` recibe los ids que ha pedido y el recorrido se detiene
+input:   `add_int(add_int(1, 2), 3)` y un bucle que se sale al recibir el segundo id
+expect:  el bucle recibió exactamente dos ids, la raíz y la suma de dentro, y no hubo ningún panic
+why:     un `iter.Seq` tiene que mirar lo que devuelve `yield`: si lo ignorara, Go haría un
+         panic («range function continued iteration after function for loop body returned false»)
+         en cuanto el cuerpo del bucle salga antes de tiempo. Es la parte del contrato de los
+         iteradores que un recorrido completo no prueba
+ref:     TestSubexprs/stops_when_the_loop_breaks
+
+[T09.43] print.match_as_argument                           level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    un argumento que ocupa varias líneas empieza en la línea de la llamada, sus líneas interiores llevan dos espacios más que ella, su `}` queda a la sangría de la llamada y el `)` lo sigue en esa misma línea
+input:   `fn main() { print(if true { 1 } else { 2 }) }`
+expect:  exactamente el texto `fn main() =`, `  print(match true {`, `    true => 1`, `    false => 2`, `  })`, cada línea con su salto
+why:     una llamada «en línea» con un argumento de varias líneas es donde un impresor hace lo más
+         fácil, que es partir la llamada en tres líneas o poner el `)` solo en la última. Este es
+         el formato de `Print`, con el texto entero: ninguna de las dos variantes lo cumple
+ref:     TestPrint/match_as_argument
+
+[T09.44] print.functions_and_repeated_names                level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    `Print` escribe las funciones del fichero en el orden de la fuente, una detrás de otra sin línea en blanco y sin las del preludio; un nombre que una función repite pasa a `x_1`, `x_2`…, un `_` a `_1`, `_2`…, sin chocar con un nombre que ya esté en uso, y la cuenta empieza de nuevo en cada función
+input:   cinco funciones: `f` con un parámetro `a`, dos `let x` y dos sentencias de expresión; `g` con `let x_1`, `let x` y otro `let x`; `h` con un `let x`; `k` con un parámetro `a` y un `let a`; y `u` con cuatro sentencias `print(…)`
+expect:  exactamente `fn f(a) =` con `let x`, `let x_1`, `let _`, `let _1` y la cola `x_1`; `fn g() =` con `x_1`, `x` y `x_2` y la cola `add_int(x_1, x_2)`; `fn h() =` con `let x`; `fn k(a) =` con `let a_1` y la cola `a_1`; y `fn u() =` con `_`, `_1`, `_2` y la cola `print(4)`; sin `fn print`
+why:     dos variables que se imprimen igual harían el volcado mentir: `let x = 1; let x = x + a` se
+         leería como una variable reasignada. La numeración de `_` no es `__1`, que es lo que
+         saldría de aplicar a `_` la regla de `x`, y la de `x_2` en `g` es lo que evita que la
+         tercera `x` se llame como una variable que otra ya tiene. Y el contador no pasa de una
+         función a otra: `h` empieza en `x`, no en `x_1`
+ref:     TestPrint/functions_and_repeated_names
+
+[T09.45] print.nested_layouts                              level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    lo que empieza en mitad de una línea (un `Match` o un bloque en el `Init` de un `let`, en un argumento, en un brazo, en el callee o en la condición de un `match`) sigue en esa línea y sus otras líneas llevan dos espacios más que ella, salvo la `}` de un `match`, que se alinea con ella; y un `match` dentro de un brazo sangra un nivel más
+input:   cuatro funciones: `h` con un `let` cuyo valor es un `if`, otro cuyo valor es un bloque con su `let`, un `print` de un bloque, un `print` de un `if` con un bloque en un brazo y un `if` con un bloque en un brazo como cola; `k`, cuyo callee es un `if`; `m`, cuyo callee es un bloque con un `let`; `n`, cuya condición es un bloque con un `let`; y, hecho con el `Builder`, un `match` con un `match` de brazos `true` y `_` en su brazo `true`
+expect:  el texto exacto de las cuatro (por ejemplo, `  let v = let w = a;` y `    add_int(w, 1);` para el bloque en un `Init`, y `    true => let b = add_int(a, 1);` y `      b` para el bloque en un brazo), y para el `match` anidado `    true => match false {`, `      true => 1`, `      _ => 2`, `    }`, `    false => 3`
+why:     el formato de `Print` fija una línea y sus argumentos de varias líneas, pero un `let` dentro
+         de un brazo o de un `Init` es de lo más común en un programa real (`if c { let t = …; t }`),
+         y sin una regla el cuerpo del `let` caería a la sangría de los brazos y se leería como un
+         brazo más. La regla es una sola, «lo que empieza a mitad de línea sangra dos más»; las
+         dos últimas funciones, un `let` en un callee y en una condición, enseñan que ese formato
+         no los delimita, y el test fija lo que hoy hace sin prometer que se pueda volver a leer
+ref:     TestPrint/nested_layouts
+
+[T09.46] print.literals_calls_and_bodiless_functions       level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    `Print` escribe un literal entero en su límite, los booleanos, `()`, una llamada cuyo callee es otra llamada y una primitiva; una función sin cuerpo se escribe sin `=` ni cuerpo; y un programa sin funciones del fichero da la cadena vacía
+input:   un `Program` hecho con el `Builder` con una función del preludio, `show(a, b)` con el cuerpo `show(a)(neg_int(math.MinInt64), true, false, (), math.MaxInt64, 0)`, y `bare(z)`, una función del fichero con nombre de extern y sin cuerpo; un `Program` vacío y otro con solo una función del preludio
+expect:  exactamente `fn show(a, b) =`, `  show(a)(neg_int(-9223372036854775808), true, false, (), 9223372036854775807, 0)` y `fn bare(z)`, cada línea con su salto; y `""` en los dos programas sin funciones del fichero
+why:     `math.MinInt64` es el literal que se rompe si el impresor convierte por un tipo más
+         estrecho o lo trata como el negativo de un positivo, y es el único valor de `Int` cuyo
+         opuesto no cabe en un `Int`. Una función del fichero sin cuerpo no es algo que el
+         elaborador haga (el parser pide su cuerpo, y E0304 prohíbe `#[extern]` fuera de la
+         biblioteca), pero un `Program` hecho a mano la tiene, y leer su `Body`, que vale 0,
+         imprimiría la expresión de otra función
+ref:     TestPrint/literals_calls_and_bodiless_functions
+
+[T09.47] ice.lint_violation_is_ice                         level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    `lintOrPanic` de un Core con una violación hace un panic que `guard("lint", …)` convierte en un `ICE` cuyo mensaje empieza por `internal compiler error: lint: fun ` y contiene `unbound`, con las violaciones una por línea y la pila pasando por `lintOrPanic`; un Core válido no hace panic; y `Session.lint` hace el panic con el `*ICE` del pase `lint`
+input:   un `Program` hecho con el `Builder` con una función `f0` cuyo cuerpo es una `VarRef` a una variable `x0` que nada liga; el mismo con una segunda función así, `f1` con `x1`; y uno con una función válida (`()`); los nombres los deletrea un internador, y en el caso de `Session.lint` el de la sesión
+expect:  con una función, `Error()` es exactamente ``internal compiler error: lint: fun f0: unbound variable `x0` `` y su pila contiene `lintOrPanic`; con dos, ese mismo texto seguido de un salto de línea y ``fun f1: unbound variable `x1` ``; con la válida, `guard` devuelve nil; y `Session.lint` con la inválida hace un panic con un `*ICE` de pase `lint` y de valor ``fun f0: unbound variable `x0` ``, y con la válida vuelve
+why:     es el camino real de un Core roto, Lint → panic → guard, sin el gancho de depuración (ese
+         solo prueba que el pase tiene nombre). Que el comando salga con 70 ya lo cubre
+         `TestICE/debug_hook_exits_70`, con el gancho en `lint` de `ki emit core`: este test solo
+         comprueba lo que llega a la frontera. Un `lintOrPanic` que callara una violación o las
+         juntara con otro separador cambiaría lo que lee quien depura, y lo mismo uno que
+         escribiera números en lugar de los nombres con los que el programa se escribió
+ref:     TestICE/lint_violation_is_ice
+
+[T09.48] cli.emit_core                                     level: core
+kind:    unit (go test)      file: internal/driver/cli_test.go
+case:    `ki emit core` imprime en stdout el Core del fichero (sin el preludio) y no necesita `main`; si el fichero tiene errores del front end da sus diagnósticos, sale con 1 y no imprime nada; sus errores de uso son los de los otros destinos, con la línea de los tres
+input:   un fichero con `fib`; tres ficheros con un error cada uno, de sintaxis (`1 + }`), de nombre (`y`) y de tipos (`true` donde va un `Int`), con `--diagnostics=short`; una ruta que no existe; `emit core` sin fichero; y `emit core --diagnostics=xml`
+expect:  el primero sale con 0, stderr vacío y stdout exactamente el Core de `fib` (cinco líneas); los tres con error salen con 1, stdout vacío y stderr exactamente un diagnóstico (`E0201`, `E0301` y `E0401`, en la línea 1, columnas 21, 17 y 17); la ruta que no existe sale con 1, sin stdout y con un stderr que empieza por ``error: cannot read file ` ``; los dos de uso salen con 2, sin stdout y con el mensaje del error y la línea `usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE`
+why:     `Elaborate` hace un panic ante un nodo de error, y la sesión anterior dejó la precondición
+         («solo un programa sin errores») a quien la llama: si `ki emit core` no la comprobara, un
+         fichero con un error de nombre acabaría en un ICE con salida 70 y no en el diagnóstico con
+         el 1, que es lo que corresponde a una falta del programa y no del compilador. Y el comando
+         no necesita `main` (ni lo exige): sirve para mirar una función suelta
+ref:     TestCLI/emit_core
+
+[T09.49] core.fib_core_golden                              level: core
+kind:    golden              file: tests/golden/ch09/fib_core.ki
+case:    `ki emit core` sobre la función `fib` con un `if` y dos llamadas recursivas
+expect:  sale con 0, stderr vacío y stdout exactamente cinco líneas: `fn fib(n) =`, `  match lt_int(n, 2) {`, `    true => n`, `    false => add_int(fib(sub_int(n, 1)), fib(sub_int(n, 2)))` y `  }`
+why:     es lo que hace la elaboración de punta a punta: el `if` es un `match`, los operadores son
+         primitivas con nombre (`lt_int`, `add_int`, `sub_int`) y la llamada recursiva es una
+         llamada a una función por nombre. Es la misma función que el golden del árbol de la Parte I
+         y que va a ejecutar el intérprete del capítulo siguiente.
+ref:     tests/golden/ch09/fib_core.ki
+
+[T09.50] core.blocks_core_golden                           level: core
+kind:    golden              file: tests/golden/ch09/blocks_core.ki
+case:    `ki emit core` sobre un bloque con un `let` y tres sentencias de expresión, la última como cola
+expect:  sale con 0, stderr vacío y stdout exactamente cinco líneas: `fn main() =`, `  let x = add_int(1, 2);`, `  let _ = print(x);`, `  let _1 = print(x);` y `  print(x)`
+why:     un bloque es una cadena de `let` y una sentencia de expresión es un `let _`: el golden
+         enseña las dos cosas, y que la segunda `_` se llama `_1` para que dos variables distintas
+         no se impriman igual. La última sentencia no lleva `let`: es la cola del bloque, el valor
+         de la función. Y el preludio no sale: `print` es una función del preludio, que no se imprime
+ref:     tests/golden/ch09/blocks_core.ki
+
+[T09.51] print.repeated_names_allocation_bound             level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    `Print` de una función con 10 000 líneas `print(1)`, que dan 9 999 variables `_` (la última es la cola y no liga nada), hace menos de 100 asignaciones de memoria por línea y escribe una línea por cada una, además de la cabecera
+input:   `fn main() {` seguido de 10 000 líneas `print(1)` y `}`, compilado una vez fuera de la medida; `testing.AllocsPerRun(1, …)` de `Print` sobre ese Core
+expect:  el número de asignaciones que mide `AllocsPerRun` es menor que 1 000 000, que son 100 por línea `print(1)`; y el texto tiene exactamente 10 001 saltos de línea, la cabecera y una línea por cada `print(1)`. No se comprueban los nombres (lo hacen T09.39 y T09.44) ni el tiempo
+why:     Los nombres `_`, `_1`, `_2`… salen de un contador que el impresor recuerda para cada
+         nombre base. Sin esa memoria cada nombre nuevo se buscaría probando `_1`, `_2`… hasta dar
+         con uno libre, y un bloque de N sentencias costaría del orden de N² intentos, una cadena
+         cada uno: T09.39 imprime 100 000 sentencias y el texto saldría igual de correcto, solo
+         que tardando mucho más, así que ninguna comparación de texto lo notaría. Se mide en
+         asignaciones y no en tiempo porque la cuenta no depende de la máquina: el `Print` que
+         recuerda hace unas pocas por sentencia, el que busca desde el principio hace miles, y el
+         límite de 100 por línea queda lejos de los dos. Contar las líneas evita que pase la
+         cota un `Print` que no escribe nada
+ref:     TestPrint/repeated_names_allocation_bound

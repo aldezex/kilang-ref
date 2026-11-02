@@ -269,7 +269,7 @@ func TestCLI(t *testing.T) {
 		}
 	})
 	t.Run("emit_unknown_target", func(t *testing.T) {
-		const usage = "usage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"
+		const usage = "usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE\n"
 		tests := []struct {
 			name string
 			args []string
@@ -291,6 +291,7 @@ func TestCLI(t *testing.T) {
 			// words with the same function, which has to hand the answer to
 			// help back as it is: the usage line and exit code 0.
 			{"tokens -h", []string{"emit", "tokens", "-h"}, 0, usage, ""},
+			{"core -h", []string{"emit", "core", "-h"}, 0, usage, ""},
 			{"check -h", []string{"check", "-h"}, 0, "usage: ki check [--diagnostics=human|short|json] FILE\n", ""},
 		}
 		for _, tc := range tests {
@@ -351,13 +352,53 @@ func TestCLI(t *testing.T) {
 		}
 		// The usage errors are those of emit tokens, with the line of both.
 		code, out, err = runCLI(t, "emit", "ast")
-		wantErr = "ki emit: missing FILE\nusage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"
+		wantErr = "ki emit: missing FILE\nusage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE\n"
 		if code != 2 || out != "" || err != wantErr {
 			t.Errorf("no file: got %d %q %q, want 2 \"\" %q", code, out, err, wantErr)
 		}
 		code, out, err = runCLI(t, "emit", "ast", "-h")
-		if wantOut := "usage: ki emit tokens|ast [--diagnostics=human|short|json] FILE\n"; code != 0 || out != wantOut || err != "" {
+		if wantOut := "usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE\n"; code != 0 || out != wantOut || err != "" {
 			t.Errorf("-h: got %d %q %q, want 0 %q \"\"", code, out, err, wantOut)
+		}
+	})
+	t.Run("emit_core", func(t *testing.T) {
+		const usage = "usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE\n"
+		// A correct file: the Core of the user's file on stdout, without the
+		// prelude's functions, and nothing on stderr. The file has no `main`:
+		// this target does not need one.
+		path := writeKi(t, "fn fib(n: Int) -> Int {\n  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }\n}\n")
+		code, out, errOut := runCLI(t, "emit", "core", path)
+		want := "fn fib(n) =\n  match lt_int(n, 2) {\n    true => n\n    false => add_int(fib(sub_int(n, 1)), fib(sub_int(n, 2)))\n  }\n"
+		if code != 0 || out != want || errOut != "" {
+			t.Errorf("correct file: got %d %q %q, want 0 %q \"\"", code, out, errOut, want)
+		}
+		// Core is made only for a program without errors, so a file with one
+		// gets its diagnostics, exit code 1 and nothing on stdout: not an ICE.
+		for _, row := range []struct {
+			name, source, wantErr string
+		}{
+			{"syntax error", "fn f() -> Int { 1 + }\n", ":1:21: error[E0201]: expected expression, found `}`\n"},
+			{"unknown name", "fn f() -> Int { y }\n", ":1:17: error[E0301]: unknown name `y`\n"},
+			{"type error", "fn f() -> Int { true }\n", ":1:17: error[E0401]: mismatched types\n"},
+		} {
+			path := writeKi(t, row.source)
+			code, out, errOut := runCLI(t, "emit", "core", "--diagnostics=short", path)
+			if code != 1 || out != "" || errOut != path+row.wantErr {
+				t.Errorf("%s: got %d %q %q, want 1 \"\" %q", row.name, code, out, errOut, path+row.wantErr)
+			}
+		}
+		// A file that cannot be read, and the usage errors of the other targets.
+		code, out, errOut = runCLI(t, "emit", "core", filepath.Join(t.TempDir(), "missing.ki"))
+		if code != 1 || out != "" || !strings.HasPrefix(errOut, "error: cannot read file `") {
+			t.Errorf("missing file: got %d %q %q, want 1, nothing on stdout and the error of a file that cannot be read", code, out, errOut)
+		}
+		code, out, errOut = runCLI(t, "emit", "core")
+		if wantErr := "ki emit: missing FILE\n" + usage; code != 2 || out != "" || errOut != wantErr {
+			t.Errorf("no file: got %d %q %q, want 2 \"\" %q", code, out, errOut, wantErr)
+		}
+		code, out, errOut = runCLI(t, "emit", "core", "--diagnostics=xml", path)
+		if wantErr := "ki emit: invalid --diagnostics value \"xml\" (want human, short or json)\n" + usage; code != 2 || out != "" || errOut != wantErr {
+			t.Errorf("bad format: got %d %q %q, want 2 \"\" %q", code, out, errOut, wantErr)
 		}
 	})
 	t.Run("emit_dump_before_diagnostics", func(t *testing.T) {

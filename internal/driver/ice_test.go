@@ -6,8 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/internal/core"
 )
 
 // TestMain clears KI_DEBUG_PANIC_IN before any test runs. Main reads it from the
@@ -130,6 +134,21 @@ func checkICE(t *testing.T, what string, code int, stdout, stderr, pass string) 
 	}
 }
 
+// raised runs f and returns what it panicked with, or nil if it returned.
+func raised(f func()) (r any) {
+	defer func() { r = recover() }()
+	f()
+	return nil
+}
+
+// newSession returns a Session whose hook, DebugPanicIn, is debugPanicIn, with
+// no stdin and nothing written to stdout or stderr.
+func newSession(debugPanicIn string) *Session {
+	s := NewSession(strings.NewReader(""), io.Discard, io.Discard)
+	s.DebugPanicIn = debugPanicIn
+	return s
+}
+
 func TestICE(t *testing.T) {
 	t.Run("debug_hook_exits_70", func(t *testing.T) {
 		path := writeKi(t, "fn main() {}\n")
@@ -140,7 +159,7 @@ func TestICE(t *testing.T) {
 
 		// The hook fires in the pass it names, in each command that runs the
 		// pass (check in ki check was the run above): the lexer and the parser
-		// also in emit.
+		// also in emit, and every pass up to Core in emit core.
 		for _, row := range []struct {
 			pass string
 			args []string
@@ -151,6 +170,12 @@ func TestICE(t *testing.T) {
 			{"lex", []string{"emit", "tokens", path}},
 			{"lex", []string{"emit", "ast", path}},
 			{"parse", []string{"emit", "ast", path}},
+			{"lex", []string{"emit", "core", path}},
+			{"parse", []string{"emit", "core", path}},
+			{"resolve", []string{"emit", "core", path}},
+			{"check", []string{"emit", "core", path}},
+			{"elaborate", []string{"emit", "core", path}},
+			{"lint", []string{"emit", "core", path}},
 		} {
 			t.Setenv("KI_DEBUG_PANIC_IN", row.pass)
 			code, stdout, stderr := runCLI(t, row.args...)
@@ -196,21 +221,20 @@ func TestICE(t *testing.T) {
 		if code, stdout, stderr := runCLI(t, "emit", "tokens", path); code != 0 || stdout == "" || stderr != "" {
 			t.Errorf("ki emit tokens with the hook in check: exit code %d, stdout %q, stderr %q, want 0, the tokens and nothing on stderr", code, stdout, stderr)
 		}
+		// The passes after the checker run only where Core is made: neither
+		// ki check nor ki emit ast gets as far as elaborating.
+		for _, pass := range []string{"elaborate", "lint"} {
+			t.Setenv("KI_DEBUG_PANIC_IN", pass)
+			if code, stdout, stderr := runCLI(t, "check", path); code != 0 || stdout != "" || stderr != "" {
+				t.Errorf("ki check with the hook in %s: exit code %d, stdout %q, stderr %q, want 0 and nothing written", pass, code, stdout, stderr)
+			}
+			if code, stdout, stderr := runCLI(t, "emit", "ast", path); code != 0 || stdout == "" || stderr != "" {
+				t.Errorf("ki emit ast with the hook in %s: exit code %d, stdout %q, stderr %q, want 0, the tree and nothing on stderr", pass, code, stdout, stderr)
+			}
+		}
 	})
 
 	t.Run("run_pass_unwinds_with_the_ice", func(t *testing.T) {
-		// raised runs f and returns what it panicked with, or nil.
-		raised := func(f func()) (r any) {
-			defer func() { r = recover() }()
-			f()
-			return nil
-		}
-		newSession := func(debugPanicIn string) *Session {
-			s := NewSession(strings.NewReader(""), io.Discard, io.Discard)
-			s.DebugPanicIn = debugPanicIn
-			return s
-		}
-
 		ran := false
 		if r := raised(func() { newSession("").runPass("parse", func() { ran = true }) }); r != nil || !ran {
 			t.Errorf("a pass that returns: runPass panicked with %v (ran %v), want it to return after running the pass", r, ran)
@@ -230,6 +254,64 @@ func TestICE(t *testing.T) {
 		}
 		if ran {
 			t.Errorf("the hook is set to panic on entry, but the pass ran")
+		}
+	})
+
+	t.Run("lint_violation_is_ice", func(t *testing.T) {
+		// program returns a Program with unbound functions, each of which reads
+		// a variable that nothing binds: the functions are f0, f1… and their
+		// variables x0, x1…, spelled by in. With 0 it returns a valid Program,
+		// with one function that is `()`.
+		program := func(in *base.Interner, unbound int) *core.Program {
+			b := &core.Builder{P: &core.Program{}}
+			for i := 0; i < unbound; i++ {
+				v := b.P.Vars.Push(core.Var{Name: in.InternString("x" + strconv.Itoa(i))})
+				b.P.Funs.Push(core.Fun{Name: in.InternString("f" + strconv.Itoa(i)), Body: b.VarRef(base.Span{}, v), HasBody: true, FrameSize: 1})
+			}
+			if unbound == 0 {
+				b.P.Funs.Push(core.Fun{Name: in.InternString("f0"), Body: b.LitUnit(base.Span{}), HasBody: true})
+			}
+			return b.P
+		}
+
+		// The path of a real violation: Lint finds it, lintOrPanic panics with
+		// it and guard turns the panic into the ICE of the pass lint, whose
+		// stack goes through lintOrPanic.
+		in := base.NewInterner()
+		ice := guard("lint", func() { lintOrPanic(program(in, 1), in) })
+		if ice == nil {
+			t.Fatal("guard returned nil for a Program with an unbound variable")
+		}
+		if want := "internal compiler error: lint: fun f0: unbound variable `x0`"; ice.Error() != want {
+			t.Errorf("Error() = %q, want %q", ice.Error(), want)
+		}
+		if !strings.HasPrefix(ice.Error(), "internal compiler error: lint: fun ") || !strings.Contains(ice.Error(), "unbound") {
+			t.Errorf("Error() = %q, want it to start with \"internal compiler error: lint: fun \" and contain \"unbound\"", ice.Error())
+		}
+		if !strings.Contains(string(ice.Stack), "lintOrPanic") {
+			t.Errorf("the stack does not go through lintOrPanic: %q", ice.Stack)
+		}
+
+		// Every violation is in the report, one for each line.
+		ice = guard("lint", func() { lintOrPanic(program(in, 2), in) })
+		if want := "internal compiler error: lint: fun f0: unbound variable `x0`\nfun f1: unbound variable `x1`"; ice == nil || ice.Error() != want {
+			t.Errorf("a Program with two violations: guard returned %v, want the ICE %q", ice, want)
+		}
+
+		// A valid Program is not a report.
+		if ice := guard("lint", func() { lintOrPanic(program(in, 0), in) }); ice != nil {
+			t.Errorf("lintOrPanic of a valid Program made the ICE %q, want none", ice.Error())
+		}
+
+		// The Session's pass wraps it the same way, and so unwinds the command:
+		// the panic is the *ICE.
+		s := newSession("")
+		r := raised(func() { s.lint(program(s.Interner, 1)) })
+		if ice, ok := r.(*ICE); !ok || ice.Pass != "lint" || ice.Value != "fun f0: unbound variable `x0`" {
+			t.Errorf("Session.lint of a Program with an unbound variable panicked with %#v, want the *ICE of pass \"lint\" with the violation as value", r)
+		}
+		if r := raised(func() { s.lint(program(s.Interner, 0)) }); r != nil {
+			t.Errorf("Session.lint of a valid Program panicked with %#v, want it to return", r)
 		}
 	})
 

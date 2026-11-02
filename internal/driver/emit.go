@@ -4,12 +4,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aldezex/kilang/internal/core"
 	"github.com/aldezex/kilang/internal/syntax"
 )
 
 // runEmit is `ki emit TARGET [--diagnostics=human|short|json] FILE`: it shows
 // what one stage of the compiler makes of FILE. The target comes first, and its
-// own flags and FILE after it. The targets are tokens and ast. A request for
+// own flags and FILE after it. The targets are tokens, ast and core. A request for
 // help (-h, -help or --help) in the place of the target gets the same answer as
 // after it, as in `ki emit tokens -h`: the usage line and exit code 0. Any other
 // flag there is not a target.
@@ -24,6 +25,8 @@ func runEmit(s *Session, c *command, args []string) int {
 		return emitTokens(s, c, args[1:])
 	case "ast":
 		return emitAST(s, c, args[1:])
+	case "core":
+		return emitCore(s, c, args[1:])
 	}
 	return usageError(s, c, fmt.Errorf("unknown target `%s`", args[0]))
 }
@@ -65,6 +68,33 @@ func emitAST(s *Session, c *command, args []string) int {
 		return 1
 	}
 	return finishEmit(s, c, syntax.PrintModule(f.Modules[f.User], s.Interner))
+}
+
+// emitCore is `ki emit core`: it parses and analyzes FILE, with the prelude,
+// elaborates it to Core, checks the Core with Lint and prints the functions of
+// FILE on stdout (see core.Print), and then the diagnostics on stderr. The
+// prelude's functions are not printed, and FILE needs no `main`.
+//
+// Core is made only for a program without errors, so a file that has any, in the
+// front end, gets its diagnostics, exit code 1 and nothing on stdout: there is no
+// Core to show. It is not an ICE: the program is at fault, not the compiler.
+func emitCore(s *Session, c *command, args []string) int {
+	path, code, done := fileArgs(s, c, args)
+	if done {
+		return code
+	}
+	f, ok := s.LoadAndParse(path)
+	if !ok {
+		return 1
+	}
+	s.Analyze(f)
+	if s.Sink.HasErrors() {
+		s.ReportAll()
+		return 1
+	}
+	p := s.Lower(f)
+	s.lint(p)
+	return finishEmit(s, c, core.Print(p, s.Interner))
 }
 
 // finishEmit ends every target of `ki emit` the same way, so that the order

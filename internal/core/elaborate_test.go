@@ -106,21 +106,27 @@ func elabWant(t *testing.T, c *testsupport.Compiled, name, want string) {
 	}
 }
 
-// elabStackCap is the stack, in bytes, that elabCompileCapped lets Go use.
+// elabStackCap is the stack, in bytes, that withStackCap lets Go use.
 const elabStackCap = 1 << 20
 
-// elabCompileCapped is testsupport.Compile with the stack of Go capped at
-// elabStackCap, and the cap lifted when it returns. The cap is what makes a
-// recursion over the statements of a block show: the default limit is 1 GB, and
-// a frame for each of 100 000 statements would fit in it without anyone
-// noticing. Past the cap Go does not panic: it ends the whole test binary with
-// `fatal error: stack overflow`. The cap is of the process, so the tests of this
-// package must not run in parallel (none does).
-func elabCompileCapped(t *testing.T, source string) *testsupport.Compiled {
-	t.Helper()
+// withStackCap runs f with the stack of Go capped at elabStackCap, and lifts the
+// cap when f returns, also if it panics. The cap is what makes a recursion over
+// the statements of a block show: the default limit is 1 GB, and a frame for
+// each of 100 000 statements would fit in it without anyone noticing. Past the
+// cap Go does not panic: it ends the whole test binary with `fatal error: stack
+// overflow`. The cap is of the process, so the tests of this package must not
+// run in parallel (none does).
+func withStackCap(f func()) {
 	old := debug.SetMaxStack(elabStackCap)
 	defer debug.SetMaxStack(old)
-	return testsupport.Compile(t, source)
+	f()
+}
+
+// elabCompileCapped is testsupport.Compile under withStackCap.
+func elabCompileCapped(t *testing.T, source string) (c *testsupport.Compiled) {
+	t.Helper()
+	withStackCap(func() { c = testsupport.Compile(t, source) })
+	return c
 }
 
 // elabRaised runs f and returns what it panicked with, or nil if it returned.
