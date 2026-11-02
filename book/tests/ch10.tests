@@ -1,0 +1,132 @@
+[T10.01] value.show                                        level: core
+kind:    unit (go test)      file: internal/interp/value_internal_test.go
+case:    `Show` escribe cada forma de valor: un `Int` en decimal (también negativo y en los dos extremos de un `int64`), un `Bool` como `true` o `false`, la unidad como `()` y cualquier función como `<fn>`
+input:   `IntV{42}`, `IntV{0}`, `IntV{-7}`, `IntV{MaxInt64}`, `IntV{MinInt64}`, `BoolV{true}`, `BoolV{false}`, `UnitV{}`, `FunV{Fun: 0}` y `FunV{Fun: 3}`
+expect:  exactamente `42`, `0`, `-7`, `9223372036854775807`, `-9223372036854775808`, `true`, `false`, `()`, `<fn>` y `<fn>`
+why:     un valor se escribe de una sola manera, y el texto de un `Int` es donde un conversor
+         equivocado se delata: el que pasa por un tipo más estrecho o por uno sin signo falla en el
+         negativo y en los extremos del `int64`, que por eso están. Los dos valores de `Bool` van
+         los dos porque una rama cambiada solo se ve con uno de ellos, y la función sale sin nombre,
+         la 0 igual que la 3, porque un `Value` no sabe el de su `Fun`
+ref:     TestValue/show
+
+[T10.02] value.unknown_value_is_unreachable                level: core
+kind:    unit (go test)      file: internal/interp/value_internal_test.go
+case:    `Show` de un valor que el paquete no define hace un `panic` con el texto `unreachable`
+input:   un `type fakeV struct{}` con el método `value()`, que solo se puede escribir dentro del paquete, pasado a `Show`
+expect:  `Show(fakeV{})` hace un `panic` y el valor que se recupera es exactamente la cadena `unreachable`
+why:     el type switch sobre una interfaz sellada termina en `default: panic("unreachable")` para
+         el día en que se añada una forma de valor y se olvide un switch: ese día el fallo es un
+         `panic` con su causa y no una cadena vacía que se imprime como si nada. Decir que una rama
+         «no puede pasar» obliga a comprobarlo, y aquí se fuerza con un valor que el paquete mismo
+         no tiene
+ref:     TestValue/unknown_value_is_unreachable
+
+[T10.03] machine.literal                                   level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una función cuyo cuerpo es un literal devuelve ese valor, `Int` (también el 0 y el máximo de un `int64`) o `Bool` (`true` y `false`), en un solo paso, sin ningún marco en la pila y con un solo entorno
+input:   `fn f() -> Int { 42 }`, `{ 0 }` y `{ 9223372036854775807 }`, y `fn f() -> Bool { true }` y `{ false }`, cada una llamada con `Call` y sin argumentos
+expect:  `Call` no informa de ningún panic y devuelve exactamente `IntV{42}`, `IntV{0}`, `IntV{MaxInt64}`, `BoolV{true}` y `BoolV{false}`; en cada una, `Stats()` es exactamente `{Steps: 1, MaxDepth: 0, MaxEnvs: 1}`
+why:     es lo más pequeño que la máquina evalúa, y fija qué cuenta cada contador desde el primer
+         paso: un literal es una evaluación y nada más. Un literal que pasara por un tipo más
+         estrecho perdería el máximo de un `int64`, y uno de `Bool` que ignorara su valor solo falla
+         con una de las dos ramas, por eso van las dos
+ref:     TestMachine/literal
+
+[T10.04] machine.unit_literal                              level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una función sin cola, cuyo cuerpo es el bloque vacío, devuelve la unidad en un solo paso y sin ningún marco
+input:   `fn f() {}`, llamada con `Call` y sin argumentos
+expect:  `Call` no informa de ningún panic y devuelve exactamente `UnitV{}`; `Stats()` es exactamente `{Steps: 1, MaxDepth: 0, MaxEnvs: 1}`
+why:     el `()` es el valor de un bloque sin cola y el de una función que no devuelve nada: una
+         máquina que lo confundiera con el `0` o con `false` haría que `main`, que devuelve `()`,
+         acabara con otro valor que el que el tipo promete
+ref:     TestMachine/unit_literal
+
+[T10.05] machine.let_binding                               level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un `let` evalúa su `Init`, escribe el valor en el slot de su variable y sigue con el cuerpo; cada variable tiene su slot, una variable de nombre repetido es otra variable, y un `let` dentro del `Init` de otro entrega el valor al marco más reciente
+input:   ocho funciones: `let x = 1; let y = x; y`; `let a = 1; let b = 2;` terminada en `a` y en `b`; `let u = (); let b = true; b` y `let b = true; let u = (); u`; `let x = 1; let x = 2; x` y `let x = 1; let y = x; let x = 2; y`; y `let a = { let b = 1; 2 }; let c = 3; a`
+expect:  `1`, `1`, `2`, `true`, `()`, `2`, `1` y `2`, como `IntV`, `BoolV` o `UnitV` según el caso; y en cada una `MaxEnvs` es 1 y `MaxDepth` es exactamente 1, salvo en la última, donde es 2 (dos `letFrame` esperando a la vez)
+why:     es lo que una máquina de pila hace con `let`, y los fallos van por parejas. Si todas las
+         variables se escribieran en el mismo slot, `a` valdría 2; si el valor se entregara al marco
+         más antiguo en vez del último que se empujó, el último caso daría 1 y no 2 (el `let c` es lo
+         que lo muestra: sin él esa máquina también acabaría en 2, por casualidad);
+         y `MaxDepth` exactamente 1 dice que el cuerpo no se evalúa dentro de un marco nuevo: al
+         aplicar el `letFrame` no se empuja nada. Una variable que se repite es otra, con su slot, y
+         la primera sigue viva
+ref:     TestMachine/let_binding
+
+[T10.06] machine.let_chain_uses_constant_stack             level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una cadena de 1000 `let`, cada uno con el valor del anterior, da el valor del primero con exactamente tres pasos por `let` más uno para la cola, y la pila nunca tiene más de un marco
+input:   `let x0 = 7`, `let x1 = x0`, … `let x999 = x998` y la cola `x999`
+expect:  `IntV{7}` y `Stats()` exactamente `{Steps: 3001, MaxDepth: 1, MaxEnvs: 1}`
+why:     un bloque es una cadena de `let`, y un bloque largo no puede hacer crecer la pila: el
+         cuerpo de un `let` es el control que sigue, no algo que se evalúe debajo de un marco más.
+         Con 1000 `let` la diferencia es 1 frente a 1000 en `MaxDepth`, y el número de pasos fija
+         además qué es un paso (evaluar el `Let`, evaluar su `Init`, aplicar su marco)
+ref:     TestMachine/let_chain_uses_constant_stack
+
+[T10.07] machine.call_binds_arguments                      level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `Call` guarda cada argumento en el slot de su parámetro, en orden, y los `let` de la función usan slots que no pisan los de los parámetros; el valor pasa tal cual sea cual sea su forma
+input:   `first`, `second` y `third` con tres parámetros, llamadas con 1, 2 y 3; `keepsParam(a, b) { let w = b; a }` y `readsLet(a, b) { let w = b; w }`, con 10 y 20; y funciones que devuelven su parámetro, llamadas con `BoolV{true}`, `UnitV{}`, `FunV{Fun: 7}` y `IntV{MinInt64}`
+expect:  `1`, `2`, `3`, `10`, `20`, `BoolV{true}`, `UnitV{}`, `FunV{Fun: 7}` e `IntV{MinInt64}`, exactamente, y `Call` no informa de ningún panic en ninguna
+why:     un orden invertido o un argumento en el slot equivocado da otro valor sin ningún error, y
+         por eso hay tres parámetros y se leen los tres. `keepsParam` falla si el slot del `let` se
+         reparte desde 0 y pisa a `a`, y `readsLet` si el valor no llega a donde se lee. La máquina
+         no tiene tipos (Core los borra), así que un `FunV` en un parámetro `Int` pasa sin que nada
+         lo mire: ese es el contrato
+ref:     TestMachine/call_binds_arguments
+
+[T10.08] machine.slots_come_from_the_variables             level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    el slot de una variable es el campo `Slot` de su `Var`, no la posición del argumento: `Call` y `Let` escriben ahí y `VarRef` lee de ahí
+input:   un programa hecho a mano con el `Builder`, en el que los parámetros `a` y `b` (variables 0 y 1) están en los slots 2 y 1 y la variable `w` de un `let` (variable 2) en el slot 0; `retA(a, b) = a` y `retLet(a, b) = let w = b; w`, llamadas con 10 y 20
+expect:  `retA` devuelve exactamente `IntV{10}` y `retLet` exactamente `IntV{20}`, y las dos llamadas devuelven `true`
+why:     la elaboración numera los slots 0, 1, 2… en el orden del fuente, así que en un programa
+         elaborado el slot de una variable coincide casi siempre con su posición, y una máquina que
+         usara la posición del argumento en lugar de `Slot` pasaría todos los demás tests. Aquí
+         no coinciden: esa máquina guardaría `a` en el slot 0, `retA` leería el 2, que está vacío,
+         y no devolvería el `10`. `retLet` hace lo mismo con el `let`: si su variable se escribe en
+         un slot y se lee de otro, no vuelve el `20`. Una máquina que usara el id como slot en
+         todas partes sí pasaría este test: los ids son de todo el programa y se salen del entorno
+         en cuanto una función anterior tiene variables, y los tests que compilan programas de
+         verdad la ven
+ref:     TestMachine/slots_come_from_the_variables
+
+[T10.09] machine.stats_accumulate_over_calls               level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    cada `Call` empieza con su propio entorno, sin el de la llamada anterior, y `Stats` sigue contando entre una llamada y la siguiente
+input:   `fn f(x: Int) -> Int { let y = x; y }` llamada dos veces seguidas en la misma máquina, con 5 y con 6
+expect:  la primera devuelve `IntV{5}` y `Stats()` es exactamente `{Steps: 4, MaxDepth: 1, MaxEnvs: 1}`; la segunda devuelve `IntV{6}` y `Stats()` es exactamente `{Steps: 8, MaxDepth: 1, MaxEnvs: 1}`; las dos llamadas devuelven `true`
+why:     los contadores describen lo que la máquina ha hecho en su vida, no en la última llamada, y
+         la llamada no debe heredar nada de la anterior: si dejara el entorno de la primera,
+         `MaxEnvs` pasaría a 2. Los cuatro pasos son el `Let`, la lectura de `x`, el marco y la
+         lectura de `y`. Que la pila también empiece vacía no se ve aquí: una llamada que acaba
+         bien la deja vacía, y eso lo ve T10.34, con una llamada que acaba en un panic
+ref:     TestMachine/stats_accumulate_over_calls
+
+[T10.10] machine.run_main                                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `RunMain` ejecuta la función `main` y no otra, termina con `Halt{Code: 0}` y no escribe nada en stdout ni en stderr
+input:   `fn helper() -> Int { let a = 1; let b = 2; a }` seguida de `fn main() { let x = 1 }`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 0}`; `Stats().Steps` es 4, los pasos de `main` (el `Let`, su `Init`, su marco y el `()` del final); y stdout y stderr quedan vacíos
+why:     `main` es por donde entra `ki run`, y es la función 2 del programa (la 0 es `print`, del
+         preludio): una máquina que ejecutara la primera función del fichero daría siete pasos y no
+         cuatro. Que no escriba nada es el punto de partida de los tests de panics, que esperan un
+         stderr exacto
+ref:     TestMachine/run_main
+
+[T10.11] machine.misuse_panics                             level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `Call` con un número de argumentos que no es el de parámetros, `Call` de una función sin cuerpo y `RunMain` en un programa sin `main` hacen un `panic` de Go con un texto que dice qué falló
+input:   `fn f(a: Int, b: Int) -> Int { a }` llamada con un argumento, con tres y con ninguno; `Call` del `print` del preludio, que no tiene cuerpo, con un argumento; y `RunMain` sobre un programa sin `main`
+expect:  el valor del `panic` es exactamente la cadena `interp: function N takes 2 arguments, but Call got K` (con K igual a 1, 3 y 0), `interp: Call of function N, which has no body` o `interp: RunMain on a program without a main function`, con N el id de la función
+why:     son errores de quien maneja la máquina desde Go, no de un programa de Ki, y un programa de
+         Ki nunca puede provocarlos. Sin la comprobación, faltar un argumento sería un `index out of
+         range` sin explicación, sobrar uno pasaría sin que nadie lo note, llamar a una función sin
+         cuerpo evaluaría una expresión de otra función y `RunMain` sin `main` llamaría a la función
+         0, que es `print`
+ref:     TestMachine/misuse_panics

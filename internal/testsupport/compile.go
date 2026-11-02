@@ -77,6 +77,23 @@ func Compile(t *testing.T, source string) *Compiled {
 	return &Compiled{Program: p, Core: p.Session.Lower(p.Frontend)}
 }
 
+// FunNamed returns the id in c.Core of the function that the user's file defines
+// with the name name. It does not look among the functions of the prelude: a
+// test calls its own functions, and the prelude's are not what its source
+// defines. It fails the test if the file defines no such function (a name has
+// one definition at most, because a second would be E0302 and Compile would
+// have failed).
+func FunNamed(t *testing.T, c *Compiled, name string) core.FunID {
+	t.Helper()
+	for id, f := range c.Core.Funs.All() {
+		if f.UserModule && c.Session.Interner.String(f.Name) == name {
+			return id
+		}
+	}
+	t.Fatalf("the file defines no function called %q", name)
+	panic("unreachable")
+}
+
 // Resolve parses source like Analyze and runs name resolution only: p.Frontend
 // has Resolved and no Typed, and the errors are those of the lexer, the parser
 // and Resolve. It is for the tests of what a name stands for, whose sources
