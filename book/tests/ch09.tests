@@ -1,0 +1,168 @@
+[T09.01] builder.creates_let                               level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Builder.Let` crea un nodo `Let` que guarda la variable que liga, su `Init` y su `Body` cada uno en su campo, con su span; los ids salen en el orden en que se construyen los nodos; y un `Let` dentro del `Body` de otro guarda también bien sus dos hijos
+input:   dos variables (la que se usa es la de id 1); `LitInt` 42, `VarRef` a la variable 1 y el `Let` que los une; después, un `Let` cuyo `Init` es un `LitInt` y cuyo `Body` es otro `Let` (con un `LitUnit` y un `VarRef` a la variable 1)
+expect:  el programa tiene exactamente 3 expresiones, con los ids 0 (el literal), 1 (la referencia) y 2 (el `Let`); el `Let` es exactamente `{Kind: Let, Span, Var: 1, Init: 0, Body: 1}`, el literal es un `LitInt` de valor 42 y la referencia es un `VarRef` a la variable 1; en el caso anidado, el `Let` exterior y el interior son exactamente los esperados, con su span, la variable 1 y sus `Init` y `Body`, ninguno de los cuales tiene el id 0
+why:     `Init` y `Body` son dos ids del mismo tipo, y escribir cada uno en el campo del otro
+         compila y no lo delata ningún tipo: `let x = 1; x` se evaluaría como si el cuerpo fuera el
+         valor ligado. Por eso el `Init` es un literal y el `Body` una referencia, y el test los
+         compara con el nodo entero y no con un campo suelto. Y por eso el segundo caso: un campo
+         que nadie escribe vale 0, así que en el primer caso, donde el `Init` es la expresión 0, un
+         `Let` que olvidara guardarlo pasaría; en el anidado ningún hijo tiene el id 0
+ref:     TestBuilder/creates_let
+
+[T09.02] builder.creates_literals_and_refs                 level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    los constructores de hojas (`LitInt`, `LitBool` con `true` y con `false`, `LitUnit`, `VarRef` y `FunRef`) crean un nodo de su clase con su valor y su span y ningún otro campo, y no tocan los pools
+input:   `LitInt` con `math.MinInt64`, `LitBool` con `true` y con `false`, `LitUnit`, `VarRef` a la variable 3 y `FunRef` a la función 5, todos con spans distintos y en ese orden
+expect:  seis expresiones con los ids 0 a 5 en ese orden, cada una exactamente igual a la `Expr` esperada (su clase, su span y solo su campo: `Int`, `Bool`, `Var` o `Fun`); `ExprPool` y `ArmPool` siguen vacíos
+why:     cada hoja usa un campo distinto de la misma `Expr`, y un constructor que escribiera su
+         valor en el campo vecino (el `FunRef` en `Var`, la clase de un `LitBool` en la de un
+         `LitInt`) daría otro nodo, sin ningún error de Go: más adelante, una llamada `g(1)` se
+         imprimiría `print(1)`, un `let b = true` se imprimiría `let b = 0`, y los dos se
+         ejecutarían mal. Por eso se compara el nodo entero, que falla también si sobra un campo.
+         `false` es el valor de un campo que nadie escribe: un `LitBool` que ignorara su valor
+         daría el nodo correcto para `false` y solo lo delata el `true`, y el mínimo de `int64` es
+         el valor que perdería un constructor que guardara un tipo más estrecho. Una hoja no tiene
+         hijos, así que los pools no crecen
+ref:     TestBuilder/creates_literals_and_refs
+
+[T09.03] builder.creates_calls_and_prims                   level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Call` y `Prim` guardan lo que llaman (el callee o la primitiva) y copian sus argumentos en `ExprPool`, cada lista a continuación de la anterior y en orden; `Program.Args` devuelve la lista de un rango con la capacidad recortada a su longitud; y el constructor no se queda con el slice del llamador
+input:   tres literales (1, 2 y 3) y una `FunRef`; `Call(f, [1, 2])`, `Call(f, nil)`, `Prim(AddInt, [1, 3])` y `Prim(NegInt, [2])`; después, un `Call` cuyo slice de argumentos cambia el llamador al volver
+expect:  cada nodo es exactamente el esperado: clase `Call` o `PrimCall`, su span, el callee o la primitiva y el rango de argumentos `{0, 2}`, `{2, 0}`, `{2, 2}` y `{4, 1}`; `ExprPool` es la concatenación de las cuatro listas, en orden (los literales 1 y 2, 1 y 3, y 2); `Args` de cada rango da su lista, con `cap` igual a `len`; añadir un elemento a la lista del primer `Call` no cambia `ExprPool`; y los argumentos del último `Call` siguen siendo los que se pasaron, aunque el llamador cambie su slice
+why:     una llamada con argumentos intercalados con los de otra, o con un rango corrido una
+         posición, ejecutaría otra llamada sin ningún error: por eso el test fija el rango de cada
+         lista y el contenido del pool entero, y comprueba la lista vacía, que es el borde (`First`
+         es el final del pool, `Count` es 0). La capacidad recortada impide que un `append` sobre
+         una lista pise el primer elemento de la siguiente, y la copia impide que el llamador cambie
+         después una llamada que ya está en el programa
+ref:     TestBuilder/creates_calls_and_prims
+
+[T09.04] builder.creates_match                             level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Match` guarda el escrutinio (el valor que compara con los patrones) y copia sus brazos en `ArmPool`, cada lista a continuación de la anterior y en orden; `Program.ArmsOf` devuelve los brazos de un rango con la capacidad recortada; y los brazos no se guardan en `ExprPool`
+input:   una condición que no es la expresión 0; un `Match` con los brazos `true` y `false`, y otro con el brazo `_`
+expect:  cada `Match` es exactamente el esperado: clase `Match`, su span, el escrutinio y el rango de brazos `{0, 2}` y `{2, 1}`; `ArmPool` tiene los tres brazos en orden, con su patrón y su cuerpo; `ArmsOf` de cada rango da sus brazos, con `cap` igual a `len`; y `ExprPool` sigue vacío
+why:     un `if` se elabora a un `Match` con dos brazos, y un brazo con el patrón cambiado o el
+         cuerpo del otro ejecutaría la rama equivocada sin avisar; los brazos son valores, no nodos,
+         y viven en su propio pool. El escrutinio tiene un id que no es 0 por la misma razón que en
+         `creates_let`: un campo sin escribir vale 0
+ref:     TestBuilder/creates_match
+
+[T09.05] prim.names                                        level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Prim.String` da el nombre de cada una de las 15 primitivas, y un valor que no es una primitiva se escribe `Prim(n)` sin hacer un panic
+input:   las 15 primitivas, de `PrimAddInt` a `PrimNotBool`; `PrimNotBool + 1` y `Prim(255)`
+expect:  `add_int`, `sub_int`, `mul_int`, `div_int`, `rem_int`, `neg_int`, `eq_int`, `ne_int`, `lt_int`, `le_int`, `gt_int`, `ge_int`, `eq_bool`, `ne_bool` y `not_bool`, por ese orden; los otros dos valores se escriben `Prim(15)` y `Prim(255)`
+why:     el volcado de Core (`ki emit core`) nombrará cada primitiva por este texto, y una tabla
+         corrida una posición haría que imprimiera `sub_int` donde está la suma. Con solo `add_int`
+         y `not_bool`, los dos extremos, un nombre intercambiado en el medio pasaría; por eso se
+         comprueban las 15. `Prim(15)` es el primer valor que ya no es una primitiva: fija que la
+         tabla tiene 15 entradas y que un valor fuera de ella no hace un panic al escribirse
+ref:     TestPrim/names
+
+[T09.06] prim.arity                                        level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Arity` es 1 para `PrimNegInt` y `PrimNotBool` y 2 para las otras 13 primitivas
+input:   las 15 primitivas, de `PrimAddInt` a `PrimNotBool`
+expect:  1 para `neg_int` y `not_bool`; 2 para las otras trece
+why:     Lint comprobará cada `PrimCall` contra esta aridad: si una comparación dijera 1, o
+         `not_bool` dijera 2, rechazaría programas bien hechos o dejaría pasar una llamada con un
+         argumento de más o de menos. Las dos primitivas de un argumento son las únicas, y el test
+         recorre las 15 para que ninguna otra lo sea
+ref:     TestPrim/arity
+
+[T09.07] guard.nil_without_panic                           level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    `guard` ejecuta la función que recibe y, si esta vuelve sin hacer un panic, devuelve `nil`
+input:   una función que anota que se ha ejecutado, con el nombre de pase `lex`
+expect:  `guard` devuelve `nil` y la función se ha ejecutado
+why:     `guard` rodea cada pase de cada comando, así que un `guard` que devolviera un informe sin
+         que hubiera un panic haría que todo programa terminara con un ICE, y uno que no ejecutara
+         la función haría que ningún pase corriera; ninguno de los dos se vería en un test que solo
+         mirara el caso del panic
+ref:     TestGuard/nil_without_panic
+
+[T09.08] guard.captures_panic_value_and_stack              level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    cuando la función hace un panic, `guard` lo recupera y devuelve un `ICE` con el pase, el valor exacto y la pila del momento del panic, y su `Error` escribe el valor como `%v`
+input:   `guard("elaborate", …)` con `panic("boom")`; una función con nombre, `explode`, que hace ese panic; un panic con un `error`, uno con un número y un acceso fuera de rango al índice 3 de un slice vacío
+expect:  `Pass` es `elaborate`, `Value` es el string `boom` y `Error()` es `internal compiler error: elaborate: boom`; `Stack` contiene `goroutine`, y la de `explode` contiene `driver.explode`; el `Value` de los panics con un `error` y con un número es el mismo valor que se pasó, y sus `Error()` son `internal compiler error: check: bad state` e `internal compiler error: check: 42`; el acceso fuera de rango da `internal compiler error: check: runtime error: index out of range [3] with length 0`
+why:     un ICE es útil por su pila, porque dice dónde está el fallo del compilador; si `guard` la
+         tomara después de que el panic haya desenrollado, vería solo a sus llamadores, y `explode`
+         es el test de que ve la función que falló. Guardar el valor tal cual (y no su texto) deja
+         que quien lo reciba lo inspeccione, y `%v` es lo que escribe bien un `error`, un número y
+         los errores del propio runtime de Go, que son los panics más comunes de un compilador con
+         un índice mal calculado
+ref:     TestGuard/captures_panic_value_and_stack
+
+[T09.09] ice.debug_hook_exits_70                           level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    con `KI_DEBUG_PANIC_IN` igual al nombre de un pase, ese pase hace un panic al empezar, el comando termina con el código 70 y stderr es el informe del ICE (el mensaje, un salto de línea y la pila) y nada más delante; vale para los cuatro pases que ejecuta algún comando y en cada comando que los ejecuta; y los diagnósticos que un pase anterior ya había encontrado no se escriben junto al informe
+input:   `KI_DEBUG_PANIC_IN=check` y `ki check` de un fichero válido (`fn main() {}`); y, con el gancho en cada pase: `ki check` con `lex`, `parse` y `resolve`, `ki emit tokens` con `lex` y `ki emit ast` con `lex` y con `parse`; y `ki check` de un fichero con un error de sintaxis (`fn main( {}`), primero sin el gancho y después con el gancho en `resolve`
+expect:  en cada caso el código de salida es 70, stdout está vacío y stderr empieza por `internal compiler error: <pase>: debug panic requested` y un salto de línea, y lo que sigue empieza por `goroutine `; el fichero con el error de sintaxis, sin el gancho, sale con 1, deja stdout vacío y escribe un stderr que empieza por `error[E0201]: `, y con el gancho en `resolve` sale con 70 con ese mismo informe y su stderr no contiene `error[`
+why:     un ICE tiene que acabar en un informe y en un código que lo distinga de un error del
+         programa (1), y la única forma de probar de verdad esa frontera sin un fallo real del
+         compilador es hacer fallar a propósito el pase. Cada pase tiene su nombre en el mensaje (si
+         dos pases compartieran el nombre, el informe mentiría sobre cuál falló), y `ki emit`
+         ejecuta el lexer y el parser como `ki check`: el gancho comprueba que ninguno de esos
+         comandos llama a un pase sin la frontera. Que stdout quede vacío y que la pila empiece
+         justo después del mensaje es lo que hace el informe legible por un script. Y el error que
+         el parser ya había encontrado no se escribe: es el de una compilación que se interrumpió a
+         medias, y el informe es lo único que hay que atender. Si algún día se quiere enseñarlo,
+         `catchICE` es el único sitio, y esta fila cambia con él. El mismo fichero sin el gancho
+         escribe su error, para que la fila no pase por no tener nada que escribir
+ref:     TestICE/debug_hook_exits_70
+
+[T09.10] ice.debug_hook_names_one_pass                     level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    `KI_DEBUG_PANIC_IN` solo afecta al pase cuyo nombre coincide exactamente, y no a un comando que no ejecuta ese pase: `ki version`, que no ejecuta ninguno, ni `ki emit tokens`, que no llega al pase `check`
+input:   `ki check` de un fichero válido con `KI_DEBUG_PANIC_IN` igual a cadena vacía, `bogus`, `Check`, `chec`, `checks` y `check,lex`; `ki version` y `ki emit tokens` con `KI_DEBUG_PANIC_IN=check`
+expect:  en los seis casos de `ki check`, el código de salida es 0 y no se escribe nada; `ki version` sale con 0, escribe lo mismo que sin la variable y nada en stderr; `ki emit tokens` sale con 0, escribe algo en stdout y nada en stderr
+why:     el gancho existe para probar la frontera sin ensuciar el uso normal: una comparación por
+         prefijo, por sufijo o por «contiene» haría que `chec` o `check,lex` rompieran un `ki check`
+         que nada tiene que ver, y una variable que hiciera un panic en cualquier comando, aunque no
+         ejecute el pase, rompería hasta `ki version`. La cadena vacía es la variable sin valor: no
+         nombra ningún pase
+ref:     TestICE/debug_hook_names_one_pass
+
+[T09.11] ice.run_pass_unwinds_with_the_ice                 level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    `Session.runPass` ejecuta el pase y vuelve si este termina; si hace un panic, no vuelve: hace un panic con el `*ICE` (pase y valor); y con el gancho puesto en su nombre hace el panic antes de ejecutar el pase
+input:   una `Session` nueva y un pase que anota que se ha ejecutado; el mismo pase `parse` haciendo `panic("boom")`; y una `Session` con `DebugPanicIn` igual a `parse`
+expect:  el primer pase vuelve sin panic y se ha ejecutado; el segundo hace un panic con un `*ICE` de pase `parse` y valor `boom`; el tercero hace un panic con un `*ICE` de pase `parse` y valor `debug panic requested`, y el pase no llega a ejecutarse
+why:     después de un panic, el pase ha dejado a medias lo que construía (un `Frontend` sin módulo,
+         un buffer de tokens vacío), y el siguiente pase lo leería y haría otro panic que tapa la
+         causa; por eso `runPass` no devuelve el control, sino que desenrolla el comando hasta
+         `Main`. Y el gancho tiene que actuar al empezar: si el pase llegara a ejecutarse, un test
+         del gancho no probaría que el comando se interrumpe antes de cualquier trabajo
+ref:     TestICE/run_pass_unwinds_with_the_ice
+
+[T09.12] ice.other_panics_are_not_reports                  level: core
+kind:    unit (go test)      file: internal/driver/ice_test.go
+case:    `Main` solo convierte en informe el panic con un `*ICE` que hace un pase; el de un comando fuera de los pases lo vuelve a lanzar tal cual y no escribe nada
+input:   un comando de prueba, `explode`, añadido a la tabla de comandos, cuya función hace `panic("not a pass")`; `Main` con ese comando
+expect:  `Main` hace un panic con el valor `not a pass`, el mismo que se lanzó, y ni stdout ni stderr han recibido nada
+why:     el informe de un ICE dice «el fallo está en el pase tal»; un panic fuera de un pase (el
+         formato de diagnóstico desconocido de `ReportAll`, un error en un comando) no lo es, y
+         presentarlo como tal mentiría sobre su causa, o devolver un código de salida normal lo
+         escondería: el programa de quien lo usa saldría con 0 con el compilador roto
+ref:     TestICE/other_panics_are_not_reports
+
+[T09.13] list_range.slice_and_append_range                 level: core
+kind:    unit (go test)      file: internal/base/list_range_test.go
+case:    `Slice` devuelve los elementos que un `ListRange` elige de un pool, con la capacidad recortada a su longitud, y hace un panic con el error del runtime si el rango llega más allá del último elemento, aunque el pool tenga hueco libre detrás; `AppendRange` añade los elementos al final del pool y devuelve el rango que ocupan
+input:   un pool de 5 elementos (`a` a `e`) con capacidad 8, y seis rangos válidos (tres listas, el pool entero y una lista vacía al principio y otra al final); tres rangos cuyo final es la posición 6, una más allá del último elemento; y cuatro listas añadidas una tras otra a un pool vacío: `a b`, una lista vacía, `c` y `d e f`
+expect:  en cada rango válido, `Slice` da exactamente sus elementos, con `cap` igual a `len`, y un `append` sobre el resultado no cambia nada del pool, hueco libre incluido; los tres rangos de más hacen un panic con `runtime error: slice bounds out of range [::6] with capacity 5`; y `AppendRange` devuelve `{0, 2}`, `{2, 0}`, `{2, 1}` y `{3, 3}`, después de cada una el pool es la concatenación de las listas añadidas hasta entonces, y `Slice` con cada rango devuelve la lista que se añadió
+why:     el AST y Core guardan los hijos de un nodo como un `ListRange` sobre un pool, y un pool que
+         ha crecido con `append` tiene hueco detrás de su último elemento. Sin el recorte de la
+         capacidad, el `append` de quien recibe una lista pisaría el primer elemento de la lista
+         siguiente sin ningún error, y sin mirar la longitud antes de cortar, un rango que se pasa
+         del final leería ese hueco en lugar de hacer un panic y daría un árbol con hijos que no
+         existen. Los tests del parser ya lo comprueban de rebote; este test pone el contrato donde
+         vive, para que un cambio hecho mirando solo `base` o `core` lo note. Y `AppendRange` es lo
+         que hace que una lista sea contigua: un `First` o un `Count` mal calculado desplazaría todas
+         las listas que vienen detrás
+ref:     TestListRange

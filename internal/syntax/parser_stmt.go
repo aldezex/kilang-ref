@@ -130,7 +130,7 @@ func (p *parser) block() ExprID {
 	// and a ListRange must be contiguous.
 	return p.m.Exprs.Push(Expr{
 		Kind: ExprBlock, Span: p.spanFrom(open.Span),
-		Stmts: appendRange(&p.m.StmtPool, stmts), Tail: tail, HasTail: hasTail,
+		Stmts: base.AppendRange(&p.m.StmtPool, stmts), Tail: tail, HasTail: hasTail,
 	})
 }
 

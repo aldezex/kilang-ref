@@ -306,41 +306,16 @@ type Module struct {
 	AttrPool  []Attr
 }
 
-// slice returns the elements of pool that r selects. The result has its
-// capacity clipped to its length, so an append by the caller reallocates
-// instead of overwriting the first element of the next list in the pool.
-// It panics, with the runtime's slice bounds error, if r reaches past the end
-// of the pool.
-func slice[T any](pool []T, r base.ListRange) []T {
-	// A slice expression checks its upper bound against the capacity, not the
-	// length, and a pool that append has grown has spare room after its last
-	// element. Clipping the pool first makes the check use the length.
-	pool = pool[:len(pool):len(pool)]
-	end := r.First + r.Count
-	return pool[r.First:end:end]
-}
-
 // ExprList returns the expressions that r selects in ExprPool. The caller must
 // not change the elements. StmtList, Params and Attrs do the same for the
 // other pools.
-func (m *Module) ExprList(r base.ListRange) []ExprID { return slice(m.ExprPool, r) }
+func (m *Module) ExprList(r base.ListRange) []ExprID { return base.Slice(m.ExprPool, r) }
 
 // StmtList returns the statements that r selects in StmtPool.
-func (m *Module) StmtList(r base.ListRange) []StmtID { return slice(m.StmtPool, r) }
+func (m *Module) StmtList(r base.ListRange) []StmtID { return base.Slice(m.StmtPool, r) }
 
 // Params returns the parameters that r selects in ParamPool.
-func (m *Module) Params(r base.ListRange) []Param { return slice(m.ParamPool, r) }
+func (m *Module) Params(r base.ListRange) []Param { return base.Slice(m.ParamPool, r) }
 
 // Attrs returns the attributes that r selects in AttrPool.
-func (m *Module) Attrs(r base.ListRange) []Attr { return slice(m.AttrPool, r) }
-
-// appendRange appends items to *pool and returns the range they now occupy.
-// The parser collects the elements of a list in a slice of its own and appends
-// them in one go: a list that contains other lists (the arguments of a call
-// are expressions, which have arguments…) would otherwise end up with its
-// elements interleaved with theirs, and a ListRange has to be contiguous.
-func appendRange[T any](pool *[]T, items []T) base.ListRange {
-	first := uint32(len(*pool))
-	*pool = append(*pool, items...)
-	return base.ListRange{First: first, Count: uint32(len(items))}
-}
+func (m *Module) Attrs(r base.ListRange) []Attr { return base.Slice(m.AttrPool, r) }

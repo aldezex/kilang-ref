@@ -47,6 +47,16 @@ type Session struct {
 	Sink           diag.Sink
 	Interner       *base.Interner // the identifiers of the files lexed so far; NewSession makes it
 	Format         DiagFormat     // how ReportAll writes the diagnostics; one of the constants above
+	// DebugPanicIn is the name of the pass that panics on purpose when it
+	// starts ("lex", "parse", "resolve", "check"…), to try the ICE boundary (see
+	// runPass); empty means none. Main sets it from KI_DEBUG_PANIC_IN, and
+	// NewSession leaves it empty: a Session made with NewSession does not
+	// depend on the environment, but one that Main makes does. The tests of
+	// this package that go through Main clear the variable first, and so do
+	// those of package tests (the golden files and the error catalog also run
+	// the compiler through Main): see the TestMain of each. ci/ci-local.sh
+	// unsets it for the golden files that it runs through the real binary.
+	DebugPanicIn string
 }
 
 // NewSession returns a Session that reads from stdin and writes to stdout and

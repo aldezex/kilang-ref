@@ -5,12 +5,29 @@ package driver
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
 // Main runs the ki command line. It never calls os.Exit: it returns the exit code, so tests can call it in-process.
-func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+//
+// Every pass of the compiler that a command runs is under guard (see
+// Session.runPass). If one panics, the command stops at once, Main writes the
+// report of the internal compiler error to stderr (the message, a newline and
+// the stack) and returns ExitICE.
+//
+// What a command prints is not a pass: the printers (the dumps of `ki emit`)
+// and ReportAll run outside runPass. A panic in one of them is not an ICE:
+// catchICE raises it again, and ki ends with Go's own report of the panic and
+// exit code 2, which is also the code of a wrong command line.
+//
+// The environment variable KI_DEBUG_PANIC_IN names a pass that panics on
+// purpose when it starts, to try that boundary: "ki check" with
+// KI_DEBUG_PANIC_IN=check ends with an ICE in the pass check.
+func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
 	s := NewSession(stdin, stdout, stderr)
+	s.DebugPanicIn = os.Getenv(debugPanicEnv)
+	defer s.catchICE(&code)
 	if len(args) > 0 {
 		for i := range commands {
 			if commands[i].Name == args[0] {

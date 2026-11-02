@@ -16,7 +16,9 @@ import (
 const usagePrefix = "usage: ki <command> [args]\ncommands: "
 
 // runCLI runs Main in-process with args and returns its exit code and what it
-// wrote to stdout and stderr. stdin is empty.
+// wrote to stdout and stderr. stdin is empty. Main reads KI_DEBUG_PANIC_IN from
+// the environment: TestMain clears it, and a test of the hook sets it with
+// t.Setenv before calling runCLI.
 func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut strings.Builder

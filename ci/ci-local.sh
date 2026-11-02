@@ -20,6 +20,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # file. GOWORK=off keeps a go.work file out of the way.
 export GOTOOLCHAIN=local GOFLAGS= GOENV=off GOWORK=off
 
+# KI_DEBUG_PANIC_IN makes the pass it names panic on purpose (see
+# internal/driver/ice.go). Exported by mistake it would make every golden file
+# that reaches that pass fail in step 7, where the real binary runs them and
+# reads the environment. The tests of steps 5 and 6 clear it themselves.
+unset KI_DEBUG_PANIC_IN
+
 # 1. The installed Go is the one this tree's go.mod asks for. The script reads
 #    the toolchain line of go.mod instead of a literal, so an old tag is still
 #    checked against its own patch release of Go.

@@ -63,9 +63,35 @@ func (v *IdVec[I, T]) All() iter.Seq2[I, T] {
 }
 
 // ListRange is a slice of a shared pool: the elements pool[First : First+Count].
-// The AST and Core will store the children of a node as a ListRange into one
-// pool per node kind (nothing uses it yet), instead of one small slice per
-// node, so that nodes hold no pointers and a whole tree is a few big arrays.
+// The syntax tree and Core store the children of a node as a ListRange into one
+// pool per node kind, instead of one small slice per node, so that nodes hold
+// no pointers and a whole tree is a few big arrays. Slice reads a range and
+// AppendRange makes one.
 type ListRange struct {
 	First, Count uint32
+}
+
+// Slice returns the elements of pool that r selects. The result has its
+// capacity clipped to its length, so an append by the caller reallocates
+// instead of overwriting the first element of the next list in the pool.
+// It panics, with the runtime's slice bounds error, if r reaches past the end
+// of the pool.
+func Slice[T any](pool []T, r ListRange) []T {
+	// A slice expression checks its upper bound against the capacity, not the
+	// length, and a pool that append has grown has spare room after its last
+	// element. Clipping the pool first makes the check use the length.
+	pool = pool[:len(pool):len(pool)]
+	end := r.First + r.Count
+	return pool[r.First:end:end]
+}
+
+// AppendRange appends items to *pool and returns the range they now occupy.
+// A pass collects the elements of a list in a slice of its own and appends them
+// in one go: a list that contains other lists (the arguments of a call are
+// expressions, which have arguments…) would otherwise end up with its elements
+// interleaved with theirs, and a ListRange has to be contiguous.
+func AppendRange[T any](pool *[]T, items []T) ListRange {
+	first := uint32(len(*pool))
+	*pool = append(*pool, items...)
+	return ListRange{First: first, Count: uint32(len(items))}
 }

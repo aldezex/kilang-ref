@@ -439,5 +439,5 @@ func (p *parser) callArgs(open Token) (base.ListRange, bool) {
 	if !p.expectClose(RParen, "`)`", open) {
 		return base.ListRange{}, false
 	}
-	return appendRange(&p.m.ExprPool, args), true
+	return base.AppendRange(&p.m.ExprPool, args), true
 }

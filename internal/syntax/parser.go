@@ -348,7 +348,7 @@ func (p *parser) attrs() (base.ListRange, bool) {
 		list = append(list, a)
 		p.skipNewlines()
 	}
-	return appendRange(&p.m.AttrPool, list), true
+	return base.AppendRange(&p.m.AttrPool, list), true
 }
 
 // attr reads one attribute:
@@ -444,7 +444,7 @@ func (p *parser) params(open Token) (base.ListRange, bool) {
 	if !p.expectClose(RParen, "`)`", open) {
 		return base.ListRange{}, false
 	}
-	return appendRange(&p.m.ParamPool, list), true
+	return base.AppendRange(&p.m.ParamPool, list), true
 }
 
 // param reads one parameter: param = lower [ ':' type ].

@@ -43,7 +43,7 @@ func emitTokens(s *Session, c *command, args []string) int {
 	if !ok {
 		return 1
 	}
-	tb := syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
+	tb := s.lex(id)
 	return finishEmit(s, c, syntax.DumpTokens(&tb, &s.Sources, s.Interner))
 }
 

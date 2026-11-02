@@ -38,6 +38,9 @@ type Frontend struct {
 // library embedded in the binary. Module 0 is the prelude ("std/prelude.ki")
 // and module 1 is the file. Lexical and syntax errors go to the session's
 // sink. The Session takes ownership of contents, as SourceManager.Add does.
+//
+// If the lexer or the parser panics, ParseSource does not return: it panics
+// with the *ICE (see runPass), which Main turns into the report.
 func (s *Session) ParseSource(displayPath string, contents []byte) *Frontend {
 	return s.parseFiles(s.Sources.Add(displayPath, contents))
 }
@@ -45,7 +48,8 @@ func (s *Session) ParseSource(displayPath string, contents []byte) *Frontend {
 // LoadAndParse reads the file at path and does what ParseSource does with it.
 // If the file cannot be read it writes "error: cannot read file `<path>`:
 // <reason>" to stderr and returns nil and false. The exit code, 1, is for the
-// caller to return.
+// caller to return. Like ParseSource, it panics with the *ICE if the lexer or
+// the parser panics.
 func (s *Session) LoadAndParse(path string) (*Frontend, bool) {
 	id, ok := s.load(path)
 	if !ok {
@@ -81,18 +85,28 @@ func (s *Session) parseFiles(user base.FileID) *Frontend {
 	}
 	f := &Frontend{User: userModule}
 	for _, id := range []base.FileID{s.Sources.Add(preludeDisplayPath, prelude), user} {
-		tb := syntax.Lex(&s.Sources, id, s.Interner, &s.Sink)
-		f.Modules = append(f.Modules, syntax.Parse(&tb, id, s.Interner, &s.Sink))
+		tb := s.lex(id)
+		var m *syntax.Module
+		s.runPass("parse", func() { m = syntax.Parse(&tb, id, s.Interner, &s.Sink) })
+		f.Modules = append(f.Modules, m)
 	}
 	return f
 }
 
-// Analyze runs the passes after the parser on f: so far, name resolution and
-// the type checker. Both run whether or not the file has errors, because what an
-// earlier pass could not understand has the error type, which the next one
-// never reports again. It reports to the session's sink and does not write
-// them; ReportAll does.
+// lex runs the lexer on the file id as the pass "lex" (see runPass). Both
+// parseFiles and `ki emit tokens` lex through it.
+func (s *Session) lex(id base.FileID) (tb syntax.TokenBuffer) {
+	s.runPass("lex", func() { tb = syntax.Lex(&s.Sources, id, s.Interner, &s.Sink) })
+	return tb
+}
+
+// Analyze runs the passes after the parser on f: so far, name resolution (the
+// pass "resolve") and the type checker (the pass "check"). Both run whether or
+// not the file has errors, because what an earlier pass could not understand
+// has the error type, which the next one never reports again. It reports to the
+// session's sink and does not write them; ReportAll does. If either pass
+// panics, Analyze does not return: it panics with the *ICE (see runPass).
 func (s *Session) Analyze(f *Frontend) {
-	f.Resolved = sema.Resolve(f.Modules, f.User, s.Interner, &s.Sink)
-	f.Typed = sema.Check(f.Modules, f.Resolved, s.Interner, &s.Sink)
+	s.runPass("resolve", func() { f.Resolved = sema.Resolve(f.Modules, f.User, s.Interner, &s.Sink) })
+	s.runPass("check", func() { f.Typed = sema.Check(f.Modules, f.Resolved, s.Interner, &s.Sink) })
 }
