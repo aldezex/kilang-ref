@@ -35,6 +35,25 @@
   --font-ui: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-code: "IBM Plex Mono", "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
   --measure: 70ch;
+  /* The scale of the page's air. */
+  --s-1: 8px; --s-2: 16px; --s-3: 24px; --s-4: 40px; --s-5: 64px; --s-6: 96px; --s-7: 128px;
+  /* What each thing takes from it. These are the values of a narrow window; a desktop screen sets them again below. */
+  --s-section: 52px; --s-section-below: 14px; --s-rule-below: 16px;
+  --s-h3: 34px; --s-h3-below: 8px; --s-h4: 24px; --s-h4-below: 6px;
+  --s-block: 22px; --s-para: 0.9em; --s-li: 0.2em; --s-fold-li: 0.5em; --s-hr: 32px;
+  --s-opener-above: 0px; --s-opener-below: 44px; --s-num-above: 6px; --s-h1-above: 10px;
+  --s-facts-above: 18px; --s-milestone-above: 4px;
+  --s-home-below: 36px; --s-lead-above: 16px; --s-start-above: 20px; --s-sync-above: 18px;
+  --s-end: 56px; --s-end-gap: 24px;
+  --s-case: 20px; --s-case-head: 6px; --s-case-field: 10px;
+  --size-h2: 29px; --weight-h2: 500; --size-h3: 22px; --size-h4: 17px; --size-num: 84px; --size-facts: 14px; --line-facts: 1.5;
+  --size-code: 13.5px; --code-x: 14px; --code-cap-y: 8px; --code-top: 8px; --code-bottom: 13px;
+  --size-table: 14px; --line-table: 1.45; --cell-x: 14px; --cell-y: 7px; --size-table-code: 12.5px;
+  --size-fold: 14px; --fold-y: 8px; --fold-indent: 24px; --fold-body-top: 6px; --fold-body-bottom: 12px; --fold-code-top: 4px; --fold-last: 8px;
+  --box-top: 11px; --box-right: 16px; --box-bottom: 12px; --box-left: 14px; --box-label-gap: 5px;
+  --size-case: 18px; --size-end-title: 26px;
+  --size-card: 20px; --size-card-note: 13.5px; --line-card-note: 1.45; --card-y: 12px; --card-gap: 2px;
+  --toc-size: 14.5px; --toc-line: 1.28; --toc-top: 34px; --toc-row: 1.5px; --toc-brand-gap: 16px; --toc-overall-gap: 12px; --toc-open-gap: 2px 5px;
   --i-note: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v5.5M12 7.5v.01'/%3E%3C/svg%3E");
   --i-from: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4'/%3E%3C/svg%3E");
   --i-bug: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.5 8a3.5 3.5 0 0 1 7 0'/%3E%3Crect x='7' y='8' width='10' height='12' rx='5'/%3E%3Cpath d='M12 12v8M7 13H3M21 13h-4M7 17l-3 2M17 17l3 2M7.5 9.5 4 7M16.5 9.5 20 7'/%3E%3C/svg%3E");
@@ -69,32 +88,34 @@
 html, body { height: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 17px; line-height: 1.6; font-weight: var(--text-weight); font-optical-sizing: auto; font-variant-numeric: lining-nums; }
 .app { display: grid; grid-template-columns: 288px minmax(0, 1fr); min-height: 100%; }
+/* How far down the page the reader is: a line that never takes a click and never moves anything. */
+.reading-line { position: fixed; inset: env(safe-area-inset-top, 0px) 0 auto; z-index: 20; height: 2px; background: var(--red); transform: scaleX(0); transform-origin: 0 50%; pointer-events: none; }
 /* ---------- table of contents: the current part open, the others one line each, and the page's scrollbar the only one ---------- */
 .toc { box-sizing: border-box; position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto; scrollbar-width: none;
-  font-size: 14.5px; line-height: 1.28; padding-block: 34px 12px; border-right: 1px solid var(--rule);
+  font-size: var(--toc-size); line-height: var(--toc-line); padding-block: var(--toc-top) 12px; border-right: 1px solid var(--rule);
   padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: 18px; }
 .toc::-webkit-scrollbar { display: none; }
-.brand { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: 16px; }
+.brand { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: var(--toc-brand-gap); color: inherit; text-decoration: none; }
 .brand b { font-size: 42px; font-weight: 500; line-height: 1; color: var(--red); }
 .brand span { color: var(--ink-soft); font-size: 13px; line-height: 1.3; text-wrap: balance; }
-.overall { display: grid; gap: 2px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); font-family: var(--font-ui); }
+.overall { display: grid; gap: 2px; margin-bottom: var(--toc-overall-gap); padding-bottom: 10px; border-bottom: 1px solid var(--rule); font-family: var(--font-ui); }
 .overall .line { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: 12.5px; }
 .bar { height: 2px; margin-bottom: 7px; background: var(--rule); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--red); width: 0; }
-.part > summary { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: 1.5px 18px 1.5px 0; color: var(--ink-soft); cursor: pointer; list-style: none; }
+.part > summary { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: var(--toc-row) 18px var(--toc-row) 0; color: var(--ink-soft); cursor: pointer; list-style: none; }
 .part > summary::-webkit-details-marker { display: none; }
 .part > summary:hover { color: var(--ink); }
 .part > summary .num { text-align: right; font-variant-numeric: tabular-nums; }
 .part > summary .name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.part > summary::after { content: ""; position: absolute; right: 0; top: 7px; width: 12px; height: 12px; background-color: currentColor; transform: rotate(-90deg);
+.part > summary::after { content: ""; position: absolute; right: 0; top: calc(var(--toc-row) + 5.5px); width: 12px; height: 12px; background-color: currentColor; transform: rotate(-90deg);
   -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; }
 .part[open] > summary { color: var(--red); font-weight: 600; }
 .part[open] > summary .name { white-space: normal; }
 .part[open] > summary::after { transform: none; }
 .part-facts { margin: 0 0 2px 36px; font-family: var(--font-ui); font-size: 12px; color: var(--ink-soft); }
-.part[open] { margin-block: 2px 5px; }
+.part[open] { margin-block: var(--toc-open-gap); }
 .toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
-.toc li a, .toc li .soon { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 1.5px 0; color: var(--ink); text-decoration: none; }
+.toc li a, .toc li .soon { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: var(--toc-row) 0; color: var(--ink); text-decoration: none; }
 .toc li a:hover { color: var(--red); }
 .toc li a[aria-current="page"] { color: var(--red); font-weight: 600; }
 .toc li a[aria-current="page"] .num { box-shadow: -2px 0 0 var(--red); }
@@ -108,13 +129,13 @@ body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(
 main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
 .page { max-width: var(--measure); margin: 0 auto; }
 /* The opener: the part and the number in red, the title, one line of facts and the milestone. No band and no box. */
-.chapter-head { margin: 0 0 44px; }
+.chapter-head { margin: 0 0 var(--s-opener-below); padding-top: var(--s-opener-above); }
 .chapter-head p { margin: 0; }
 .eyebrow { display: block; font-family: var(--font-ui); font-size: 14px; font-weight: 500; line-height: 22px; color: var(--red); }
-.chapter-num { display: block; margin-top: 6px; font-size: 84px; font-weight: 300; line-height: 1; color: var(--red); }
-.chapter-head h1 { margin: 10px 0 0; font-size: 44px; font-weight: 400; line-height: 1.14; letter-spacing: -0.008em; text-wrap: balance; }
-.chapter-head .facts { margin-top: 18px; font-family: var(--font-ui); font-size: 14px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.chapter-head .milestone { margin-top: 4px; font-family: var(--font-ui); font-size: 14px; line-height: 1.5; color: var(--ink-soft); }
+.chapter-num { display: block; margin-top: var(--s-num-above); font-size: var(--size-num); font-weight: 300; line-height: 1; color: var(--red); }
+.chapter-head h1 { margin: var(--s-h1-above) 0 0; font-size: 44px; font-weight: 400; line-height: 1.14; letter-spacing: -0.008em; text-wrap: balance; }
+.chapter-head .facts { margin-top: var(--s-facts-above); font-family: var(--font-ui); font-size: var(--size-facts); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.chapter-head .milestone { margin-top: var(--s-milestone-above); font-family: var(--font-ui); font-size: var(--size-facts); line-height: var(--line-facts); color: var(--ink-soft); }
 .milestone span { font-weight: 600; color: var(--ink); }
 /* Code in a title is the size of its text: a mono is wide and dark, so it is set smaller, lighter and with closer words. */
 .page h1 code { font-size: 0.84em; font-weight: 300; letter-spacing: -0.02em; word-spacing: -0.3em; }
@@ -122,39 +143,41 @@ main { min-width: 0; padding-block: 32px 96px; padding-left: max(24px, env(safe-
 .page h3 code, .page h4 code { font-size: 0.88em; font-weight: 500; word-spacing: -0.2em; }
 .milestone code, .card small code { font-size: 0.92em; }
 .page h2, .page h3, .page h4 { text-wrap: balance; color: var(--ink); }
-.page h2 { font-size: 29px; font-weight: 500; line-height: 1.2; margin: 52px 0 14px; }
-.page > h2 { padding-top: 16px; border-top: 2px solid var(--red); }
-.page h3 { font-size: 22px; font-weight: 600; line-height: 1.3; margin: 34px 0 8px; }
-.page h4 { font-size: 17px; font-weight: 600; line-height: 1.35; margin: 24px 0 6px; }
+.page h2 { font-size: var(--size-h2); font-weight: var(--weight-h2); line-height: 1.2; margin: var(--s-section) 0 var(--s-section-below); }
+.page > h2 { padding-top: var(--s-rule-below); border-top: 2px solid var(--red); }
+/* The air over a section. It stands apart from the heading because a heading that clears a tall aside loses its own margin. */
+.section-break { display: none; }
+.page h3 { font-size: var(--size-h3); font-weight: 600; line-height: 1.3; margin: var(--s-h3) 0 var(--s-h3-below); }
+.page h4 { font-size: var(--size-h4); font-weight: 600; line-height: 1.35; margin: var(--s-h4) 0 var(--s-h4-below); }
 .page p, .page li { hyphens: auto; }
 .page strong { font-weight: 600; }
-.page p { margin: 0 0 0.9em; }
-.page ul, .page ol { margin: 0 0 0.9em; padding-left: 1.25em; }
-.page li + li { margin-top: 0.2em; }
+.page p { margin: 0 0 var(--s-para); }
+.page ul, .page ol { margin: 0 0 var(--s-para); padding-left: 1.25em; }
+.page li + li { margin-top: var(--s-li); }
 .page li::marker { color: var(--red); }
 .page a { color: var(--red); text-underline-offset: 2px; text-decoration-thickness: 1px; }
 .page a:hover { color: var(--red-deep); }
 .page code { font-family: var(--font-code); font-size: 0.84em; word-spacing: -0.1em; }
-.page pre code { font-size: 13.5px; word-spacing: normal; }
+.page pre code { font-size: var(--size-code); word-spacing: normal; }
 /* The reader types what the page shows: no ligature may turn |> into a triangle or => into an arrow. */
 code { font-variant-ligatures: none; }
-.page blockquote { margin: 0 0 0.9em; padding-left: 14px; border-left: 2px solid var(--rule-strong); color: var(--ink-soft); }
-.page hr { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
+.page blockquote { margin: 0 0 var(--s-para); padding-left: 14px; border-left: 2px solid var(--rule-strong); color: var(--ink-soft); }
+.page hr { border: 0; border-top: 1px solid var(--rule); margin: var(--s-hr) 0; }
 /* tables: a rule above, one under the head, one below, and the text of the first column on the edge of the page */
-.table-wrap { overflow-x: auto; margin: 22px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
-.page table { border-collapse: collapse; width: 100%; font-family: var(--font-ui); font-size: 14px; line-height: 1.45; }
-.page th, .page td { text-align: left; vertical-align: top; padding: 7px 14px; border-bottom: 1px solid var(--rule); }
+.table-wrap { overflow-x: auto; margin: var(--s-block) 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.page table { border-collapse: collapse; width: 100%; font-family: var(--font-ui); font-size: var(--size-table); line-height: var(--line-table); }
+.page th, .page td { text-align: left; vertical-align: top; padding: var(--cell-y) var(--cell-x); border-bottom: 1px solid var(--rule); }
 .page th:first-child, .page td:first-child { padding-left: 0; }
 .page th:last-child, .page td:last-child { padding-right: 0; }
 .page th { font-weight: 600; color: var(--ink); border-bottom-color: var(--rule-strong); }
 .page tbody tr:last-child td { border-bottom: 0; }
-.page td code, .page th code { font-size: 12.5px; }
+.page td code, .page th code { font-size: var(--size-table-code); }
 /* code blocks: the file they come from and the tag they were taken at */
-figure.code { margin: 22px 0; overflow: hidden; background: var(--code-bg); }
+figure.code { margin: var(--s-block) 0; overflow: hidden; background: var(--code-bg); }
 figure.code figcaption { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: baseline;
-  font-family: var(--font-ui); font-size: 12.5px; color: var(--ink-soft); padding: 8px 14px 0; }
+  font-family: var(--font-ui); font-size: 12.5px; color: var(--ink-soft); padding: var(--code-cap-y) var(--code-x) 0; }
 figure.code figcaption .path { font-family: var(--font-code); color: var(--ink-soft); overflow-wrap: anywhere; }
-figure.code pre { margin: 0; padding: 8px 14px 13px; overflow-x: auto; color: var(--code-ink); }
+figure.code pre { margin: 0; padding: var(--code-top) var(--code-x) var(--code-bottom); overflow-x: auto; color: var(--code-ink); }
 .copy { font: inherit; font-size: 12.5px; color: var(--ink-soft); background: none; border: 0; padding: 0 0 0 8px; cursor: pointer; }
 .copy:hover { color: var(--red); text-decoration: underline; text-underline-offset: 2px; }
 .hljs-keyword, .hljs-selector-tag, .hljs-built_in.hljs-keyword { color: var(--tok-key); }
@@ -172,10 +195,10 @@ figure.code pre { margin: 0; padding: 8px 14px 13px; overflow-x: auto; color: va
   content: ""; display: inline-block; width: 15px; height: 15px; background-color: currentColor;
   -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
 }
-.box { --c: var(--ink-soft); --r: var(--rule-strong); --icon: var(--i-note); margin: 22px 0; padding: 11px 16px 12px 14px; border-left: 2px solid var(--r); background: var(--tint); }
+.box { --c: var(--ink-soft); --r: var(--rule-strong); --icon: var(--i-note); margin: var(--s-block) 0; padding: var(--box-top) var(--box-right) var(--box-bottom) var(--box-left); border-left: 2px solid var(--r); background: var(--tint); }
 .box > :first-child { margin-top: 0; }
 .box > :last-child { margin-bottom: 0; }
-.box-label { font-family: var(--font-ui); font-size: 13px; line-height: 1.35; font-weight: 600; color: var(--c); margin-bottom: 5px; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.box-label { font-family: var(--font-ui); font-size: 13px; line-height: 1.35; font-weight: 600; color: var(--c); margin-bottom: var(--box-label-gap); display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .box-label > span:first-child::before { margin-right: 6px; vertical-align: -3px; }
 .box > .box-label + * { margin-top: 0; }
 .box.note { --icon: var(--i-note); }
@@ -186,28 +209,48 @@ figure.code pre { margin: 0; padding: 8px 14px 13px; overflow-x: auto; color: va
 .box.review { --c: var(--ink); --r: var(--ink); --icon: var(--i-review); }
 .done-toggle { display: inline-flex; gap: 6px; align-items: center; font-family: var(--font-ui); font-size: 13px; font-weight: 400; color: var(--ink-soft); cursor: pointer; }
 .done-toggle input { accent-color: var(--red); width: 14px; height: 14px; margin: 0; }
-details.fold { --icon: var(--i-more); margin: 22px 0; border-block: 1px solid var(--rule); }
-details.fold + details.fold { margin-top: -23px; }
+details.fold { --icon: var(--i-more); margin: var(--s-block) 0; border-block: 1px solid var(--rule); }
+details.fold + details.fold { margin-top: calc(-1 * var(--s-block) - 1px); }
 details.fold.more { --icon: var(--i-more); }
 details.fold.long { --icon: var(--i-code); }
 details.fold.reftest { --icon: var(--i-flask); }
 details.fold.cards { --icon: var(--i-table); }
 /* A solution and an answer carry no class of their own: each comes right after its exercise or its question. */
-section.exercise + details.fold { --icon: var(--i-check); margin-top: -23px; border-top: 0; }
-section.review + details.fold { --icon: var(--i-answer); margin-top: -23px; border-top: 0; }
-details.fold > summary { position: relative; cursor: pointer; padding: 8px 28px 8px 24px; font-family: var(--font-ui); font-size: 14px; line-height: 1.4; color: var(--ink-soft); list-style: none; }
+section.exercise + details.fold { --icon: var(--i-check); margin-top: calc(-1 * var(--s-block) - 1px); border-top: 0; }
+section.review + details.fold { --icon: var(--i-answer); margin-top: calc(-1 * var(--s-block) - 1px); border-top: 0; }
+details.fold > summary { position: relative; cursor: pointer; padding: var(--fold-y) 28px var(--fold-y) var(--fold-indent); font-family: var(--font-ui); font-size: var(--size-fold); line-height: 1.4; color: var(--ink-soft); list-style: none; }
 details.fold > summary:hover { color: var(--red); }
 details.fold > summary::-webkit-details-marker { display: none; }
-details.fold > summary::before { position: absolute; left: 0; top: 11px; }
-details.fold > summary::after { position: absolute; right: 0; top: 11px; --icon: var(--i-chevron); }
+details.fold > summary::before { position: absolute; left: 0; top: calc(var(--fold-y) + 3px); }
+details.fold > summary::after { position: absolute; right: 0; top: calc(var(--fold-y) + 3px); --icon: var(--i-chevron); }
 details.fold[open] > summary { color: var(--ink); }
 details.fold[open] > summary::after { transform: rotate(180deg); }
-details.fold > .fold-body { padding: 6px 0 12px; }
-details.fold > .fold-body > figure.code:first-child { margin-top: 4px; }
-details.fold > .fold-body > :last-child { margin-bottom: 8px; }
+details.fold > .fold-body { padding: var(--fold-body-top) 0 var(--fold-body-bottom); }
+details.fold > .fold-body > figure.code:first-child { margin-top: var(--fold-code-top); }
+details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
+.fold-body > ul > li + li, .fold-body > ol > li + li { margin-top: var(--s-fold-li); }
 .page summary code { font-size: 0.92em; }
-.end { margin-top: 56px; padding-top: 16px; border-top: 2px solid var(--red); display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; font-family: var(--font-ui); }
-.end-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The test cards of a chapter, one under the other: the id and the case as a heading, the level as a quiet tag, then why and what to expect. */
+.page .cases { list-style: none; margin: 0; padding: 0; }
+.page .cases > .case { position: relative; margin: 0; }
+.page .cases > .case + .case { margin-top: var(--s-case); padding-top: var(--s-case); border-top: 1px solid var(--rule); }
+.page .case-head { margin: 0 0 var(--s-case-head); font-size: var(--size-case); font-weight: 500; line-height: 1.4; text-wrap: pretty; }
+.case-id { display: block; padding-right: 72px; margin-bottom: 4px; font-family: var(--font-ui); font-size: 14px; font-weight: 500; line-height: 22px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.case-level { position: absolute; right: 0; font-family: var(--font-ui); font-size: 13px; line-height: 22px; color: var(--ink-soft); }
+.case-fields { margin: 0; }
+.case-fields dt { margin-top: var(--s-case-field); font-family: var(--font-ui); font-size: 13.5px; font-weight: 600; line-height: 22px; color: var(--ink-soft); }
+.case-fields dd { margin: 2px 0 0; hyphens: auto; }
+/* The end of a chapter: whether it is read, and the way on. */
+.end { margin-top: var(--s-end); padding-top: var(--s-rule-below); border-top: 2px solid var(--red); display: grid; gap: var(--s-end-gap); font-family: var(--font-ui); }
+.end-read { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.page a.end-next, .end-next { display: grid; gap: 6px; color: var(--ink); text-decoration: none; }
+.end-next-label { font-size: 14px; font-weight: 500; line-height: 22px; color: var(--red); }
+.end-next-title { font-family: var(--font-body); font-size: var(--size-end-title); font-weight: 400; line-height: 1.2; text-wrap: balance; color: var(--ink); }
+.page a.end-next:hover .end-next-title { color: var(--red); }
+.end-next-title code { font-size: 0.88em; font-weight: 400; word-spacing: -0.2em; }
+.end-next-note { font-size: 14px; line-height: 1.55; color: var(--ink-soft); }
+.page a.end-prev { justify-self: start; font-size: 14px; color: var(--ink-soft); text-decoration: none; }
+.page a.end-prev:hover { color: var(--red); }
 .btn { font: inherit; font-size: 14px; font-weight: 500; padding: 7px 14px; border-radius: 2px; border: 1px solid var(--red); background: var(--red); color: var(--on-red); cursor: pointer; text-decoration: none; display: inline-block; }
 .btn:hover { background: var(--red-deep); border-color: var(--red-deep); }
 .btn.secondary { background: none; color: var(--ink); border-color: var(--rule-strong); }
@@ -215,21 +258,21 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
 .page a.btn:not(.secondary), .page a.btn:not(.secondary):hover { color: var(--on-red); }
 .page a.btn.secondary { color: var(--ink); }
 .page a.btn.secondary:hover { color: var(--red); }
-.btn:focus-visible, .copy:focus-visible, .toc a:focus-visible, .chapter-nav a:focus-visible, summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.btn:focus-visible, .copy:focus-visible, .toc a:focus-visible, .chapter-nav a:focus-visible, .end-next:focus-visible, .end-prev:focus-visible, summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 .status { font-family: var(--font-ui); font-size: 13.5px; color: var(--ink-soft); }
 /* The home page is the contents page of the book: one row per chapter, the title in the text column and its milestone beside it. */
-.welcome .chapter-head { margin-bottom: 36px; }
-.welcome .chapter-num { font-size: 84px; font-weight: 400; margin: 0 0 6px; }
-.welcome .chapter-head .lead { margin-top: 16px; font-size: 18px; color: var(--ink-soft); }
-.welcome .chapter-head .start { margin-top: 20px; }
+.welcome .chapter-head { margin-bottom: var(--s-home-below); }
+.welcome .chapter-num { font-size: var(--size-num); font-weight: 400; margin: 0 0 6px; }
+.welcome .chapter-head .lead { margin-top: var(--s-lead-above); font-size: 18px; color: var(--ink-soft); }
+.welcome .chapter-head .start { margin-top: var(--s-start-above); }
 .welcome .cards { display: grid; border-top: 2px solid var(--red); }
-.welcome #sync { margin: 18px 0 0; }
-.card { display: grid; gap: 2px; padding: 12px 0 13px; border-bottom: 1px solid var(--rule); text-decoration: none; color: var(--ink); }
+.welcome #sync { margin: var(--s-sync-above) 0 0; }
+.card { display: grid; gap: var(--card-gap); padding: var(--card-y) 0 calc(var(--card-y) + 1px); border-bottom: 1px solid var(--rule); text-decoration: none; color: var(--ink); }
 .page a.card { color: var(--ink); text-decoration: none; }
 .page a.card:hover b { color: var(--red); }
 .card .eyebrow { font-size: 13px; font-weight: 400; }
-.card b { font-size: 20px; font-weight: 500; line-height: 1.25; }
-.card small { font-family: var(--font-ui); font-size: 13.5px; line-height: 1.45; color: var(--ink-soft); }
+.card b { font-size: var(--size-card); font-weight: 500; line-height: 1.25; }
+.card small { font-family: var(--font-ui); font-size: var(--size-card-note); line-height: var(--line-card-note); color: var(--ink-soft); }
 .loading { color: var(--ink-soft); font-family: var(--font-ui); }
 .chapter-nav { display: none; }
 @media (max-width: 860px) {
@@ -239,38 +282,72 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
   .chapter-num { font-size: 60px; }
   .chapter-head h1 { font-size: 30px; }
 }
-/* ---------- a desktop screen: about 80 characters of text, and wide blocks that use what is left ---------- */
+/* ---------- a desktop screen: larger type, wide air, and wide blocks that use what is left ---------- */
 @media (min-width: 861px) {
-  :root { --text: 680px; --gutter: 36px; --margin-max: 400px; }
-  body { font-size: 18px; line-height: 1.55; }
-  main { padding-left: max(44px, env(safe-area-inset-left, 0px)); padding-right: max(36px, env(safe-area-inset-right, 0px)); }
+  :root {
+    --text: 612px; --gutter: 64px; --margin-max: 320px;
+    --s-section: var(--s-7); --s-section-below: var(--s-4); --s-rule-below: var(--s-3);
+    --s-h3: var(--s-5); --s-h3-below: var(--s-2); --s-h4: var(--s-4); --s-h4-below: var(--s-1);
+    --s-block: var(--s-4); --s-para: 1.3em; --s-li: 0.55em; --s-fold-li: 0.9em; --s-hr: var(--s-5);
+    --s-opener-above: var(--s-6); --s-opener-below: 0; --s-num-above: var(--s-2); --s-h1-above: var(--s-3);
+    --s-facts-above: var(--s-4); --s-milestone-above: var(--s-1);
+    --s-home-below: var(--s-6); --s-lead-above: var(--s-4); --s-start-above: var(--s-4); --s-sync-above: var(--s-4);
+    --s-end: var(--s-7); --s-end-gap: var(--s-5);
+    --s-case: var(--s-4); --s-case-head: var(--s-1); --s-case-field: var(--s-2);
+    --size-h2: 38px; --weight-h2: 400; --size-h3: 25px; --size-h4: 20px; --size-num: 120px; --size-facts: 15px; --line-facts: 1.6;
+    --size-code: 14.5px; --code-x: var(--s-4); --code-cap-y: var(--s-2); --code-top: var(--s-2); --code-bottom: var(--s-3);
+    --size-table: 15.5px; --line-table: 1.6; --cell-x: var(--s-3); --cell-y: 14px; --size-table-code: 13.5px;
+    --size-fold: 15.5px; --fold-y: 21px; --fold-indent: 30px; --fold-body-top: var(--s-2); --fold-body-bottom: var(--s-4); --fold-code-top: 0; --fold-last: 0;
+    --box-top: 28px; --box-right: var(--s-4); --box-bottom: 32px; --box-left: var(--s-4); --box-label-gap: var(--s-2);
+    --size-case: 20px; --size-end-title: 34px;
+    --size-card: 23px; --size-card-note: 14.5px; --line-card-note: 1.6; --card-y: var(--s-3); --card-gap: 4px;
+    --toc-size: 15px; --toc-line: 1.4; --toc-top: 32px; --toc-row: 4.5px; --toc-brand-gap: 20px; --toc-overall-gap: 20px; --toc-open-gap: 4px 8px;
+  }
+  body { font-size: 19px; line-height: 1.75; }
+  main { padding-left: max(64px, env(safe-area-inset-left, 0px)); padding-right: max(40px, env(safe-area-inset-right, 0px)); padding-block: 0 var(--s-7); }
   .page { max-width: none; margin: 0; }
   .page > * { box-sizing: border-box; max-width: var(--text); }
   .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end, .page > .welcome, .page > section.exercise, .page > section.review, .page > hr { max-width: none; }
   /* A rule over a section runs the width of the page; its words keep the measure of the text. */
+  .section-break { display: block; height: var(--s-section); }
+  .page h2 { margin-top: 0; }
   .page > h2 { max-width: none; padding-right: max(0px, calc(100% - var(--text))); }
-  .chapter-head h1 { font-size: 48px; }
+  .chapter-head h1 { font-size: 52px; }
   .welcome .chapter-head, .welcome .lead { max-width: var(--text); }
   /* A fold is wide for its code and its tables; the sentences inside it keep the measure of the text. */
   .fold-body > :not(figure, .table-wrap, details) { box-sizing: border-box; max-width: var(--text); }
-  section.exercise > :not(.box-label, figure, .table-wrap, details), section.review > :not(.box-label, figure, .table-wrap, details) { max-width: calc(var(--text) - 16px); }
-  .page > h2, .page > h3 { scroll-margin-top: 24px; }
+  section.exercise > :not(.box-label, figure, .table-wrap, details), section.review > :not(.box-label, figure, .table-wrap, details) { max-width: calc(var(--text) - var(--box-left)); }
+  .page > h2, .page > h3 { scroll-margin-top: 72px; }
   /* The line height comes from pre: with the size of the text around it, the lines of code would be far apart. */
-  figure.code pre { font-size: 13.5px; line-height: 1.55; font-weight: 400; }
+  figure.code pre { font-size: var(--size-code); line-height: 1.75; font-weight: 400; }
+  /* A mono span must not push its line away from the others. */
+  .page :not(pre) > code { line-height: 1; }
+  .case-fields dd { font-size: 0.95em; }
+  /* The sidebar keeps the one figure that says how far along you are; the others are in its tooltip and on the home page. */
+  .brand-more, .part-facts, .overall .line ~ .line { display: none; }
+  /* One line per chapter, as the parts have, so the list has air and stays in the window; the chapter you are in shows whole, and the others have their name as a tooltip. */
+  .toc li a > span + span, .toc li .soon > span + span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .toc li a[aria-current="page"] > span + span { white-space: normal; }
+  .brand b { font-size: 44px; }
+  .brand span { font-size: 14px; }
+  .overall { padding-bottom: 0; border-bottom: 0; }
+  .overall .line { font-size: 13px; }
+  .bar { margin-bottom: 10px; }
 }
 /* The margin column. The script (placeAsides) puts each aside just before the paragraph it follows, so the float
-   starts level with that paragraph. clear keeps two asides apart and a wide block below any aside that reaches it. */
+   starts level with that paragraph. clear keeps two asides apart and a wide block below any aside that reaches it.
+   There an aside is a quiet note in the margin, with no box of its own. */
 @media (min-width: 1380px) {
   .page { max-width: calc(var(--text) + var(--gutter) + var(--margin-max)); }
   .page > h2 { clear: both; }
   .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end, .page > section.exercise, .page > section.review { clear: right; }
   .page > aside.from, .page > aside.note {
     float: right; clear: right; max-width: none; width: calc(100% - var(--text) - var(--gutter));
-    margin: 2px 0 18px; padding: 8px 12px 10px 12px;
-    font-size: 15px; line-height: 1.48; overflow-wrap: anywhere;
+    margin: 7px 0 var(--s-5); padding: 0; border-left: 0; background: none;
+    font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); overflow-wrap: anywhere;
   }
-  .page > aside.from .box-label, .page > aside.note .box-label { margin-bottom: 3px; }
-  .page > aside.from > p, .page > aside.note > p { margin: 0.5em 0; }
+  .page > aside.from .box-label, .page > aside.note .box-label { margin-bottom: var(--s-1); }
+  .page > aside.from > p, .page > aside.note > p { margin: 0 0 0.8em; }
   .page > aside.from > :last-child, .page > aside.note > :last-child { margin-bottom: 0; }
   .card { grid-template-columns: var(--text) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: var(--gutter); }
   .card .eyebrow { grid-column: 1; }
@@ -279,35 +356,43 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
 }
 /* Room for a third column: the sections of the chapter, always in sight. */
 @media (min-width: 1760px) {
-  :root { --text: 720px; --gutter: 44px; --margin-max: 380px; }
-  body { font-size: 19px; }
-  .page pre code, figure.code pre { font-size: 14px; }
-  .chapter-head h1 { font-size: 54px; }
-  main { display: grid; grid-template-columns: minmax(0, calc(var(--text) + var(--gutter) + var(--margin-max))) 236px; column-gap: 56px; justify-content: center; align-items: start; }
+  :root { --text: 648px; --gutter: 72px; --margin-max: 340px; --size-h2: 40px; --size-h3: 26px; --size-code: 15px; }
+  body { font-size: 20px; }
+  .chapter-head h1 { font-size: 58px; }
+  main { display: grid; grid-template-columns: minmax(0, calc(var(--text) + var(--gutter) + var(--margin-max))) 224px; column-gap: 72px; justify-content: center; align-items: start; }
   .page { max-width: none; }
-  .chapter-nav:not([hidden]) { display: block; position: sticky; top: 32px; max-height: calc(100vh - 56px); overflow-y: auto; scrollbar-width: none;
-    font-size: 14.5px; line-height: 1.32; }
+  .chapter-nav:not([hidden]) { display: block; position: sticky; top: var(--s-5); max-height: calc(100vh - 2 * var(--s-5)); overflow-y: auto; scrollbar-width: none;
+    font-size: 15px; line-height: 1.45; }
   .chapter-nav::-webkit-scrollbar { display: none; }
-  .chapter-nav h2 { margin: 0 0 8px; font-family: var(--font-ui); font-size: 14px; font-weight: 500; line-height: 22px; color: var(--ink-soft); }
-  .chapter-nav ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-left: 1px solid var(--rule); }
+  .chapter-nav h2 { margin: 0 0 var(--s-2); font-family: var(--font-ui); font-size: 14px; font-weight: 500; line-height: 22px; color: var(--ink-soft); }
+  /* One mark for the current section: the script gives it its place, and it slides there. */
+  .chapter-nav ol { position: relative; list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-left: 1px solid var(--rule); }
+  .chapter-nav ol::before { content: ""; position: absolute; left: -1px; top: 0; width: 2px; height: var(--mark-h, 0); background: var(--red); transform: translateY(var(--mark-y, 0)); }
   .chapter-nav li[hidden] { display: none; }
-  .chapter-nav a { display: block; margin-left: -1px; padding: 3px 0 3px 12px; border-left: 2px solid transparent; color: var(--ink-soft); text-decoration: none; }
+  .chapter-nav a { display: block; padding: 6px 0 6px var(--s-2); color: var(--ink-soft); text-decoration: none; }
   .chapter-nav a:hover { color: var(--red); }
-  .chapter-nav .level-2 { margin-top: 3px; }
+  .chapter-nav .level-2 { margin-top: 4px; }
   .chapter-nav .level-2 a { color: var(--ink); }
-  .chapter-nav .level-3 a { padding-left: 24px; font-size: 13.5px; }
-  .chapter-nav a[aria-current], .chapter-nav .level-2 a[aria-current] { color: var(--red); border-left-color: var(--red); font-weight: 600; }
+  .chapter-nav .level-3 a { padding: 4px 0 4px var(--s-3); font-size: 14px; }
+  .chapter-nav a[aria-current], .chapter-nav .level-2 a[aria-current] { color: var(--red); }
   .chapter-nav code { font-family: var(--font-code); font-size: 0.86em; }
 }
+/* Movement answers what the reader does, it is brief, and nothing here ever takes the wheel. */
 @media (prefers-reduced-motion: no-preference) {
   html { scroll-behavior: smooth; }
-  details.fold > summary::after { transition: transform 0.12s ease-out; }
+  details.fold > summary::after { transition: transform 0.16s ease-out; }
+  details.fold { interpolate-size: allow-keywords; }
+  details.fold::details-content { block-size: 0; overflow: clip; transition: block-size 0.18s ease-out, content-visibility 0.18s allow-discrete; }
+  details.fold[open]::details-content { block-size: auto; }
+  .chapter-nav ol::before { transition: transform 0.18s ease-out, height 0.18s ease-out; }
+  .chapter-nav a, .toc a, details.fold > summary, .copy { transition: color 0.15s ease-out; }
 }
 </style>
 
+<div class="reading-line" id="reading-line" aria-hidden="true" hidden></div>
 <div class="app" lang="es">
   <nav class="toc" id="toc" aria-label="Índice del libro">
-    <div class="brand"><b>Ki</b><span>De cero a experto. Construye tu propio lenguaje funcional en Go.</span></div>
+    <a class="brand" href="#inicio" title="Volver a la portada"><b>Ki</b><span>De cero a experto<span class="brand-more">. Construye tu propio lenguaje funcional en Go.</span></span></a>
     <div class="overall" id="overall">
       <div class="bar"><i id="ov-bar"></i></div>
       <div class="line"><span>Capítulos leídos</span><span id="ov-read">0 / 68</span></div>
@@ -329,7 +414,7 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
   "use strict";
   // Progress keys carry the edition, so marks from another edition never show up here.
   const EDITION = "go";
-  const state = { outline: null, manifest: null, available: new Map(), progress: {}, chapterCache: new Map(), current: null, sections: [], openPart: null };
+  const state = { outline: null, manifest: null, available: new Map(), progress: {}, chapterCache: new Map(), current: null, sections: [], markedSection: -1, openPart: null };
   const store = { db: null, uid: null };
   const $ = (id) => document.getElementById(id);
   const pad = (n) => String(n).padStart(2, "0");
@@ -352,6 +437,10 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
   const MARGIN_QUERY = "(min-width: 1380px)";
   // A heading is the current section once its top is this many pixels from the top of the window, or fewer.
   const SECTION_LINE = 140;
+  // Where a section lands after a jump: the scroll-margin-top of the styles.
+  const SECTION_LANDING = 72;
+  // A jump glides over this many pixels at most: a browser takes well over a second to run through a whole chapter.
+  const GLIDE = 1000;
 
   // ---------- progress: the db capability when the viewer has it, browser storage otherwise ----------
   const LOCAL_KEY = "ki-book-progress-" + EDITION + "-v1";
@@ -409,6 +498,15 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     (m ? m[2] : "").replace(/(\w+)="([^"]*)"/g, (_, k, v) => { attrs[k] = v.replace(/&quot;/g, '"').replace(/&#96;/g, "`"); return ""; });
     return { lang: m ? m[1] : "", attrs };
   }
+  // The rows of the table of cards as a list of cards. The cells are the HTML that marked made of them.
+  function caseList(body) {
+    const items = (body.match(/<tr>[\s\S]*?<\/tr>/g) || []).map((row) => {
+      const [id, name, why, expected, level] = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].trim());
+      return `<li class="case"><span class="case-level">${level}</span><h4 class="case-head"><span class="case-id">${id}</span>${name}</h4>` +
+        `<dl class="case-fields"><dt>Por qué</dt><dd>${why}</dd><dt>Esperado</dt><dd>${expected}</dd></dl></li>`;
+    });
+    return `<ol class="cases">${items.join("")}</ol>`;
+  }
   const renderer = new marked.Renderer();
   renderer.code = function (code, info) {
     const { lang, attrs } = parseInfo(info);
@@ -435,14 +533,14 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     const table = `<div class="table-wrap"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
     if (header.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() !== CARDS_HEADER) return table;
     const cases = (body.match(/<tr>/g) || []).length;
-    return `<details class="fold cards"><summary>Tarjetas de test · ${cases} casos</summary><div class="fold-body">${table}</div></details>`;
+    return `<details class="fold cards"><summary>Tarjetas de test · ${cases} casos</summary><div class="fold-body">${caseList(body)}</div></details>`;
   };
   // The h2 and h3 of the running text get an id and enter the list of sections, not those inside a container.
   renderer.heading = function (text, level) {
     if (!sections || (level !== 2 && level !== 3)) return `<h${level}>${text}</h${level}>\n`;
     const id = "sec-" + (sections.length + 1);
     sections.push({ id, level, html: text });
-    return `<h${level} id="${id}">${text}</h${level}>\n`;
+    return `${level === 2 ? '<div class="section-break"></div>' : ""}<h${level} id="${id}">${text}</h${level}>\n`;
   };
   marked.setOptions({ renderer, gfm: true });
 
@@ -544,23 +642,121 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     const under = list.map((s) => { if (s.level === 2) h2 += 1; return h2; });
     return list.map((s, i) => s.level === 2 || under[i] === under[current]);
   }
-  function markSection() {
+  // While the h3 of a long section do not fit in the list, the next one to leave it: the shown h3 farthest from the
+  // current section, later ones first. -1 if none can leave. The current one stays.
+  function farthestSection(list, visible, current) {
+    let far = -1, distance = 0;
+    list.forEach((s, i) => {
+      const d = Math.abs(i - current);
+      if (s.level === 3 && visible[i] && i !== current && d >= distance) { far = i; distance = d; }
+    });
+    return far;
+  }
+  // The section j or k goes to, given the tops of the headings in the window: the first one below where a jump lands, or
+  // the last one above it. held is the section a jump in flight is going to, or -1. -1 means there is none that way.
+  function stepSection(tops, down, held) {
+    if (held >= 0) return down ? (held + 1 < tops.length ? held + 1 : -1) : held - 1;
+    if (down) return tops.findIndex((top) => top > SECTION_LANDING + 8);
+    return tops.findLastIndex((top) => top < SECTION_LANDING - 8);
+  }
+  const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // A jump holds the mark on its target: the section it scrolls past on the way are not where the reader is going. Once
+  // it lands, the mark stays while the page does not move, even for a last section too short to reach the line.
+  let jump = null;
+  let jumpTimer = 0;
+  function settleJump() { if (jump && jump.y === null) jump.y = window.scrollY; }
+  // The scroll to get near the target ends too, and that is not the end of the jump.
+  function settleJumpIfLanded() {
+    if (jump && Math.abs($(state.sections[jump.index].id).getBoundingClientRect().top - SECTION_LANDING) <= 4) settleJump();
+  }
+  function getNear(distance) {
+    if (!calm() && Math.abs(distance) > GLIDE) window.scrollBy({ top: distance - Math.sign(distance) * GLIDE, behavior: "instant" });
+  }
+  function jumpTo(index) {
+    jump = { index, y: null };
+    clearTimeout(jumpTimer);
+    // A jump to where the page already is, or to a last section too short to reach its landing, ends on this timer.
+    jumpTimer = setTimeout(settleJump, 1200);
+    const heading = $(state.sections[index].id);
+    getNear(heading.getBoundingClientRect().top - SECTION_LANDING);
+    heading.scrollIntoView();
+    markSection();
+  }
+  function jumpToTop() {
+    jump = null;
+    getNear(-window.scrollY);
+    window.scrollTo({ top: 0 });
+  }
+  function markSection(force) {
     const nav = $("chapter-nav");
-    if (nav.hidden) return;
-    const tops = state.sections.map((s) => $(s.id).getBoundingClientRect().top);
-    const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
-    const index = currentSection(tops, atBottom);
-    const current = state.sections[index];
+    if (nav.hidden || !state.sections.length || !nav.getClientRects().length) return;
+    let index;
+    if (jump && (jump.y === null || Math.abs(window.scrollY - jump.y) <= 4)) index = jump.index;
+    else {
+      jump = null;
+      const tops = state.sections.map((s) => $(s.id).getBoundingClientRect().top);
+      const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+      index = currentSection(tops, atBottom);
+    }
+    // Nothing is written while the current section stays the same: this is what keeps the list still as the page scrolls.
+    if (index === state.markedSection && !force) return;
+    state.markedSection = index;
+    const items = [...nav.querySelectorAll("li")];
+    const animate = !force && !calm();
+    const before = new Map();
+    if (animate) for (const li of items) {
+      if (!li.hidden) before.set(li, li.getBoundingClientRect().top);
+      li.getAnimations().forEach((a) => a.cancel());
+    }
     const visible = visibleSections(state.sections, index);
-    nav.querySelectorAll("li").forEach((li, i) => { li.hidden = !visible[i]; });
-    nav.querySelectorAll("a[data-sec]").forEach((a) => {
-      if (a.dataset.sec !== current.id) { a.removeAttribute("aria-current"); return; }
+    items.forEach((li, i) => { li.hidden = !visible[i]; });
+    // The page's scrollbar is the only one: a long section shows the h3 around the current one, as many as fit.
+    while (nav.scrollHeight > nav.clientHeight) {
+      const far = farthestSection(state.sections, visible, index);
+      if (far < 0) break;
+      visible[far] = false;
+      items[far].hidden = true;
+    }
+    const list = nav.querySelector("ol");
+    const top = list.getBoundingClientRect().top;
+    nav.querySelectorAll("a[data-sec]").forEach((a, i) => {
+      if (i !== index) { a.removeAttribute("aria-current"); return; }
       a.setAttribute("aria-current", "location");
-      // The list scrolls by itself when it does not fit in the window; the page must not move for this.
-      const box = nav.getBoundingClientRect(), link = a.getBoundingClientRect();
+      const link = a.getBoundingClientRect();
+      list.style.setProperty("--mark-y", `${link.top - top}px`);
+      list.style.setProperty("--mark-h", `${link.height}px`);
+      // On a window too short even for the h2, the list scrolls by itself; the page must not move for this.
+      const box = nav.getBoundingClientRect();
       if (link.top < box.top) nav.scrollTop -= box.top - link.top + 24;
       else if (link.bottom > box.bottom) nav.scrollTop += link.bottom - box.bottom + 24;
     });
+    // The entries that stay slide to their new place, in step with the mark, and the new ones fade in.
+    if (animate) for (const li of items) {
+      if (li.hidden) continue;
+      const was = before.get(li);
+      const now = li.getBoundingClientRect().top;
+      if (was === undefined) li.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: "ease-out" });
+      else if (was !== now) li.animate([{ transform: `translateY(${was - now}px)` }, { transform: "none" }], { duration: 180, easing: "ease-out" });
+    }
+  }
+  function paintReadingLine() {
+    const line = $("reading-line");
+    const room = document.documentElement.scrollHeight - window.innerHeight;
+    line.style.transform = `scaleX(${room > 0 ? Math.min(1, window.scrollY / room) : 0})`;
+  }
+  // The chapter that is open in the contents stays in sight there, without moving the page.
+  function keepChapterInToc() {
+    const toc = $("toc");
+    const [link] = toc.querySelectorAll('a[aria-current="page"]');
+    if (!link) return;
+    const box = toc.getBoundingClientRect(), rect = link.getBoundingClientRect();
+    if (rect.top < box.top) toc.scrollTop -= box.top - rect.top + 24;
+    else if (rect.bottom > box.bottom) toc.scrollTop += rect.bottom - box.bottom + 24;
+  }
+  // The page starts where the reader asked for it: a new page never scrolls up from where the last one was left.
+  function topOfPage() { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }
+  function enterPage() {
+    if (!calm()) $("page").animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: "ease-out" });
   }
 
   // ---------- views ----------
@@ -583,6 +779,7 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     $("ov-ex").textContent = t.exAvail ? `${t.ex} / ${t.exAvail}` : String(t.ex);
     const hours = [...state.available.values()].reduce((s, c) => s + Number(c.hours || 0), 0);
     $("ov-avail").textContent = `${state.available.size} caps. · ${hours} h`;
+    $("overall").title = `${t.read} de ${all} capítulos leídos, ${$("ov-ex").textContent} ejercicios hechos, ${state.available.size} capítulos disponibles (${hours} h)`;
   }
   function renderToc() {
     if (!state.outline) return;
@@ -590,9 +787,10 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
       const items = part.chapters.map((c) => {
         const avail = state.available.has(c.chapter);
         const p = state.progress[key(c.chapter)];
-        if (!avail) return `<li><span class="soon" title="En preparación"><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span></span></li>`;
+        const name = esc(c.title.replace(/`/g, ""));
+        if (!avail) return `<li><span class="soon" title="${name} (en preparación)"><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span></span></li>`;
         const cur = state.current === c.chapter ? ' aria-current="page"' : "";
-        return `<li class="${p && p.read ? "done" : ""}"><a href="#ch${pad(c.chapter)}"${cur}><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span></a></li>`;
+        return `<li class="${p && p.read ? "done" : ""}"><a href="#ch${pad(c.chapter)}" title="${name}"${cur}><span class="num">${c.chapter}</span><span>${inlineCode(c.title)}</span></a></li>`;
       }).join("");
       const open = state.openPart === part.part ? " open" : "";
       return `<details class="part" name="toc-parts" data-part="${esc(part.part)}"${open}><summary title="Parte ${esc(part.part)} · ${esc(part.title)}"><span class="num">${esc(part.part)}</span><span class="name">${esc(part.title)}</span></summary><p class="part-facts">≈ ${part.hours} h → ${esc(part.milestones)}</p><ol>${items}</ol></details>`;
@@ -601,7 +799,11 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
   }
   function renderWelcome() {
     state.current = null;
+    state.sections = [];
+    state.markedSection = -1;
+    jump = null;
     $("chapter-nav").hidden = true;
+    $("reading-line").hidden = true;
     const t = totals();
     const sorted = [...state.available.keys()].sort((a, b) => a - b);
     const next = sorted.find((n) => !(state.progress[key(n)] || {}).read);
@@ -613,7 +815,7 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
       return `<a class="card" href="#ch${pad(n)}"><span class="eyebrow">Capítulo ${n} · ${esc(c.hours)} h${p && p.read ? " · leído" : ""}</span><b>${inlineCode(c.title)}</b><small>${inlineCode(c.milestone)}</small></a>`;
     }).join("");
     const totalHours = state.outline ? state.outline.parts.reduce((s, p) => s + p.hours, 0) : 0;
-    const facts = [`${allChapters()} capítulos`, ...(totalHours ? [`≈ ${totalHours} h`] : []), `${state.available.size} disponibles`, `${t.read} leídos`];
+    const facts = [`${allChapters()} capítulos`, ...(totalHours ? [`≈ ${totalHours} h`] : []), `${state.available.size} disponibles`, `${t.read} leídos`, ...(t.exAvail ? [`${t.ex} de ${t.exAvail} ejercicios`] : [])];
     $("page").innerHTML = `<section class="welcome">
       <header class="chapter-head">
         <span class="eyebrow">Edición en Go</span>
@@ -627,18 +829,35 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
       <p class="status" id="sync"></p>
     </section>`;
     syncNote();
+    topOfPage();
+    enterPage();
   }
   function syncNote() {
     const el = $("sync");
     if (el) el.textContent = store.db ? "Tu progreso se guarda en tu cuenta y te sigue entre dispositivos." : "Tu progreso se guarda en este navegador.";
+  }
+  // The way on from a chapter: the next one that is published, or the next one of the index, which is still being written.
+  function endNext(n, next) {
+    if (next) {
+      const c = state.available.get(next);
+      return `<a class="end-next" href="#ch${pad(next)}"><span class="end-next-label">Sigue con el capítulo ${next}</span><span class="end-next-title">${inlineCode(c.title)}</span>${c.milestone ? `<span class="end-next-note">${inlineCode(c.milestone)}</span>` : ""}</a>`;
+    }
+    const coming = state.outline.parts.flatMap((p) => p.chapters).find((c) => c.chapter > n);
+    if (!coming) return "";
+    return `<p class="end-next"><span class="end-next-label">El capítulo ${coming.chapter} está en preparación</span><span class="end-next-title">${inlineCode(coming.title)}</span></p>`;
   }
   async function renderChapter(n) {
     const info = state.available.get(n);
     if (!info) { renderWelcome(); return; }
     state.current = n;
     state.openPart = info.part;
+    state.sections = [];
+    state.markedSection = -1;
+    jump = null;
     $("chapter-nav").hidden = true;
+    $("reading-line").hidden = true;
     renderToc();
+    keepChapterInToc();
     $("page").innerHTML = `<p class="loading">Cargando el capítulo ${n}…</p>`;
     let md = state.chapterCache.get(n);
     if (!md) {
@@ -670,12 +889,9 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
       </header>
       ${html}
       <div class="end">
-        <span class="status" id="end-status"></span>
-        <span class="end-actions">
-          ${prev ? `<a class="btn secondary" href="#ch${pad(prev)}">← Capítulo ${prev}</a>` : ""}
-          <button class="btn" id="mark-read" type="button"></button>
-          ${nextCh ? `<a class="btn secondary" href="#ch${pad(nextCh)}">Capítulo ${nextCh} →</a>` : ""}
-        </span>
+        <div class="end-read"><button class="btn secondary" id="mark-read" type="button"></button><span class="status" id="end-status"></span></div>
+        ${endNext(n, nextCh)}
+        ${prev ? `<a class="end-prev" href="#ch${pad(prev)}">← Capítulo ${prev}</a>` : ""}
       </div>`;
     movedAsides = [];
     placeAsides($("page"), window.matchMedia(MARGIN_QUERY).matches);
@@ -684,8 +900,11 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     $("chapter-nav").hidden = !list.length;
     refreshChapterMarks();
     renderOverall();
-    window.scrollTo(0, 0);
-    markSection();
+    $("reading-line").hidden = false;
+    topOfPage();
+    paintReadingLine();
+    enterPage();
+    markSection(true);
   }
   function refreshChapterMarks() {
     const n = state.current;
@@ -721,7 +940,12 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     const section = ev.target.closest && ev.target.closest("a[data-sec]");
     if (section) {
       ev.preventDefault();
-      $(section.dataset.sec).scrollIntoView();
+      jumpTo(state.sections.findIndex((s) => s.id === section.dataset.sec));
+      return;
+    }
+    // The chapter you are already in: its link changes no hash, so it takes you back to the top of the chapter.
+    if (ev.target.closest && ev.target.closest('.toc a[aria-current="page"]')) {
+      jumpToTop();
       return;
     }
     const copy = ev.target.closest && ev.target.closest("button.copy");
@@ -740,6 +964,7 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
   });
   // A part opened by hand stays open when the contents are drawn again; opening one closes the others (name="toc-parts").
   document.addEventListener("toggle", (ev) => {
+    if (ev.target.matches && ev.target.matches("details.fold")) paintReadingLine();
     if (!ev.target.matches || !ev.target.matches("details.part")) return;
     if (ev.target.open) state.openPart = ev.target.dataset.part;
     else if (state.openPart === ev.target.dataset.part) state.openPart = null;
@@ -749,9 +974,26 @@ details.fold > .fold-body > :last-child { margin-bottom: 8px; }
     if (m) renderChapter(Number(m[1])); else renderWelcome();
   }
   window.addEventListener("hashchange", route);
+  // j and k go to the next and the previous section. A field keeps its letters, and so does a shortcut of the browser.
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.key !== "j" && ev.key !== "k") || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.isComposing || ev.defaultPrevented) return;
+    if (!state.current || !state.sections.length) return;
+    const field = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
+    if (field) return;
+    ev.preventDefault();
+    const tops = state.sections.map((s) => $(s.id).getBoundingClientRect().top);
+    const held = jump && jump.y === null ? jump.index : -1;
+    const to = stepSection(tops, ev.key === "j", held);
+    if (to >= 0) jumpTo(to);
+    else if (ev.key === "k") jumpToTop();
+  });
   // A browser fires scroll at most once per frame, and this only reads the tops of a few headings.
-  window.addEventListener("scroll", markSection, { passive: true });
-  window.addEventListener("resize", markSection);
+  function onScroll() { paintReadingLine(); markSection(); }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("scrollend", settleJumpIfLanded);
+  // The reader's own hand ends a jump at once: nothing holds the page or the mark against the wheel.
+  for (const type of ["wheel", "touchstart"]) window.addEventListener(type, () => { jump = null; }, { passive: true });
+  window.addEventListener("resize", () => { paintReadingLine(); markSection(true); });
 
   // ---------- boot ----------
   async function boot() {

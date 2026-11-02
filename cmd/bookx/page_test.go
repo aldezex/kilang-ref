@@ -32,7 +32,7 @@ const vm = require("vm");
 let src = fs.readFileSync(process.argv[2], "utf8");
 const tail = /\n\s*boot\(\);\s*\}\)\(\);\s*$/;
 if (!tail.test(src)) throw new Error("the script of the page does not end with boot(); })();");
-src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, chapterNavHtml, currentSection, placeAsides, renderChapter, renderWelcome, visibleSections, state };\n})();\n");
+src = src.replace(tail, "\nglobalThis.__page = { chapterHtml, chapterNavHtml, currentSection, farthestSection, placeAsides, renderChapter, renderWelcome, stepSection, visibleSections, state };\n})();\n");
 
 function fakeMarked() {
   const m = { renderer: null };
@@ -73,18 +73,24 @@ function fakeMarked() {
 // A stand-in for every element the script finds by id: it only keeps what the
 // script writes.
 const elements = {};
-const fakeElement = () => ({ innerHTML: "", textContent: "", hidden: false, style: {}, children: [], querySelectorAll: () => [] });
+const jumps = [];
+const fakeElement = (id) => ({ innerHTML: "", textContent: "", hidden: false, style: {}, children: [], querySelectorAll: () => [],
+  getBoundingClientRect: () => ({ top: 0 }), scrollIntoView() { jumps.push(id); } });
+// What the script listens to on the document, so a test can send it an event.
+const listeners = {};
 const sandbox = {
   marked: fakeMarked(),
   hljs: { getLanguage: () => null, highlight: () => ({ value: "" }) },
   document: {
     documentElement: { scrollHeight: 0 },
-    addEventListener() {},
-    getElementById: (id) => (elements[id] = elements[id] || fakeElement()),
+    addEventListener(type, fn) { listeners[type] = fn; },
+    getElementById: (id) => (elements[id] = elements[id] || fakeElement(id)),
     querySelectorAll: () => [],
   },
   window: { addEventListener() {}, scrollTo() {}, matchMedia: () => ({ matches: false }) },
   location: { hash: "" },
+  setTimeout() {},
+  clearTimeout() {},
   console,
 };
 vm.createContext(sandbox);
@@ -205,6 +211,44 @@ process.stdout.write(JSON.stringify(input.steps.map((wide) => {
   page.placeAsides(root, wide);
   return root.children.map((n) => n.name);
 })));
+`
+
+// farthestMain prints the answer of farthestSection for each case of its input.
+const farthestMain = `
+process.stdout.write(JSON.stringify(input.map((c) => page.farthestSection(c.list, c.visible, c.current))));
+`
+
+// stepMain prints the answer of stepSection for each case of its input.
+const stepMain = `
+process.stdout.write(JSON.stringify(input.map((c) => page.stepSection(c.tops, c.down, c.held))));
+`
+
+// keysMain presses each key of its input in a chapter with two sections, from a
+// target that is or is not a field, and prints the sections each press jumped to.
+const keysMain = `
+page.state.current = 1;
+page.state.sections = [{ id: "sec-1" }, { id: "sec-2" }];
+elements["chapter-nav"] = Object.assign(fakeElement("chapter-nav"), { hidden: true });
+for (const id of ["sec-1", "sec-2"]) elements[id] = Object.assign(fakeElement(id), { getBoundingClientRect: () => ({ top: 500 }) });
+process.stdout.write(JSON.stringify(input.map((press) => {
+  jumps.length = 0;
+  let prevented = false;
+  listeners.keydown(Object.assign({ preventDefault() { prevented = true; }, target: { closest: () => press.field ? {} : null } }, press));
+  return { jumps: [...jumps], prevented };
+})));
+`
+
+// endMain shows chapter 1 with the input as the other published chapters and
+// prints the view.
+const endMain = `
+(async () => {
+  page.state.outline = { parts: [{ part: "I", title: "Fundamentos", hours: 8, milestones: "M1", chapters: [{ chapter: 1, title: "Uno", hours: 8 }, { chapter: 2, title: "Dos ` + "`d`" + `", hours: 8 }] }] };
+  page.state.available.set(1, { chapter: 1, file: "ch01.md", hours: 8, part: "I", title: "Uno", tags: [] });
+  for (const c of input) page.state.available.set(c.chapter, Object.assign({ file: "x.md", hours: 8, part: "I", tags: [] }, c));
+  sandbox.fetch = async () => ({ ok: true, text: async () => "---\ntitle: x\n---\nTexto.\n" });
+  await page.renderChapter(1);
+  process.stdout.write(JSON.stringify(elements.page.innerHTML));
+})().catch((e) => { console.error(e); process.exit(1); });
 `
 
 // hueAndChroma returns the hue, in degrees, and the chroma, from 0 to 1, of a
@@ -338,14 +382,35 @@ func TestPage(t *testing.T) {
 		}
 		got := renderWithPage(t, append([]string{cards(1), cards(3), cards(40)}, others...)...)
 		for i, n := range []int{1, 3, 40} {
-			want := fmt.Sprintf(`<details class="fold cards"><summary>Tarjetas de test · %d casos</summary><div class="fold-body"><div class="table-wrap"><table>`, n)
-			if !strings.HasPrefix(got[i], want) || !strings.HasSuffix(got[i], `</table></div></div></details>`) || strings.Count(got[i], "<details") != 1 {
+			want := fmt.Sprintf(`<details class="fold cards"><summary>Tarjetas de test · %d casos</summary><div class="fold-body"><ol class="cases"><li class="case">`, n)
+			if !strings.HasPrefix(got[i], want) || !strings.HasSuffix(got[i], `</li></ol></div></details>`) || strings.Count(got[i], "<details") != 1 {
 				t.Errorf("%d cards: want a closed fold that starts with %q; got %.200q", n, want, got[i])
+			}
+			if c := strings.Count(got[i], `<li class="case">`); c != n {
+				t.Errorf("%d cards: got %d stacked items", n, c)
+			}
+			if strings.Contains(got[i], "<table") {
+				t.Errorf("%d cards: the cards are stacked, not a table: %.200q", n, got[i])
 			}
 		}
 		for i := range others {
 			if html := got[3+i]; !strings.HasPrefix(html, `<div class="table-wrap"><table>`) || strings.Contains(html, "<details") {
 				t.Errorf("table %d is not the table of cards and has to stay open; got %.200q", i, html)
+			}
+		}
+	})
+
+	t.Run("a_card_keeps_all_its_data_in_its_own_place", func(t *testing.T) {
+		const row = "| Id | Caso | Por qué | Esperado | Nivel |\n|---|---|---|---|---|\n| T05.07 | <code>lex</code> de un número | para no cortar <code>0x</code> | un token | stretch |\n"
+		html := renderWithPage(t, row)[0]
+		for _, want := range []string{
+			`<span class="case-level">stretch</span>`,
+			`<h4 class="case-head"><span class="case-id">T05.07</span><code>lex</code> de un número</h4>`,
+			`<dt>Por qué</dt><dd>para no cortar <code>0x</code></dd>`,
+			`<dt>Esperado</dt><dd>un token</dd>`,
+		} {
+			if !strings.Contains(html, want) {
+				t.Errorf("want %q in %.500q", want, html)
 			}
 		}
 	})
@@ -522,6 +587,144 @@ func TestPage(t *testing.T) {
 			if got[i] != c.want {
 				t.Errorf("%s: want %d, got %d", c.name, c.want, got[i])
 			}
+		}
+	})
+
+	t.Run("a_long_section_gives_up_its_farthest_h3_first", func(t *testing.T) {
+		type sec struct {
+			Level int `json:"level"`
+		}
+		list := []sec{{2}, {3}, {3}, {3}, {3}, {2}}
+		cases := []struct {
+			name    string
+			List    []sec  `json:"list"`
+			Visible []bool `json:"visible"`
+			Current int    `json:"current"`
+			want    int
+		}{
+			{"from_the_first_h3_the_last_leaves", list, []bool{true, true, true, true, true, true}, 1, 4},
+			{"from_the_last_h3_the_first_leaves", list, []bool{true, true, true, true, true, true}, 4, 1},
+			{"on_a_tie_the_later_leaves", list, []bool{true, true, true, true, true, true}, 2, 4},
+			{"the_ones_gone_stay_gone", list, []bool{true, true, true, true, false, true}, 1, 3},
+			{"from_the_h2_above_them", list, []bool{true, true, true, true, true, true}, 0, 4},
+			{"the_current_one_never_leaves", list, []bool{true, false, true, false, false, true}, 2, -1},
+			{"an_h2_never_leaves", []sec{{2}, {2}}, []bool{true, true}, 0, -1},
+		}
+		var got []int
+		runPageScript(t, farthestMain, cases, &got)
+		for i, c := range cases {
+			if got[i] != c.want {
+				t.Errorf("%s: want %d, got %d", c.name, c.want, got[i])
+			}
+		}
+	})
+
+	t.Run("j_and_k_step_from_where_a_section_lands", func(t *testing.T) {
+		landing := 72 // SECTION_LANDING of the page
+		cases := []struct {
+			name string
+			Tops []int `json:"tops"`
+			Down bool  `json:"down"`
+			Held int   `json:"held"`
+			want int
+		}{
+			{"down_from_the_top_of_the_chapter", []int{500, 900}, true, -1, 0},
+			{"down_from_a_section_that_has_landed", []int{landing, 900}, true, -1, 1},
+			{"down_from_the_middle_of_a_section", []int{-300, 900}, true, -1, 1},
+			{"down_past_the_last", []int{-900, landing}, true, -1, -1},
+			{"up_from_the_middle_of_a_section_goes_to_its_start", []int{-900, -300, 900}, false, -1, 1},
+			{"up_from_a_section_that_has_landed", []int{-900, landing, 900}, false, -1, 0},
+			{"up_from_the_first", []int{landing, 900}, false, -1, -1},
+			{"down_during_a_jump_counts_from_its_target", []int{5000, 5900, 6500}, true, 0, 1},
+			{"up_during_a_jump_counts_from_its_target", []int{-5000, -4000, -3000}, false, 2, 1},
+			{"down_during_a_jump_to_the_last", []int{5000, 5900}, true, 1, -1},
+			{"up_during_a_jump_to_the_first", []int{-5000, -4000}, false, 0, -1},
+		}
+		var got []int
+		runPageScript(t, stepMain, cases, &got)
+		for i, c := range cases {
+			if got[i] != c.want {
+				t.Errorf("%s: want %d, got %d", c.name, c.want, got[i])
+			}
+		}
+	})
+
+	t.Run("j_and_k_leave_fields_and_browser_shortcuts_alone", func(t *testing.T) {
+		type press struct {
+			Key   string `json:"key"`
+			Field bool   `json:"field"`
+			Ctrl  bool   `json:"ctrlKey"`
+			Meta  bool   `json:"metaKey"`
+			Alt   bool   `json:"altKey"`
+			Shift bool   `json:"shiftKey"`
+		}
+		var got []struct {
+			Jumps     []string `json:"jumps"`
+			Prevented bool     `json:"prevented"`
+		}
+		ignored := []press{{Key: "j", Field: true}, {Key: "k", Field: true}, {Key: "j", Ctrl: true}, {Key: "j", Meta: true}, {Key: "j", Alt: true}, {Key: "J", Shift: true}, {Key: "j", Shift: true}, {Key: "a"}}
+		runPageScript(t, keysMain, append(ignored, press{Key: "j"}), &got)
+		for i, p := range ignored {
+			if len(got[i].Jumps) != 0 || got[i].Prevented {
+				t.Errorf("%+v: want the key left alone, got %+v", p, got[i])
+			}
+		}
+		if last := got[len(ignored)]; !slices.Equal(last.Jumps, []string{"sec-1"}) || !last.Prevented {
+			t.Errorf("j: want a jump to the first section, got %+v", last)
+		}
+	})
+
+	t.Run("the_air_over_a_section_stands_before_its_heading", func(t *testing.T) {
+		// A heading that clears a tall aside loses its margin, so the air is an element of its own.
+		html := renderWithPage(t, "Uno.\n## Dos\n### Tres\n")[0]
+		if !strings.Contains(html, `<div class="section-break"></div><h2 id="sec-1">Dos</h2>`) {
+			t.Errorf("want the break just before the h2 in %.300q", html)
+		}
+		if strings.Contains(html, `<div class="section-break"></div><h3`) {
+			t.Errorf("an h3 has no break: %.300q", html)
+		}
+	})
+
+	t.Run("a_section_lands_above_the_line_that_makes_it_current", func(t *testing.T) {
+		for _, s := range []string{"const SECTION_LANDING = 72;", ".page > h2, .page > h3 { scroll-margin-top: 72px; }", "const SECTION_LINE = 140;"} {
+			if !bytes.Contains(indexHTML, []byte(s)) {
+				t.Errorf("the page does not contain %q", s)
+			}
+		}
+	})
+
+	t.Run("a_new_page_starts_at_its_top_at_once_and_only_jumps_are_smooth", func(t *testing.T) {
+		// With a smooth html, a plain scrollTo would run up from the end of the last chapter.
+		if !bytes.Contains(indexHTML, []byte(`behavior: "instant"`)) || bytes.Contains(indexHTML, []byte("window.scrollTo(0, 0)")) {
+			t.Error("a new page has to reach its top with an instant scroll")
+		}
+		motion := bytes.Index(indexHTML, []byte("@media (prefers-reduced-motion: no-preference) {"))
+		smooth := bytes.Index(indexHTML, []byte("scroll-behavior: smooth"))
+		if motion < 0 || smooth < motion || bytes.Count(indexHTML, []byte("scroll-behavior:")) != 1 {
+			t.Error("smooth scrolling has to live under prefers-reduced-motion: no-preference, and only there")
+		}
+		if bytes.Contains(indexHTML, []byte("scroll-snap")) {
+			t.Error("nothing snaps against the wheel")
+		}
+	})
+
+	t.Run("the_end_of_a_chapter_shows_the_way_on", func(t *testing.T) {
+		var next, coming string
+		runPageScript(t, endMain, []map[string]any{{"chapter": 2, "title": "Dos `d`", "milestone": "m `x`"}}, &next)
+		runPageScript(t, endMain, []map[string]any{}, &coming)
+		for _, want := range []string{
+			`<a class="end-next" href="#ch02">`,
+			`Sigue con el capítulo 2`,
+			`<span class="end-next-title">Dos <code>d</code></span>`,
+			`<span class="end-next-note">m <code>x</code></span>`,
+			`id="mark-read"`,
+		} {
+			if !strings.Contains(next, want) {
+				t.Errorf("want %q in %.900q", want, next)
+			}
+		}
+		if !strings.Contains(coming, `El capítulo 2 está en preparación`) || !strings.Contains(coming, `<span class="end-next-title">Dos <code>d</code></span>`) || strings.Contains(coming, `href="#ch02"`) {
+			t.Errorf("a chapter still being written is named and has no link: %.900q", coming)
 		}
 	})
 
