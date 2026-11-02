@@ -49,22 +49,18 @@ Como `cargo build`, sin `Cargo.lock` con cien crates (Ki solo usa la biblioteca 
 
 Un *módulo* es un árbol de paquetes con un `go.mod` en la raíz. `module github.com/aldezex/kilang` da el prefijo de todo import propio; la referencia, `kilang-ref`, usa el mismo, así que sus ficheros encajan en tu árbol.
 
-| Línea | Qué dice |
-|---|---|
-| `go 1.27` | La versión **mínima** del lenguaje: un toolchain más viejo no carga el módulo. |
-| `toolchain go1.27.3` | El toolchain **preferido**. |
-| `ignore ./build` | Saca ese directorio de patrones como `./...` (el directorio y todos sus subdirectorios): un fichero roto en `build/` no rompe `go vet ./...` ni `go test ./...`. |
+`go 1.27` es la versión **mínima** del lenguaje: un toolchain más viejo no carga el módulo. `toolchain go1.27.3` es el **preferido**. `ignore ./build` saca ese directorio y sus subdirectorios de `./...`.
 
 Con `GOTOOLCHAIN=auto`, por defecto, si el `go.mod` pide un Go más nuevo que el instalado, `go` lo busca o **lo descarga** y lo ejecuta. Con `local`, el del repositorio y la CI, usa siempre el instalado: nada cambia el compilador en silencio.
 
 A cambio, `local` deja de imponer la línea `toolchain`: la vigila `TestRuntimeVersionMatchesToolchainLine`.
 
-:::more Los mensajes exactos de `go`, los tests que los fijan y las fuentes
+:::more Los mensajes exactos de `go`, los tests que los fijan, las fuentes y para qué sirve `ignore`
 - Con `GOTOOLCHAIN=local` y un `go.mod` que pide `go 1.28`, go1.27.3 responde `go: go.mod requires go >= 1.28 (running go 1.27.3; GOTOOLCHAIN=local)` y sale con 1.
 - `toolchain` es «a suggested toolchain», según go.dev/doc/toolchain: con `local`, un módulo con `toolchain go1.27.9` compila sin queja con go1.27.3. Entonces solo la hacen cumplir `ci-local.sh`, con `go version`, y `TestRuntimeVersionMatchesToolchainLine`, con `runtime.Version()`.
 - En Go 1.27, `go mod init` escribe la versión completa del toolchain instalado y ninguna línea `toolchain`. Lo fija `TestToolchainFacts/go_mod_init_writes_full_version`; el detalle está en `docs/toolchain.md` de la referencia: `git show ref/ch01-s3:docs/toolchain.md`.
 - `TestToolchainFacts/plain_build_has_devel_version` fija el `"(devel)"` de un `go build` normal fuera de un repositorio git.
-- Según la referencia de módulos (go.dev/ref/mod), el comando `go` ignora el directorio de `ignore` y lo que cuelga de él «when matching package patterns». Lo fija `TestToolchainFacts/ignore_directive_hides_build`.
+- Con `ignore ./build`, un fichero roto en `build/` no rompe `go vet ./...` ni `go test ./...`. Según la referencia de módulos (go.dev/ref/mod), el comando `go` ignora el directorio de `ignore` y lo que cuelga de él «when matching package patterns». Lo fija `TestToolchainFacts/ignore_directive_hides_build`.
 :::
 
 :::from Rust
@@ -83,10 +79,6 @@ La primera letra decide la visibilidad: otro paquete ve `driver.Version`, *expor
 La mayúscula es `pub`, sin más grados; `internal/` hace de `pub(crate)`, por directorios.
 :::
 
-:::from Python
-La minúscula hace de `_nombre`, pero la impone el compilador.
-:::
-
 ### Lo básico del lenguaje, en una tabla
 
 | Concepto | Go | Rust | TypeScript | Python |
@@ -95,16 +87,13 @@ La minúscula hace de `_nombre`, pero la impone el compilador.
 | Función | `func div(a, b int) int` | `fn div(a: i64, b: i64) -> i64` | `function div(a: number, b: number): number` | `def div(a, b):` |
 | Retornos múltiples | `func divmod(a, b int) (int, int)`; `q, r := divmod(17, 5)` | una tupla | un array `[q, r]` | una tupla |
 | Bucle clásico | `for i := 0; i < 3; i++ { … }` | `for i in 0..3` | `for (let i = 0; i < 3; i++)` | `for i in range(3)` |
-| `range` | `for i := range 3` (0, 1, 2); `for i, x := range xs` | `for (i, x) in xs.iter().enumerate()` | `xs.forEach((x, i) => …)` | `for i, x in enumerate(xs)` |
+| `range` | `for i := range 3` (0, 1, 2); `for i, x := range xs` (`_` descarta) | `for (i, x) in xs.iter().enumerate()` | `xs.forEach((x, i) => …)` | `for i, x in enumerate(xs)` |
 | `switch` | sin *fall-through*; `fallthrough` lo pide | `match`, exhaustivo | `switch` con `break` | `match` |
 
 | En Go | Qué significa |
 |---|---|
 | `for` | El único bucle: con tres cláusulas, solo con la condición (`for n < 3 { … }`, un `while`) o sin nada (`for { … }`, un `loop`). |
-| `switch` sin expresión | Una condición en cada `case`: sustituye a una cadena de `if`/`else if`. |
 | `x := 3` | Declara e infiere el tipo. |
-| Import o variable local sin usar | Un error de compilación, no un aviso. |
-| Retornos múltiples | Se asignan todos o ninguno; lo que sobre, a `_`. |
 | *Valor cero* | Con el que empieza toda variable: `0`, `""`, `false` o `nil`, el de punteros, slices, mapas, funciones e interfaces (un `error` sin fallo es `nil`). |
 
 :::from Rust
@@ -112,8 +101,6 @@ Un `switch` sin `default` que no casa con ningún `case` no hace nada, sin aviso
 :::
 
 ### Lo justo para el driver
-
-Cinco ideas:
 
 - **Un puntero a struct es el mismo valor, no una copia.** Cambiar un campo de un struct recibido cambia una copia; de un puntero a él, el original.
 - **Un método es una función con receptor.** `func (p Point) String() string` es de `Point`. Con receptor puntero, `func (b *Buffer) Write(…)` es de `*Buffer`, no de `Buffer`.
@@ -139,20 +126,22 @@ El puntero no es una referencia: sin `&mut` ni tiempos de vida, el recolector li
 `gofmt` es `rustfmt` sin `rustfmt.toml`; `go vet`, un `clippy` que casi siempre busca errores, no estilo.
 :::
 
-:::more Mensajes del compilador y de `vet`, `bytes.Buffer` y `&buf`, `gofmt -l`, y comparaciones con Rust, TS y Python
-- Un import sin usar: `"os" imported and not used`. Una variable local sin usar: `declared and not used: x`.
+:::more Mensajes del compilador y de `vet`, retornos múltiples y `switch` sin expresión, `bytes.Buffer` y `&buf`, `gofmt -l`, y comparaciones con Rust, TS y Python
+- Un import o una variable local sin usar son un error de compilación, no un aviso: `"os" imported and not used`; `declared and not used: x`.
 - Un `internal/` importado desde otro módulo: `use of internal package example.com/b/internal/secret not allowed`.
 - Desde fuera, un nombre sin exportar es como si no existiera; desde un paquete de test externo: `undefined: ext.hidden`.
-- Un retorno múltiple a medias, `x := two()`: `assignment mismatch: 1 variable but two returns 2 values`.
+- Los retornos múltiples se asignan todos o ninguno; lo que sobre, a `_`. A medias, `x := two()`: `assignment mismatch: 1 variable but two returns 2 values`.
 - Un `bytes.Buffer` se pasa como `&buf`, porque su `Write` tiene receptor puntero. Pasar `buf`: `bytes.Buffer does not implement io.Writer (method Write has pointer receiver)`. Los tests de `internal/toolchain` usan `bytes.Buffer`.
 - `gofmt -l` sale con 0 aunque liste algún fichero: por eso `ci-local.sh` mira su salida.
 - `go vet`, sobre `fmt.Sprintf("%d items", name)` con un `name` `string`: `fmt.Sprintf format %d has arg name of wrong type string`.
 - `go test` pasa sobre cada paquete, antes de sus tests, un subconjunto «de alta confianza» de vet; si encuentra algo, el paquete sale `[build failed]`.
+- Un `switch` sin expresión lleva una condición en cada `case`: sustituye a una cadena de `if`/`else if`.
 - **`switch`, Rust.** Lo que más se echa de menos es la exhaustividad; el capítulo 3 lo compensa.
 - **`go build`, TS.** Frente a `tsc` más `node`, hace los dos trabajos, y el binario lleva su runtime.
 - **`go build`, Python.** Comprueba tipos y genera código máquina antes de ejecutar nada; un import o una variable local sin usar son errores, no avisos de linter.
 - **`go.mod`, Rust.** Hace de `Cargo.toml` y `rust-toolchain.toml`.
 - **Paquetes, Rust.** No hay `mod` ni `use`: el directorio es el paquete y el import es su ruta.
+- **Visibilidad, Python.** La minúscula hace de `_nombre`, pero la impone el compilador.
 - **`io.Writer` y `error`, Rust.** Para ser un `io.Writer` basta tener `Write([]byte) (int, error)`, sin `impl Write for MiTipo`. El `?` se escribe `if err != nil { return …, err }`.
 :::
 
@@ -162,30 +151,14 @@ Un test es una `func TestXxx(t *testing.T)` en un fichero `_test.go`.
 
 - **Subtests.** `t.Run("version_command", func(t *testing.T) { … })` crea un test hijo, `TestCLI/version_command`, que se informa y selecciona por separado. Su nombre es un literal en `snake_case`: `bookx`, la herramienta que verifica el libro, lo enlaza con su tarjeta, la ficha de cada test.
 - **Tests de tabla.** Las filas se recorren *dentro de un subtest*, sin `t.Run` por fila, y cada fallo la nombra: `t.Errorf("%s: …", tc.name, …)`. Así una tarjeta cubre el subtest con su tabla, y `go test -json` no lista filas.
+- **Slice de structs.** `[]struct{ name, want string }{ {"go_line", "go 1.27"}, … }` es un struct anónimo y un *slice*, una vista de un array, con sus filas, en la misma expresión.
+- **Literal de función.** `func(t *testing.T) { … }` es una función sin nombre, que `t.Run` recibe como argumento. Ve las variables de la función que la contiene: es un *closure*.
 
-| Pieza de `testing` o flag de `go test` | Qué hace |
-|---|---|
-| `t.Errorf` | Anota el fallo y sigue. |
-| `t.Fatalf` | Anota el fallo y termina. |
-| `t.Helper()` | Marca un ayudante: el fallo señala la línea que lo llamó, no su `t.Errorf`. |
-| `t.Cleanup(f)` | Registra una función que corre al terminar el test, también si falló. |
-| `t.TempDir()` | Da un directorio que se borra cuando terminan el test y sus subtests. |
-| `-run` | Selecciona por nombre. |
-| `-race` | Compila con el detector de carreras de datos; necesita un compilador de C. |
+`t.Errorf` anota el fallo y sigue; `t.Fatalf` lo anota y termina.
 
 :::from Rust
 No hay `assert_eq!`: comparas con un `if` y escribes el mensaje con lo obtenido y lo esperado.
 :::
-
-### Lo justo para testear
-
-Los tests de tabla necesitan tres piezas:
-
-| Pieza | Ejemplo | Qué es |
-|---|---|---|
-| Literal de slice de structs | `[]struct{ name, want string }{ {"go_line", "go 1.27"}, … }` | Un struct anónimo y un *slice*, una vista de un array, con sus filas, en la misma expresión. |
-| `range` | `for _, tc := range tests { … }` | Recorre las filas (`_` descarta el índice). |
-| Literal de función | `func(t *testing.T) { … }` | Una función sin nombre, que `t.Run` recibe como argumento. Ve las variables de la función que la contiene: es un *closure*. |
 
 ### `flag` y el patrón de subcomandos
 
@@ -209,8 +182,6 @@ No hay `env!("CARGO_PKG_VERSION")`: la versión de un módulo es la etiqueta de 
 
 ### TDD rojo-verde y tests golden
 
-El libro trabaja con TDD estricto:
-
 - **Rojo.** Escribes el test de algo que no existe y lo ves fallar, por la razón esperada: uno que nunca has visto en rojo puede pasar por accidente.
 - **Verde.** El código mínimo que lo hace pasar.
 - **Refactor.** Limpias con los tests como red.
@@ -221,19 +192,22 @@ Un *test golden* compara la salida de un programa con la esperada, guardada en u
 
 ### GitHub Actions: runners, contenedores y compilación cruzada
 
-GitHub Actions ejecuta *workflows*, ficheros YAML en `.github/workflows/`, ante un evento, como un push. Cada *job* corre en un *runner*, una máquina virtual nueva (`runs-on: ubuntu-latest`), y puede correr dentro de un **contenedor** con imagen de Docker: `ubuntu:26.04`, la Ubuntu de tu WSL, no se mueve como `ubuntu-latest`. `actions/setup-go` instala Go, con la versión que diga el `go.mod`.
+GitHub Actions ejecuta *workflows*, ficheros YAML en `.github/workflows/`, ante un evento, como un push. Cada *job* corre en un *runner*, una máquina virtual nueva (`runs-on: ubuntu-latest`), y puede correr dentro de un **contenedor** con imagen de Docker: `ubuntu:26.04`, la Ubuntu de tu WSL, no se mueve como `ubuntu-latest`.
 
-En la **compilación cruzada**, `GOOS=windows GOARCH=amd64 go build ./cmd/ki` produce un `.exe` desde Linux. Compilar para Windows y ARM64 en cada push detecta la *deriva*, el código que sin que lo notes solo compila en Linux: `syscall.Kill` falla para windows/amd64 con `undefined: syscall.Kill`.
+En la **compilación cruzada**, `GOOS=windows GOARCH=amd64 go build ./cmd/ki` produce un `.exe` desde Linux. Compilar para Windows y ARM64 en cada push detecta la *deriva*, el código que solo compila en Linux: `syscall.Kill` falla para windows/amd64 con `undefined: syscall.Kill`.
 
 :::from Rust
 No hay `rustup target add`: sin cgo (llamadas a C), bastan las dos variables.
 :::
 
-:::more `-run`, `-count=1`, `-shuffle=on`, `-json` y `-race`, cgo en cruzado, `goVersion()` y más comparaciones
-- En `-run 'TestCLI/usage_lists'`, cada trozo entre barras es una expresión regular sin anclar: `-run 'TestCLI/usage'` ejecuta todo subtest cuyo nombre contenga `usage`, como `no_args_is_usage_error` y, desde la sesión 3, `version_help_prints_usage`.
+:::more `t.Helper`, `t.Cleanup` y `t.TempDir`, `-run`, `-count=1`, `-shuffle=on`, `-json` y `-race`, cgo en cruzado, `goVersion()` y más comparaciones
+- `t.Helper()` marca un ayudante: el fallo señala la línea que lo llamó, no su `t.Errorf`.
+- `t.Cleanup(f)` registra una función que corre al terminar el test, también si falló.
+- `t.TempDir()` da un directorio que se borra cuando terminan el test y sus subtests.
+- `-run` selecciona por nombre. En `-run 'TestCLI/usage_lists'`, cada trozo entre barras es una expresión regular sin anclar: `-run 'TestCLI/usage'` ejecuta todo subtest cuyo nombre contenga `usage`, como `no_args_is_usage_error` y, desde la sesión 3, `version_help_prints_usage`.
 - `-count=1` ejecuta aunque haya caché: sin él, un segundo `go test` sin cambios responde `ok … (cached)`.
 - `-shuffle=on` baraja el orden (ejercicio 4), y `-json` emite un objeto por evento.
-- `-race` necesita cgo, el mecanismo de Go para llamar a C, y cgo un compilador de C: lo instala «Puesta en marcha». En Go 1.27, sin `gcc` en el `PATH`, `go env CGO_ENABLED` da `0`, y entonces `go test -race` sale con 2 y `-race requires cgo` (lo fija `TestToolchainFacts/race_requires_cgo`).
+- `-race` compila con el detector de carreras de datos. Necesita cgo, el mecanismo de Go para llamar a C, y cgo un compilador de C: lo instala «Puesta en marcha». En Go 1.27, sin `gcc` en el `PATH`, `go env CGO_ENABLED` da `0`, y entonces `go test -race` sale con 2 y `-race requires cgo` (lo fija `TestToolchainFacts/race_requires_cgo`).
 - Para windows/amd64 y linux/arm64, `go env CGO_ENABLED` también da `0`. `syscall.Kill` compila en linux/amd64 y linux/arm64.
 - Sin información de build, `goVersion()` usa `runtime.Version()`, la misma cadena. `Version` se cambia a mano.
 - **Literal de función, TS.** Una *arrow function* sin forma abreviada y con los tipos obligatorios: `func(x int) int { return x * 2 }` frente a `(x: number) => x * 2`.
@@ -261,13 +235,13 @@ $ go version
 go version go1.27.3 linux/amd64
 ```
 
-2. **Instala lo que `-race` necesita,** los mismos paquetes que la CI:
+2. **Instala lo que `-race`, el detector de carreras de datos, necesita,** los mismos paquetes que la CI:
 
 ```sh
 sudo apt install gcc libc6-dev
 ```
 
-3. **Crea el repositorio en `~/kilang`, nunca bajo `/mnt/c`** (recomendación de WSL, por velocidad):
+3. **Crea el repositorio en `~/kilang`, nunca bajo `/mnt/c`:**
 
 ```sh
 mkdir ~/kilang && cd ~/kilang
@@ -279,7 +253,7 @@ go mod init github.com/aldezex/kilang
 
 {{file ch01-s1 go.mod}}
 
-5. **Añade este `.gitignore`.** Sin `/build/`, un `git add -A` subiría el binario.
+5. **Añade este `.gitignore`.**
 
 {{file ch01-s1 .gitignore}}
 
@@ -306,34 +280,17 @@ git diff ref/ch01-s1 -- internal/driver/
 git restore --source=ref/ch01-s1 -- <fichero>
 ```
 
-:::more Por qué no `/mnt/c`, qué hace `gh`, el `.gitignore` y Delve
-- En WSL, `/mnt/c` es el disco de Windows, montado por `9p` (lo muestra `findmnt`), y la documentación de WSL recomienda trabajar en el sistema de ficheros de Linux por velocidad.
-- `gh repo create` crea el repositorio en GitHub, lo añade como remoto (`--source .`) y sube los commits (`--push`).
-- `/build/` es donde `ci/ci-local.sh` escribe `build/bin/ki`. `/.claude/`, `/.superpowers/` y `.cache/` son carpetas de trabajo de la referencia (`ci-local.sh` salta las dos primeras en su `find`); en tu repo no estorban.
-- Delve, el depurador, se instala en el capítulo 10.
-:::
-
 #### Los tests, en rojo
 
-T01.01–T01.04 fijan la CLI mínima: `--version`, por stdout con 0; sin comando válido, dos líneas de uso por stderr con 2. El 2 es el código de salida habitual para «la línea de órdenes está mal». El 1 dirá que `ki` no pudo escribir la respuesta (sesión 3) o que tu programa Ki tiene errores.
+T01.01–T01.04 fijan la CLI mínima: `--version`, por stdout con 0; sin comando válido, dos líneas de uso por stderr con 2. El 2 es el código de salida habitual para «la línea de órdenes está mal».
 
 Tu primer test en Go va completo, en `internal/driver/cli_test.go`:
 
 {{file ch01-s1 internal/driver/cli_test.go}}
 
-`runCLI` ejecuta `Main` en el mismo proceso con dos `strings.Builder`: por eso `Main` recibe los flujos como parámetros.
-
-| En este test | Qué es |
-|---|---|
-| `package driver` | El paquete que prueba: el test ve sus nombres sin exportar. |
-| `TestCLI`, no `TestMain` | `func TestMain(m *testing.M)` tiene un significado propio (sesión 3). |
-| `args ...string` | Parámetro variádico (`...args: string[]` en TS, `*args` en Python): dentro es un `[]string`, vacío en `runCLI(t)`. |
-| `(code int, stdout, stderr string)` | Resultados con nombre: empiezan con su valor cero y se asignan como variables. |
-| `var out, errOut strings.Builder` | Dos `Builder` con su valor cero, vacío y utilizable. |
-| `&out` | Su dirección (su `Write` tiene receptor puntero). |
-| `%q` | Una cadena entre comillas y con escapes (`"a\nb"`). |
-| `%v` (desde la sesión 2) | Cualquier valor en su forma por defecto. |
-| `checkUsageError` | Mira solo el prefijo y que haya dos líneas, porque la lista de comandos crece; solo `usage_lists_commands` la fija: aquí, `--version`; en su tarjeta, T01.04, la lista final. |
+- `args ...string`: parámetro variádico (`...args: string[]` en TS, `*args` en Python); dentro es un `[]string`, vacío en `runCLI(t)`.
+- `(code int, stdout, stderr string)`: resultados con nombre, que empiezan con su valor cero y se asignan como variables.
+- `&out`: la dirección de un `strings.Builder`, cuyo valor cero ya es utilizable; su `Write` tiene receptor puntero.
 
 ```console
 $ go test ./internal/driver/
@@ -352,36 +309,17 @@ En un lenguaje compilado, el primer rojo suele ser un error de compilación.
 
 {{file ch01-s1 cmd/ki/main.go}}
 
-Es el único `os.Exit` de `ki`: `Main` devuelve el código, y los tests la llaman cuantas veces quieran.
-
-`internal/driver/version.go`:
+Es el único `os.Exit` de `ki`: `Main` recibe los flujos y devuelve el código, así que los tests la ejecutan en proceso.
 
 {{file ch01-s1 internal/driver/version.go}}
 
-`internal/driver/cli.go`:
-
 {{file ch01-s1 internal/driver/cli.go}}
-
-| Sintaxis nueva | Qué es |
-|---|---|
-| `os.Args[1:]` | Los argumentos sin el nombre del programa. |
-| `if bi, ok := debug.ReadBuildInfo(); ok { … }` | Un `if` con sentencia inicial: `bi` y `ok` solo existen dentro de él. |
-| El comentario antes de `package driver` | La documentación que muestra `go doc`. |
-| `fmt.Fprintf` | Escribe en el `io.Writer` que le pases. |
 
 #### `ci/ci-local.sh`
 
-El script que decide el verde de una sesión; `set -euo pipefail` lo corta en el primer fallo.
+El script que decide el verde de una sesión: `gofmt -l`, `go vet`, el build, los tests con y sin `-race` y la compilación cruzada. `set -euo pipefail` lo corta en el primer fallo.
 
 {{file ch01-s1 ci/ci-local.sh}}
-
-| Decisión | Por qué |
-|---|---|
-| Ejecuta `gofmt -l`, `go vet`, el build, los tests con y sin `-race` y la compilación cruzada | La misma puerta que la CI. |
-| Exporta `GOTOOLCHAIN=local` y deja fuera `GOFLAGS`, `GOENV` y `GOWORK` | `go` no descarga otro toolchain, y ni un `GOFLAGS` heredado, ni `go env -w`, ni un `go.work` cambian las comprobaciones. |
-| Compara el Go instalado con la línea `toolchain` del `go.mod` del árbol en que corre | Una etiqueta antigua se verifica con su propio parche. |
-| Pasa `gofmt -l` sobre la lista de `find`, no de `git ls-files` | También corre en copias de etiquetas sin repositorio. |
-| Se para si `find` no encuentra ningún fichero Go | Si no, la comprobación pasaría sin comprobar nada. |
 
 Hazlo ejecutable (`chmod +x ci/ci-local.sh`) y ejecútalo. La segunda tanda es la de `-race`; los tiempos varían, y lo ya pasado sin cambios sale `(cached)`.
 
@@ -393,6 +331,22 @@ ok  	github.com/aldezex/kilang/internal/driver	0.002s
 ok  	github.com/aldezex/kilang/internal/driver	1.014s
 verify: OK
 ```
+
+:::more Por qué no `/mnt/c`, qué hace `gh`, el `.gitignore`, Delve, el código de salida 1, y la sintaxis menor de esta sesión
+- En WSL, `/mnt/c` es el disco de Windows, montado por `9p` (lo muestra `findmnt`), y la documentación de WSL recomienda trabajar en el sistema de ficheros de Linux por velocidad.
+- `gh repo create` crea el repositorio en GitHub, lo añade como remoto (`--source .`) y sube los commits (`--push`).
+- `/build/` es donde `ci/ci-local.sh` escribe `build/bin/ki`: sin esa línea, un `git add -A` subiría el binario. `/.claude/`, `/.superpowers/` y `.cache/` son carpetas de trabajo de la referencia (`ci-local.sh` salta las dos primeras en su `find`); en tu repo no estorban.
+- Delve, el depurador, se instala en el capítulo 10.
+- El código de salida 1 dirá que `ki` no pudo escribir la respuesta (sesión 3) o que tu programa Ki tiene errores.
+- `package driver`: el paquete que prueba, así que el test ve sus nombres sin exportar.
+- `TestCLI`, no `TestMain`: `func TestMain(m *testing.M)` tiene un significado propio (sesión 3).
+- `%q` escribe una cadena entre comillas y con escapes (`"a\nb"`); `%v`, desde la sesión 2, cualquier valor en su forma por defecto.
+- `checkUsageError` mira solo el prefijo y que haya dos líneas, porque la lista de comandos crece; solo `usage_lists_commands` la fija: aquí, `--version`; en su tarjeta, T01.04, la lista final.
+- `os.Args[1:]` son los argumentos sin el nombre del programa.
+- `if bi, ok := debug.ReadBuildInfo(); ok { … }` es un `if` con sentencia inicial: `bi` y `ok` solo existen dentro de él.
+- El comentario antes de `package driver` es la documentación que muestra `go doc`.
+- `fmt.Fprintf` escribe en el `io.Writer` que le pases.
+:::
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch01-s1` y sigue.
 
@@ -425,45 +379,17 @@ T01.06 pide que nada se escape al stderr *real*. `os.Stderr` es una variable rea
 
 #### La tabla de comandos
 
-`internal/driver/session.go`:
-
 {{file ch01-s2 internal/driver/session.go}}
 
-`Session` es el único valor que recibe cada comando.
-
-`internal/driver/commands.go`:
+Go no tiene constructores: por convención, `NewX` construye un `X`, como `NewSession`.
 
 {{file ch01-s2 internal/driver/commands.go}}
 
-`command` es un struct cuyo campo `Run` es una función: qué hacer, guardado en una tabla.
+`command` es un struct cuyo campo `Run` es una función. `Run` es un *closure* que captura su comando: lo necesita para informar errores, y no puede buscarlo en `commands`, que se inicializa a partir de `Run`.
 
-`versionCommand` resuelve un ciclo: `Run` necesita su comando para informar errores, y no puede buscarlo en `commands`, que se inicializa a partir de `Run`. La salida es un *closure*: `Run` captura un puntero `c` a un `command` nuevo (`&command{…}`), y `return *c` devuelve una copia.
-
-Aparte de la versión, `runVersion` tiene tres salidas: un error de uso, a stderr con 2; la ayuda pedida (`-h`), a stdout con 0; y un stdout que no se puede escribir, a stderr con 1 (`printOut`).
-
-`internal/driver/cli.go`:
+`runVersion` tiene tres salidas más: un error de uso, a stderr con 2; la ayuda pedida (`-h`), a stdout con 0; y un stdout que no se puede escribir, a stderr con 1 (`printOut`).
 
 {{diff ch01-s1..ch01-s2 internal/driver/cli.go}}
-
-| Sintaxis nueva | Qué es |
-|---|---|
-| `NewSession` | Go no tiene constructores: por convención, `NewX` construye un `X`. Devuelve un puntero para que la sesión no se copie en cada llamada. |
-| `fs.NArg()` | Cuenta los argumentos que no son flags. |
-| `errors.Is(err, flag.ErrHelp)` | Pregunta si el error es ese valor (o lo envuelve). |
-| `_, _ = fmt.Fprintf(…)` | Descarta a propósito lo que devuelve escribir en stderr: si falla, no queda dónde decirlo. |
-| `make([]string, len(commands))` | En `usage()`, que saca la línea `commands:` de la tabla: crea un slice de cadenas vacías que el bucle rellena, y `strings.Join` las une: la línea nunca se desfasa de la tabla. |
-
-:::more `NewSession` y su literal, `runVersion`, `printOut`, el ciclo de inicialización, y `defer` y `os.Stderr` frente a Rust y Python
-- Crea la sesión con `NewSession`, no con el literal `&Session{…}`, aunque compila: ahí se fijarán los campos con un valor inicial distinto de cero.
-- `commands` es un slice en orden de registro, el de la línea `commands:`.
-- `runVersion` crea un `FlagSet` aunque `version` no tenga flags, para que un `-x` reciba el mismo mensaje que en cualquier comando.
-- `-h`, `-help` y `--help` no son un error: `Parse` devuelve `flag.ErrHelp`, y `ki` responde la línea `usage:` por stdout, con 0.
-- `printOut`: si escribir en stdout falla (un disco lleno), lo dice por stderr y devuelve 1, y un script no toma una respuesta perdida por buena. Sus tests y los de la ayuda llegan en la sesión 3.
-- `usageError` escribe `ki <nombre>: <error>` y la línea `usage:`, y devuelve 2.
-- Buscar en `commands` desde `Run`: `initialization cycle for commands`, seguido de la cadena que cierra el ciclo, `… runVersion refers to commands`.
-- **`defer`, Rust y Python.** También hace de *scope guard*; es un `finally` (o un `with`) escrito junto a lo que limpia.
-- **`os.Stderr`, Rust.** Una variable global mutable, sin `static mut` ni `unsafe`: cualquier paquete puede reasignarla.
-:::
 
 Ya pasa; compárate:
 
@@ -475,7 +401,7 @@ Ya pasa; compárate:
 
 #### Los hechos del toolchain, fijados a tests
 
-Cada hecho «en Go 1.27» del libro tiene un test en `internal/toolchain/`, que falla si Go lo cambia.
+Cada hecho «en Go 1.27» tiene un test en `internal/toolchain/`, que falla si Go lo cambia.
 
 Copia T01.08–T01.10, que miran el `go.mod`, en `internal/toolchain/toolchain_test.go`. `toolchain_test` es un paquete de test externo (el sufijo `_test` en `package`), lo habitual si el test no necesita nada sin exportar.
 
@@ -485,26 +411,29 @@ Como los tests de integración de `tests/`: compila aparte y solo ve lo exportad
 
 {{file ch01-s2 internal/toolchain/toolchain_test.go}}
 
-| En este test | Por qué |
-|---|---|
-| `hasLine` | Compara líneas enteras: con `strings.Contains`, un `go 1.27.3` olvidado pasaría por `go 1.27`. |
-| `no_dependencies` | Un subtest aparte: una negación, no una fila más. |
-
-Copia en `facts_test.go` T01.11–T01.16, que ejecutan `go` sobre módulos desechables en `t.TempDir()`:
+Copia en `facts_test.go` T01.11–T01.16, que ejecutan `go` con `exec.Command`, de `os/exec`, sobre módulos desechables en `t.TempDir()`:
 
 {{file ch01-s2 internal/toolchain/facts_test.go}}
 
-| Sintaxis nueva | Qué es |
-|---|---|
-| `exec.Command("go", args...)` | Del paquete `os/exec`, nuevo aquí: prepara el proceso; `args...` expande el slice. |
-| `cmd.Dir` | Su directorio. |
-| `cmd.Env` | El entorno del test más cuatro variables que lo aíslan de la configuración de la máquina. |
-| `cmd.Run()` | Devuelve `nil` si el proceso sale con 0 y, si no, un error. |
-| `errors.As(r.err, &exit)` | Busca en el error uno de tipo `*exec.ExitError` (como `downcast_ref` en Rust), con el código de salida: `race_requires_cgo` exige un 2. |
-| `String()` de `goRun` | Hace que `%v` imprima la ejecución entera. |
-| Comillas invertidas | Cadenas *raw*, sin escapes y de varias líneas. |
-
 Estos tests pasan desde el principio: el rojo va al revés. Pide `"go 1.27.3"` en la tabla de `TestGoMod/lines`, mira el fallo y deshazlo.
+
+:::more La sintaxis menor de la sesión 2, `NewSession`, el ciclo de inicialización, `os/exec`, y `defer` y `os.Stderr` frente a Rust y Python
+- Crea la sesión con `NewSession`, no con el literal `&Session{…}`, aunque compila: ahí se fijarán los campos con un valor inicial distinto de cero. Devuelve un puntero para que la sesión no se copie en cada llamada.
+- `Session` es el único valor que recibe cada comando.
+- `-h`, `-help` y `--help` no son un error: `Parse` devuelve `flag.ErrHelp`, y `errors.Is(err, flag.ErrHelp)` pregunta si el error es ese valor (o lo envuelve).
+- Con el 1 de `printOut`, un script no toma una respuesta perdida por buena. Sus tests y los de la ayuda llegan en la sesión 3.
+- En `versionCommand`, `Run` captura un puntero `c` a un `command` nuevo (`&command{…}`), y `return *c` devuelve una copia. Buscar en `commands` desde `Run`: `initialization cycle for commands`, seguido de la cadena que cierra el ciclo, `… runVersion refers to commands`.
+- `fs.NArg()` cuenta los argumentos que no son flags.
+- `_, _ = fmt.Fprintf(…)` descarta a propósito lo que devuelve escribir en stderr: si falla, no queda dónde decirlo.
+- `usage()` saca la línea `commands:` de la tabla: `make([]string, len(commands))` crea un slice de cadenas vacías que el bucle rellena, y `strings.Join` las une, así que la línea nunca se desfasa de la tabla.
+- `hasLine` compara líneas enteras: con `strings.Contains`, un `go 1.27.3` olvidado pasaría por `go 1.27`. `no_dependencies` es un subtest aparte: una negación, no una fila más.
+- `exec.Command("go", args...)` prepara el proceso, y `args...` expande el slice. `cmd.Dir` es su directorio; `cmd.Env`, el entorno del test más cuatro variables que lo aíslan de la configuración de la máquina. `cmd.Run()` devuelve `nil` si el proceso sale con 0 y, si no, un error.
+- `errors.As(r.err, &exit)` busca en el error uno de tipo `*exec.ExitError` (como `downcast_ref` en Rust), con el código de salida: `race_requires_cgo` exige un 2.
+- El `String()` de `goRun` hace que `%v` imprima la ejecución entera.
+- Las comillas invertidas son cadenas *raw*, sin escapes y de varias líneas.
+- **`defer`, Rust y Python.** También hace de *scope guard*; es un `finally` (o un `with`) escrito junto a lo que limpia.
+- **`os.Stderr`, Rust.** Una variable global mutable, sin `static mut` ni `unsafe`: cualquier paquete puede reasignarla.
+:::
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch01-s2` y sigue.
 
@@ -526,14 +455,11 @@ Un workflow no se prueba en local, pero sí lo que dice: T01.17–T01.20 leen `c
 
 2. **Escribe `internal/toolchain/ci_test.go`: dos ayudantes y los cuatro subtests de `TestCIWorkflow`.** En YAML, una línea solo significa algo bajo su padre. `readCIWorkflow(t) []ciLine` guarda de cada línea su sangría y su texto; `under(t, lines, path...)` devuelve lo que cuelga de una ruta como `"jobs:", "check:", "env:"`.
 
-Las rutas comparten base, `job`: `append(slices.Clone(job), "env:")` copia antes de añadir. Un slice tiene longitud y capacidad, y mientras quede sitio, `append` escribe en el mismo array: dos rutas hechas desde la misma base podrían pisarse.
-
-:::from Rust
-El *borrow checker* rechazaría dos vistas de un slice que escriben en el mismo sitio. `slices.Clone` hace de `to_vec()`.
-:::
+Las rutas comparten base: `append(slices.Clone(job), "env:")` copia antes de añadir, o dos podrían pisarse.
 
 :::more Los ayudantes de `ci_test.go`, dos `append` sobre una misma base y el `return ""` tras `t.Fatalf`
-- `make([]string, 0, 4)` da longitud 0 y sitio para 4. Con `base := append(make([]string, 0, 4), "jobs:", "check:")`, `append(base, "env:")` y luego `append(base, "steps:")` dan los dos `[jobs: check: steps:]`.
+- Un slice tiene longitud y capacidad, y mientras quede sitio, `append` escribe en el mismo array. `make([]string, 0, 4)` da longitud 0 y sitio para 4. Con `base := append(make([]string, 0, 4), "jobs:", "check:")`, `append(base, "env:")` y luego `append(base, "steps:")` dan los dos `[jobs: check: steps:]`.
+- **`append`, Rust.** El *borrow checker* rechazaría dos vistas de un slice que escriben en el mismo sitio. `slices.Clone` hace de `to_vec()`.
 - `readRepoLines` lee cualquier fichero desde la raíz del repositorio (`go test` corre en el directorio del paquete, así que el `go.mod` está en `../../go.mod`), y T01.19 reutiliza `toolchainVersion`, la búsqueda de la línea `toolchain`.
 - `readCIWorkflow` salta líneas en blanco y comentarios (un `# GOTOOLCHAIN: local` no cuenta), y quita al texto de cada línea los espacios iniciales.
 - `GOTOOLCHAIN: auto` es correcto en «Set up Go» y un error en el job. Por eso `under` busca cada cabecera entre los hijos directos de la anterior, y para el test si falta alguna.
@@ -913,6 +839,6 @@ Porque `Write` de `bytes.Buffer` tiene receptor puntero: el método es de `*byte
 
 **Nombres sin tartamudeo.** `driver.Main`, no `driver.DriverMain`: `bufio` llama `Reader` a su lector, «not `BufReader`, because users see it as `bufio.Reader`» (Effective Go).
 
-**`go vet` y `-race` en toda CI.** Los dos atrapan fallos que el compilador deja pasar. Según su documentación, en un programa típico `-race` cuesta 5–10 veces más memoria y 2–20 más tiempo, y «only finds races that happen at runtime»: vale lo que tu cobertura.
+**`go vet` y `-race` en toda CI.** Según su documentación, en un programa típico `-race` cuesta 5–10 veces más memoria y 2–20 más tiempo, y «only finds races that happen at runtime»: vale lo que tu cobertura.
 
-**La compilación cruzada como control de deriva.** Un runner de Linux compila para Windows, macOS y ARM64 en segundos; no sustituye a ejecutar los tests allí, pero impide que la deriva se acumule.
+**La compilación cruzada como control de deriva.** Un runner de Linux compila para Windows, macOS y ARM64 en segundos; no sustituye a ejecutar los tests allí.
