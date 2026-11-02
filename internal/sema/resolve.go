@@ -19,8 +19,10 @@ type LocalID uint32
 // Module 0 is the prelude.
 type ModuleIdx uint32
 
-// preludeModule is the module whose `pub` definitions every other module sees.
-const preludeModule ModuleIdx = 0
+// PreludeModule is the index of the prelude: the module whose `pub` definitions
+// every other module sees. A pass that has to tell the prelude's definitions
+// from the program's (Elaborate does) compares Def.Module with it.
+const PreludeModule ModuleIdx = 0
 
 // DefKind says what a Def is.
 type DefKind uint8
@@ -381,8 +383,8 @@ func (r *resolver) lookupDef(mod ModuleIdx, name base.Symbol) (Res, bool) {
 	if r.broken[moduleName{mod, name}] {
 		return Res{Kind: ResError}, true
 	}
-	if mod != preludeModule {
-		if def, ok := r.tops[preludeModule][name]; ok && r.rp.Defs.Get(def).Pub {
+	if mod != PreludeModule {
+		if def, ok := r.tops[PreludeModule][name]; ok && r.rp.Defs.Get(def).Pub {
 			return Res{Kind: ResDef, Def: def}, true
 		}
 	}

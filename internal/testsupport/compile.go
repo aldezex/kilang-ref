@@ -6,9 +6,11 @@ package testsupport
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/aldezex/kilang/internal/core"
 	"github.com/aldezex/kilang/internal/diag"
 	"github.com/aldezex/kilang/internal/driver"
 	"github.com/aldezex/kilang/internal/sema"
@@ -34,6 +36,45 @@ func Analyze(t *testing.T, source string) *Program {
 	p := parse(source)
 	p.Session.Analyze(p.Frontend)
 	return p
+}
+
+// Compiled is a piece of source that has been through the whole compiler up to
+// Core. The Program it embeds carries the Session, so the spans of Core resolve
+// through Session.Sources and its names through Session.Interner.
+type Compiled struct {
+	*Program
+	// Core is what the elaboration made of Frontend, with the prelude's
+	// functions first.
+	Core *core.Program
+}
+
+// maxSourceShown is how many bytes of its source a failure of Compile shows.
+const maxSourceShown = 200
+
+// Compile runs source through the front end like Analyze and then elaborates it
+// to Core (Session.Lower). It fails the test if the front end reports an error,
+// because Core is made only for programs without errors: a test of an error
+// uses Analyze. The failure names the first error and shows at most the first
+// maxSourceShown bytes of source, because some tests compile a source of
+// 100 000 lines.
+func Compile(t *testing.T, source string) *Compiled {
+	t.Helper()
+	p := Analyze(t, source)
+	if p.Session.Sink.HasErrors() {
+		first := ""
+		for _, d := range p.Session.Sink.All() {
+			if d.Severity == diag.Error {
+				first = d.Code.String() + " " + d.Message
+				break
+			}
+		}
+		shown, cut := source, ""
+		if len(source) > maxSourceShown {
+			shown, cut = source[:maxSourceShown], fmt.Sprintf(" (%d bytes in all)", len(source))
+		}
+		t.Fatalf("the front end reported errors, the first %s, in %q%s", first, shown, cut)
+	}
+	return &Compiled{Program: p, Core: p.Session.Lower(p.Frontend)}
 }
 
 // Resolve parses source like Analyze and runs name resolution only: p.Frontend

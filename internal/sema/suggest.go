@@ -67,7 +67,7 @@ func (r *resolver) candidates() []string {
 		if r.tops[def.Module][def.Name] != id {
 			continue
 		}
-		if def.Module == r.mod || (def.Module == preludeModule && def.Pub) {
+		if def.Module == r.mod || (def.Module == PreludeModule && def.Pub) {
 			set[r.in.String(def.Name)] = true
 		}
 	}

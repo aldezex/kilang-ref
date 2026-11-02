@@ -166,3 +166,222 @@ why:     el AST y Core guardan los hijos de un nodo como un `ListRange` sobre un
          que hace que una lista sea contigua: un `First` o un `Count` mal calculado desplazaría todas
          las listas que vienen detrás
 ref:     TestListRange
+
+[T09.14] elaborate.if_becomes_match                        level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    un `if` se elabora a un `Match` sobre la condición con dos brazos, en este orden: `PatTrue` con la rama `then` y `PatFalse` con la rama `else`; sin `else`, el brazo `PatFalse` es un `LitUnit`; un `else if` es un `Match` dentro del brazo `PatFalse`; y el `Match`, y el `()` que ocupa el lugar de un `else` que falta, llevan el span del `if` entero
+input:   tres funciones: `if c { a } else { b }`, `if c { print(1) }` y `if p { 1 } else if q { 2 } else { 3 }`
+expect:  los cuerpos son exactamente `match c@0 { true => a@1; false => b@2 }`, `match c@0 { true => @print(1); false => () }` y `match p@0 { true => 1; false => match q@1 { true => 2; false => 3 } }` (en la notación del test: `nombre@slot` es una variable y `@nombre` una función); el `Match` de la primera cubre `if c { a } else { b }`; el de la segunda y su `()` cubren `if c { print(1) }`; y el `Match` del `else if` cubre `if q { 2 } else { 3 }`
+why:     Core no tiene `if`: una construcción menos que ejecutar, comprobar e imprimir. Si el
+         elaborador escribiera los brazos al revés, o pusiera la rama de `then` en el brazo
+         `false`, el programa se ejecutaría con las ramas cambiadas y el error no se vería hasta
+         correrlo con una condición que las distinga. Y un `if` sin `else` con la condición falsa
+         vale `()`: si el brazo que falta no existiera o fuera otro literal, la máquina del
+         capítulo 10 no encontraría brazo o devolvería un valor de otro tipo. El span del `Match`
+         es el del `if`, la sintaxis de la que viene.
+ref:     TestElaborate/if_becomes_match
+
+[T09.15] elaborate.and_short_circuits                      level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    `a && b` se elabora a un `Match` sobre `a` cuyo brazo `PatTrue` es `b` y cuyo brazo `PatFalse` es un `LitBool` de valor `false`; en una cadena `a && b && c`, el `Match` de `a && b` es el escrutinio del exterior; el `Match` y el `false` que añade el operador llevan el span de la expresión entera
+input:   `a && b` y `a && b && c`, con parámetros `Bool`
+expect:  los cuerpos son exactamente `match a@0 { true => b@1; false => false }` y `match match a@0 { true => b@1; false => false } { true => c@2; false => false }`; en la primera, el `Match` y el `false` cubren `a && b`; en la segunda, el `Match` exterior cubre `a && b && c` y el interior `a && b`
+why:     Core es estricto: si `&&` fuera una primitiva, los dos operandos se evaluarían antes de
+         llamarla, y `n != 0 && 10 / n > 1` dividiría por cero cuando `n` es 0. Con un `Match`,
+         `b` solo se evalúa si `a` es verdadero, y todo el significado del operador está en el
+         orden de los brazos y en el literal del brazo `false`: un `true` en su lugar, o los
+         brazos cambiados, lo convertirían en otro operador sin que ninguna otra cosa lo notara.
+         La cadena comprueba que el escrutinio es el operando izquierdo y no el derecho.
+ref:     TestElaborate/and_short_circuits
+
+[T09.16] elaborate.or_short_circuits                       level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    `a || b` se elabora a un `Match` sobre `a` cuyo brazo `PatTrue` es un `LitBool` de valor `true` y cuyo brazo `PatFalse` es `b`; una cadena `a || b || c` anida el `Match` de `a || b` como escrutinio del exterior; en `a && b || c`, el `Match` de `||` tiene como escrutinio el de `&&`; el `Match` y el `true` que añade el operador llevan el span de la expresión entera
+input:   `a || b`, `a || b || c` y `a && b || c`, con parámetros `Bool`
+expect:  los cuerpos son exactamente `match a@0 { true => true; false => b@1 }`, `match match a@0 { true => true; false => b@1 } { true => true; false => c@2 }` y `match match a@0 { true => b@1; false => false } { true => true; false => c@2 }`; en la primera, el `Match` y el `true` cubren `a || b`
+why:     Es el reflejo de `&&`: `b` solo se evalúa si `a` es falso. Los dos operadores se elaboran
+         en casos vecinos del elaborador, que se diferencian solo por el literal y por el brazo
+         que lo lleva, así que un cambio hecho para uno puede romper el otro sin que el compilador
+         de Go diga nada. El caso mixto fija que `a && b || c` es `(a && b) || c` y que cada
+         operador conserva su propio literal cuando están anidados.
+ref:     TestElaborate/or_short_circuits
+
+[T09.17] elaborate.eq_on_bool_uses_eq_bool                 level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    `==` y `!=` eligen su primitiva por el tipo del operando izquierdo: `Bool` da `eq_bool` y `ne_bool`, e `Int` da `eq_int` y `ne_int`, sea el operando una variable, un literal o una expresión mayor; los operandos conservan su orden
+input:   ocho expresiones en una función con parámetros `a: Bool, b: Bool, x: Int, y: Int`: `a == b`, `a != b`, `x == y`, `x != y`, `true == a`, `1 == x`, `(x < y) == (y < x)` y `(x + y) != y`
+expect:  los cuerpos son exactamente `eq_bool(a@0, b@1)`, `ne_bool(a@0, b@1)`, `eq_int(x@2, y@3)`, `ne_int(x@2, y@3)`, `eq_bool(true, a@0)`, `eq_int(1, x@2)`, `eq_bool(lt_int(x@2, y@3), lt_int(y@3, x@2))` y `ne_int(add_int(x@2, y@3), y@3)`
+why:     Core no tiene tipos, así que este es el último sitio donde se sabe si una igualdad
+         compara booleanos o enteros: comparar dos `Bool` con `eq_int` sería un panic de Go en la
+         máquina del capítulo 10 (`interface conversion`), en lugar de un resultado. Las cuatro
+         primitivas se distinguen por muy poco en el nombre, y por eso la tabla las cubre todas,
+         `==` con `!=` en cada tipo. Las filas con un literal y con una expresión a la izquierda
+         comprueban que el tipo sale del operando, no del nombre de una variable.
+ref:     TestElaborate/eq_on_bool_uses_eq_bool
+
+[T09.18] elaborate.eq_on_unbound_variable_uses_eq_int      level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    en un `==` o `!=` cuyo operando izquierdo tiene un tipo que es una variable sin ligar, la primitiva es la de `Int`; si el programa llama a la función con `Bool`, la variable queda ligada y el elaborador la resuelve antes de elegir, así que la primitiva es la de `Bool`
+input:   `fn same(x, y) -> Bool { x == y }` y `fn differ(x, y) -> Bool { x != y }` sin ninguna llamada; después, las mismas con `fn main() { let r = same(true, false) }`
+expect:  sin la llamada, `same` es `eq_int(x@0, y@1)` y `differ` es `ne_int(x@0, y@1)`, y el tipo del operando izquierdo de cada una, ya resuelto, sigue siendo una variable (`TypeVariable`); con la llamada, `same` es `eq_bool(x@0, y@1)` y `differ`, que nadie llama, sigue en `ne_int(x@0, y@1)`; el tipo del operando izquierdo de `same` es todavía un nodo `TypeVariable` y, al resolverlo, es `Bool`
+why:     El comprobador acepta `same` aunque nada fije sus parámetros (T08.30), y el elaborador
+         tiene que producir algo para ella: un ICE o un error serían un fallo del compilador ante
+         un programa válido. Elegir `Int` no cambia lo que hace ningún programa, porque un valor
+         de tipo desconocido no existe en la ejecución. La segunda mitad es la trampa: con la
+         llamada, el tipo del operando es una variable ligada a `Bool`, y quien lea el nodo sin
+         resolverlo la toma por una variable libre y elige `eq_int` para dos booleanos. `differ`
+         comprueba que la decisión es por función y no global.
+ref:     TestElaborate/eq_on_unbound_variable_uses_eq_int
+
+[T09.19] elaborate.slots_are_dense                         level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    los parámetros y los `let` de una función son `Var` cuyos slots son 0, 1, 2… en el orden en que el programa los nombra, y `FrameSize` es cuántos hay; cada función cuenta desde 0; las variables de un bloque anidado van en el marco de su función, en el orden del texto (un `let` toma su slot antes que las variables de su inicializador), también dentro de los operandos de un operador, de la condición y las ramas de un `if`, del callee y los argumentos de una llamada; y el `_` de una sentencia de expresión toma su slot antes que las variables del bloque que esa expresión contiene
+input:   `fn f(a: Int, b: Int) -> Int { let c = a + b; let d = c * 2; d }` (cada `let` en su línea), `fn g(x: Int) -> Int { x }` y seis funciones con bloques anidados: en el inicializador de un `let` y en una rama de un `if` (`h`), en los dos operandos de `+` (`sum`) y de `&&` (`both`), en la condición y las dos ramas de un `if` (`cond`), en el callee y en el argumento de una llamada (`call`) y en una sentencia de expresión (`stmt`)
+expect:  `f` tiene `FrameSize` 4, parámetros `a@0 b@1` y cuerpo `let c@2 = add_int(a@0, b@1); let d@3 = mul_int(c@2, 2); d@3`; `g` tiene `FrameSize` 1, su parámetro en el slot 0 y cuerpo `x@0`; `h` tiene `FrameSize` 4 y cuerpo `let a@1 = let b@2 = 1; b@2; match c@0 { true => let d@3 = 2; d@3; false => a@1 }`; y los cuerpos de las otras cinco son exactamente `add_int(let a@0 = 1; a@0, let b@1 = 2; b@1)`, `match let p@1 = c@0; p@1 { true => let q@2 = c@0; q@2; false => false }`, `match let t@1 = c@0; t@1 { true => let u@2 = 1; u@2; false => let v@3 = 2; v@3 }`, `let h@1 = g@0; h@1(let a@2 = 1; a@2)` y `let _@1 = match c@0 { true => let d@2 = 1; @print(d@2); false => () }; @print(2)`
+why:     El intérprete del capítulo 10 guarda las variables de una llamada en un entorno de
+         `FrameSize` valores y escribe cada una en su slot. Un slot repetido haría que dos
+         variables se pisaran; un contador que no vuelve a 0 en cada función dejaría huecos y
+         reservaría entornos mayores de lo necesario; y un `FrameSize` corto dejaría un slot fuera
+         del entorno, que es justo lo que comprobará Core Lint en la sesión siguiente. El orden de
+         los bloques anidados es lo que hace delicado el elaborador, porque construye los `Let` de
+         la última sentencia a la primera pero reparte los slots de la primera a la última: cada
+         una de esas filas detecta una versión que elaborara los hijos en otro orden.
+ref:     TestElaborate/slots_are_dense
+
+[T09.20] elaborate.prim_span_is_operator                   level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    el `PrimCall` de un operador, binario o unario, tiene el span del operador y no el de la expresión, también cuando el operador ocupa dos caracteres y cuando hay blancos alrededor; `-` unario y `-` binario son cada uno su primitiva y su span
+input:   una función cuyo cuerpo tiene, cada una en su línea, `let s = a  +   b`, `let le = a <= b`, `let t = !le`, `let n = -s` y la cola `(s - 1) * n`
+expect:  hay exactamente seis `PrimCall`, de seis primitivas distintas (`add_int`, `le_int`, `not_bool`, `neg_int`, `sub_int` y `mul_int`), y sus spans cubren exactamente `+` en 2:14, `<=` en 3:14, `!` en 4:11, `-` en 5:11, `-` en 6:6 y `*` en 6:11
+why:     Es el sitio al que apuntará `panic: integer overflow at f.ki:3:9`: el operador, no el
+         principio de la expresión. Con `(s - 1) * n`, el span de la expresión empieza en el
+         paréntesis y el del operador en el `*`: si el elaborador usara el de la expresión, el
+         mensaje señalaría el principio de la línea en lugar del `*` que desbordó. `-s` y `s - 1`
+         comparten el carácter y no la primitiva, y `<=` ocupa dos columnas: un span que cubriera
+         solo el primer carácter o el hueco entre los operandos también falla.
+ref:     TestElaborate/prim_span_is_operator
+
+[T09.21] elaborate.expr_stmt_becomes_let_underscore        level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    una sentencia que es solo una expresión se elabora a un `Let` que liga una variable llamada `_`, distinta en cada sentencia y con su propio slot, cuyo `Init` es la expresión; una sentencia que termina en `;` es también una sentencia y deja el bloque sin cola, de valor `()`; el `Let` de una sentencia de expresión y la variable `_` cubren la expresión, y el `Let` de un `let` cubre la sentencia entera mientras su variable cubre solo el nombre
+input:   `fn main()` con `let x = 1 + 2` y tres líneas `print(x)`, y `fn semi() { print(1); }`
+expect:  `main` es exactamente `let x@0 = add_int(1, 2); let _@1 = @print(x@0); let _@2 = @print(x@0); @print(x@0)`, con `FrameSize` 3; el primer `Let` cubre `let x = 1 + 2` y su variable se liga en `x`; los `Let` de las dos sentencias de expresión ligan variables distintas, llamadas `_`, ligadas en spans distintos, y tanto cada `Let` como el sitio donde se liga su variable cubren `print(x)`; `semi` es exactamente `let _@0 = @print(1); ()`, con `FrameSize` 1
+why:     La última línea de `main` es la cola y no una sentencia: de eso decide la regla de línea,
+         y el elaborador solo la sigue. Cada `_` necesita su slot porque un `Let` escribe el valor
+         de su `Init` en el slot de su variable aunque nadie lo lea: si las dos sentencias
+         compartieran variable, serían una sola ligadura repetida y el impresor de la sesión
+         siguiente no podría mostrar `_`, `_1`… Y un `let` no puede ligar el nombre `_` (el lexer
+         lo lee como un token propio y `let _` es un error de sintaxis, lo que fijan los tests de
+         los capítulos 5 y 6), así que la variable de una sentencia de expresión no choca con la
+         de ningún `let`.
+ref:     TestElaborate/expr_stmt_becomes_let_underscore
+
+[T09.22] elaborate.extern_has_no_body                      level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    una función `extern` del preludio se elabora a una `Fun` sin cuerpo, con el nombre de runtime que da el atributo, con su parámetro y su marco, y fuera de la parte del usuario; una función normal tiene cuerpo, ningún nombre de runtime y es de la parte del usuario
+input:   `fn main() {}` junto con el preludio, que declara `#[extern("ki_print_int")] pub fn print(x: Int)`
+expect:  `print` tiene `HasBody` falso, `ExternName` `ki_print_int`, `UserModule` falso, un parámetro, `x@0`, y `FrameSize` 1; `main` tiene `HasBody` verdadero, `ExternName` vacío y `UserModule` verdadero
+why:     La máquina decide por `HasBody` si evalúa un cuerpo o llama a la función del runtime con
+         ese nombre, y `ExternName` solo significa algo cuando no hay cuerpo: un extern con
+         cuerpo, o sin nombre de runtime, es justo lo que Core Lint rechazará. El extern conserva
+         su parámetro porque Lint comprueba la aridad de cada llamada contra `Params`, y
+         `UserModule` es lo que hace que `ki emit core` muestre las funciones del usuario y no las
+         del preludio.
+ref:     TestElaborate/extern_has_no_body
+
+[T09.23] elaborate.operators_map_to_prims                  level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    cada operador aritmético, de orden y unario se elabora a su primitiva, con los operandos en su orden y cada operando elaborado a su vez
+input:   trece expresiones en una función con parámetros `x: Int, y: Int, b: Bool`: `x + y`, `x - y`, `x * y`, `x / y`, `x % y`, `-x`, `x < y`, `x <= y`, `x > y`, `x >= y`, `!b`, `x + y * x` y `-x - -y`
+expect:  los cuerpos son exactamente `add_int(x@0, y@1)`, `sub_int(x@0, y@1)`, `mul_int(x@0, y@1)`, `div_int(x@0, y@1)`, `rem_int(x@0, y@1)`, `neg_int(x@0)`, `lt_int(x@0, y@1)`, `le_int(x@0, y@1)`, `gt_int(x@0, y@1)`, `ge_int(x@0, y@1)`, `not_bool(b@2)`, `add_int(x@0, mul_int(y@1, x@0))` y `sub_int(neg_int(x@0), neg_int(y@1))`
+why:     Las once primitivas de estos operadores solo se distinguen por el nombre, y el elaborador
+         las elige con una tabla en la que un renglón mal copiado (`<` por `<=`, `/` por `%`, `+`
+         por `-`) compila y se ejecuta bien en casi todos los programas. Cada fila fija una; `x -
+         y`, `x / y`, `x % y` y las comparaciones fijan además el orden de los operandos, que
+         importa porque no son conmutativas. Las dos últimas filas anidan: el operando de una
+         primitiva es otra primitiva. (`==` y `!=` tienen sus propios tests, porque eligen la
+         primitiva por el tipo.)
+ref:     TestElaborate/operators_map_to_prims
+
+[T09.24] elaborate.block_is_a_let_chain                    level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    un bloque se elabora a una cadena de `Let`, uno por sentencia, en la que el cuerpo del `Let` de la sentencia k es el `Let` de la k+1 y el último tiene la cola; sin cola el valor es `()`; un bloque vacío es el `()` que cubre sus llaves; dos `let` con el mismo nombre son dos variables, y el inicializador del segundo lee la primera; y una cadena de 100 000 sentencias sale entera y en orden, con la pila de Go limitada a 1 MiB
+input:   `fn empty() {}`, `fn unit() { () }`, `fn only() -> Int { 7 }`, `fn noTail() { let a = 1 }`, `fn order()` con tres `let` y la cola `a + b + c`, `fn shadow()` con `let x = 1`, `let x = x + 1` y la cola `x`, y `fn long()` con 100 000 líneas `let vK = K` (K de 0 a 99 999) y la cola `v0`; las siete en el mismo fichero, que se compila entero (lexer, parser, resolutor, comprobador y elaborador) con la pila de Go limitada a 1 MiB
+expect:  los cuerpos de las cinco primeras son exactamente `()`, `()`, `7`, `let a@0 = 1; ()` y `let a@0 = 1; let b@1 = 2; let c@2 = 3; add_int(add_int(a@0, b@1), c@2)`; el `()` de `empty` cubre `{}`; `shadow` es `let x@0 = 1; let x@1 = add_int(x@0, 1); x@1` y tiene `FrameSize` 2; `long` tiene `FrameSize` 100 000 y 100 000 `Let` encadenados por su `Body`, el de la sentencia K liga `vK` en el slot K con el inicializador `K`, y lo que cierra la cadena es `v0@0`; la compilación termina con ese límite de pila, y si alguna parte recorriera las sentencias con una recursión, el binario de test acabaría con `fatal error: stack overflow`
+why:     El elaborador recorre la lista de sentencias con un bucle hacia delante, para repartir
+         los slots, y construye la cadena con otro hacia atrás: si invirtiera el segundo, la
+         primera sentencia quedaría la más interior y el programa evaluaría `let` en orden
+         inverso; si se saltara el primero o el último, perdería una sentencia. Sin cola, el valor
+         del bloque tiene que ser `()` y no una expresión sobrante. Con `shadow`, las dos `x` son
+         dos `Var` y el `x` del inicializador es el primero: una versión que buscara la variable
+         por su nombre y no por la que el resolutor eligió ligaría el segundo `x` a sí mismo. Y las
+         100 000 sentencias se compilan con la pila de Go limitada a 1 MiB porque con el límite
+         por defecto (1 GB) la prueba no serviría: un elaborador que recorriera la lista con una
+         recursión, un marco por sentencia, cabría en esa pila y daría el mismo resultado que el
+         bucle. Con el límite, esa recursión desborda la pila y Go termina el binario de test
+         entero con `fatal error: stack overflow`, no solo este test.
+ref:     TestElaborate/block_is_a_let_chain
+
+[T09.25] elaborate.calls_use_funref_or_varref              level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    una llamada a una función del programa lleva un `FunRef` como callee, también si la función se define más abajo, y una llamada a una variable lleva un `VarRef`; una función usada como valor es un `FunRef`; el `FunRef` guarda el id de la `Fun` que nombra, y la llamada cubre la expresión entera
+input:   `fn apply(g, x) { g(x) }`, `fn add1(n: Int) -> Int { n + 1 }`, `fn first() { later() }` con `later` definida después de ella, y `fn main()` con `apply(print, 1)`, `let r = add1(2)` y `print(r)`
+expect:  `apply` es exactamente `g@0(x@1)`, `first` es `@later()` y `main` es `let _@0 = @apply(@print, 1); let r@1 = @add1(2); @print(r@1)`; el callee de `first` es un `FunRef` a la `Fun` llamada `later`, y su `Call` cubre `later()`
+why:     Para el intérprete, un `FunRef` es una función que conoce por su id y un `VarRef` es un
+         valor que lee de su slot. El elaborador no tiene un caso especial para el callee, sino
+         que elabora la expresión como cualquier otra, de modo que `print` como argumento sale
+         `FunRef` por la misma regla. Llamar a una función definida más abajo comprueba que el id
+         de la `Fun` sale de la definición y no del orden en que se va elaborando.
+ref:     TestElaborate/calls_use_funref_or_varref
+
+[T09.26] elaborate.node_spans_cover_their_syntax           level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    los literales, los nombres y las llamadas llevan el span de lo que el programa escribió para ellos
+input:   `fn f(g, x: Int) { g(x, 12, true, ()) }` y `fn h(k) { k(print) }`
+expect:  el cuerpo de `f` es un `Call` que cubre `g(x, 12, true, ())`, con un `VarRef` que cubre `g` como callee y cuatro argumentos: un `VarRef` que cubre `x`, un `LitInt` que cubre `12`, un `LitBool` que cubre `true` y un `LitUnit` que cubre `()`; el argumento de `h` es un `FunRef` que cubre `print`
+why:     Un mensaje de ejecución señala el span de su nodo de Core (el capítulo 10 lee el de un
+         `PrimCall` y el de un `Call`), y los demás quedan para los mensajes que los usen. El
+         elaborador copia el span a mano en cada rama, y una rama que olvida hacerlo deja el
+         span vacío, con lo que el mensaje señalaría el byte 0 del fichero sin que casi ningún
+         otro test se entere (T09.25 mira el de un `Call`). Los demás tests de la sesión
+         comprueban sobre todo los spans que el elaborador decide (el operador, la sentencia, el
+         `if`); este, los que copia.
+ref:     TestElaborate/node_spans_cover_their_syntax
+
+[T09.27] elaborate.defs_become_funs                        level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    el programa de Core tiene una `Fun` por cada definición, con el id de su definición (las del preludio primero), su nombre, su span (el del nombre), `UserModule` según el módulo, y `Main` apunta a `main` aunque no sea la última función; en un fichero sin `main`, `HasMain` es falso
+input:   un fichero con `first`, `second`, `main` y `last`, más `print` del preludio; y un fichero que solo tiene `fn f() {}`
+expect:  hay 5 `Fun` para 5 `Def`; la `Fun` d tiene el nombre y el span de la definición d, y ese span cubre exactamente el nombre; `UserModule` es verdadero para las cuatro del fichero y falso para `print`, que es la `Fun` 0; `HasMain` es verdadero y `Main` es la `Fun` llamada `main`; `first` no tiene parámetros y su cuerpo es `@second()`; y en el fichero sin `main`, `HasMain` es falso
+why:     Un `FunRef` guarda un id, y el elaborador no tiene tabla de traducción: usa que
+         `FunID(d)` es la `Fun` de `DefID d`, un acuerdo entre dos pases, que este test fija
+         directamente. Si una función se saltara (la extern, por ejemplo), todas las siguientes se
+         desplazarían y cada llamada iría a otra función. `Main` es el id de `main`, que en el
+         ejemplo no es ni la primera ni la última: la máquina del capítulo 10 empieza por ella.
+ref:     TestElaborate/defs_become_funs
+
+[T09.28] elaborate.error_nodes_panic                       level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    `Elaborate` no traduce lo que el parser o el comprobador han marcado como error: hace un panic, con un texto fijo, ante una expresión que no se pudo leer, una sentencia que no se pudo leer, un nombre que no designa nada, y `==` o `!=` sobre un valor que no es `Int` ni `Bool`
+input:   cinco programas con errores: `fn main() { 1 + }`, `fn main() { let = 1 }`, `fn main() { y }`, `fn main() { () == () }` y `fn main() { let f = main` y, en la línea siguiente, `f != f }`
+expect:  en cada uno el front end informa de algún error, y `Elaborate` hace un panic con exactamente `core: cannot elaborate an expression that could not be read`, `core: cannot elaborate a statement that could not be read`, `core: cannot elaborate a name that stands for nothing`, ``core: cannot elaborate `==` on a value of type `()` `` y ``core: cannot elaborate `!=` on a value of type `() -> ()` ``
+why:     La precondición de `Elaborate` es un programa sin errores, y los comandos no la
+         comprueban por él. Un nodo de error traducido en silencio (a `()`, por ejemplo) daría un
+         Core válido que hace otra cosa que el programa; el panic lo convierte en un ICE con
+         salida 70, que es un fallo visible del compilador. El test no promete que `Elaborate`
+         encuentre todos los errores: una suma de `Int` con `Bool` se traduce tal como está
+         escrita, y solo cubre los nodos que no puede traducir.
+ref:     TestElaborate/error_nodes_panic
+
+[T09.29] elaborate.lower_runs_under_the_elaborate_pass     level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    `Session.Lower` devuelve el `Program` de Core del `Frontend` y ejecuta la elaboración como el pase `elaborate`: el gancho de depuración de ese nombre hace el panic antes de elaborar, y un panic de la propia elaboración sale como un `*ICE` de ese pase
+input:   `fn main() {}` analizado, con `DebugPanicIn` vacío y después igual a `elaborate`; y `fn main() { y }`, que tiene un error
+expect:  sin el gancho, `Lower` devuelve un programa con `main` y dos funciones (`print` y `main`); con el gancho, hace un panic con un `*ICE` de pase `elaborate` y valor `debug panic requested`; y con el programa que tiene un error, hace un panic con un `*ICE` cuyo `Error()` es exactamente `internal compiler error: elaborate: core: cannot elaborate a name that stands for nothing`
+why:     Cada pase corre bajo la frontera de los ICE, y `KI_DEBUG_PANIC_IN=elaborate` la
+         prueba. Ningún comando llama todavía a `Lower` (`ki emit
+         core` llega en la sesión siguiente), así que esta es la única prueba de que el pase tiene
+         nombre y está dentro de `runPass`: sin ella, un `Lower` que llamara a `Elaborate`
+         directamente pasaría todos los demás tests, y el primer fallo del elaborador sería un
+         panic de Go sin informe.
+ref:     TestElaborate/lower_runs_under_the_elaborate_pass

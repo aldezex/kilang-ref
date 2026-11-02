@@ -6,6 +6,7 @@ import (
 
 	"github.com/aldezex/kilang"
 	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/internal/core"
 	"github.com/aldezex/kilang/internal/sema"
 	"github.com/aldezex/kilang/internal/syntax"
 )
@@ -109,4 +110,14 @@ func (s *Session) lex(id base.FileID) (tb syntax.TokenBuffer) {
 func (s *Session) Analyze(f *Frontend) {
 	s.runPass("resolve", func() { f.Resolved = sema.Resolve(f.Modules, f.User, s.Interner, &s.Sink) })
 	s.runPass("check", func() { f.Typed = sema.Check(f.Modules, f.Resolved, s.Interner, &s.Sink) })
+}
+
+// Lower elaborates f, which Analyze has been through, to Core (the pass
+// "elaborate"). f must have no errors, as Elaborate needs: the caller checks the
+// sink before it lowers. If the pass panics, Lower does not return: it panics
+// with the *ICE (see runPass).
+func (s *Session) Lower(f *Frontend) *core.Program {
+	var p *core.Program
+	s.runPass("elaborate", func() { p = core.Elaborate(f.Modules, f.Resolved, f.Typed, s.Interner) })
+	return p
 }
