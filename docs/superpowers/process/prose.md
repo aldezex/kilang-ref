@@ -80,7 +80,7 @@ The chapter teaches these as a method, so the prose must model them:
 
 ## 6. Cards
 
-The sessions already wrote `book/tests/chNN.tests`, and `{{cards}}` renders it as the table «Id | Caso | Por qué | Esperado | Nivel». Do not change ids, `kind`, `file` or `ref`, and do not add or remove cards: they are tied to the tests in the chapter's tag. You may improve the Spanish of `case`, `why` or `expect` only if the text stays exact to what the test checks (a card never claims more than its test), keeps «tú» and no gendered words, and you list every change in your report.
+The sessions already wrote `book/tests/chNN.tests`. `{{cards}}` renders that file as the table «Id | Caso | Por qué | Esperado | Nivel», read from the chapter's tag `chNN` or, while the chapter has no such tag, from its last session tag, never from the working tree; `{{reftest}}` takes its card from the same place. So a later chapter that edits the file does not change the page of an earlier one, and a wording change of yours shows in `bookx web --all` and `bookx render` only once the controller puts `chNN` on the prose commit (`bookx verify` judges the working-tree file meanwhile). Do not change ids, `kind`, `file` or `ref`, and do not add or remove cards: they are tied to the tests in the chapter's tag. You may improve the Spanish of `case`, `why` or `expect` only if the text stays exact to what the test checks (a card never claims more than its test), keeps «tú» and no gendered words, and you list every change in your report.
 
 ## 7. Rules
 

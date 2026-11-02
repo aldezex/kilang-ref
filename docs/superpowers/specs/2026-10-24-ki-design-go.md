@@ -1155,7 +1155,7 @@ Notas sobre el layout:
 
 **Marcadores en el código fuente:** `// @book <region> full|hint "text"|solution|test` … `// @end` delimita una región; las líneas `@elide` se muestran como `// ...`; los nombres de región son estables entre capítulos.
 
-**Referencias desde el libro:** `{{file chNN-sK path}}`, `{{listing chNN-sK region}}` y `{{diff chNN-sK..chMM-sJ path}}` citan etiquetas de sesión (la etiqueta `chNN` no existe mientras se escribe la prosa del capítulo); `{{reftest TNN.MM}}` y las regiones de modo `solution` se muestran plegados; `{{cards}}` es la tabla de tarjetas.
+**Referencias desde el libro:** `{{file chNN-sK path}}`, `{{listing chNN-sK region}}` y `{{diff chNN-sK..chMM-sJ path}}` citan etiquetas de sesión (la etiqueta `chNN` no existe mientras se escribe la prosa del capítulo); `{{reftest TNN.MM}}` y las regiones de modo `solution` se muestran plegados; `{{cards}}` es la tabla de tarjetas del capítulo, leída de `book/tests/chNN.tests` en la etiqueta `chNN` o, mientras el capítulo se escribe y aún no la tiene, en su última etiqueta de sesión; `{{reftest}}` toma su tarjeta del mismo sitio, así que lo que un capítulo posterior cambie en ese fichero no llega a la página de este.
 
 **`bookx`**, ahora en Go y dentro del repo (`cmd/bookx`):
 - Lee cada fichero con `git show <tag>:<ruta>`, sin worktrees ni clones.
