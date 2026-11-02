@@ -130,3 +130,258 @@ why:     son errores de quien maneja la máquina desde Go, no de un programa de 
          cuerpo evaluaría una expresión de otra función y `RunMain` sin `main` llamaría a la función
          0, que es `print`
 ref:     TestMachine/misuse_panics
+
+[T10.12] prims.add_boundaries                              level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `addInt` dice que hay desbordamiento exactamente cuando la suma no cabe en un `int64`, y cuando cabe devuelve la suma
+input:   16 pares: seis que no caben (`MaxInt64 + 1` y su conmutada, `MinInt64 + (-1)` y su conmutada, `MaxInt64 + MaxInt64`, `MinInt64 + MinInt64`) y diez que sí (`MaxInt64 + 0`, `MinInt64 + 0`, `0 + MinInt64`, `(MinInt64 + 1) + (-1)`, `MaxInt64 + (-1)`, `MinInt64 + MaxInt64`, `MaxInt64 + MinInt64`, `-1 + 1`, `1 + (-3)`, `0 + 0`)
+expect:  los seis primeros dan desbordamiento `true`; los diez restantes, `false` y exactamente `MaxInt64`, `MinInt64`, `MinInt64`, `MinInt64`, `MaxInt64 - 1`, `-1`, `-1`, `0`, `-2` y `0`; el valor de una suma que desborda no se mira
+why:     Go no avisa cuando un `int64` da la vuelta, así que el aviso es aritmética explícita:
+         hay desbordamiento si y solo si `(a^r)&(b^r) < 0`. Los límites son donde una fórmula
+         equivocada se delata: con `<=` en lugar de `<`, una suma sin acarreos como `MaxInt64 + 0`,
+         `0 + 0` o `MinInt64 + MaxInt64` pasaría por desbordada, y mirar el signo de un solo
+         operando marcaría `-1 + 1`, que cambia de signo y cabe de sobra
+ref:     TestPrims/add_boundaries
+
+[T10.13] prims.sub_boundaries                              level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `subInt` dice que hay desbordamiento exactamente cuando la resta no cabe en un `int64`, y cuando cabe devuelve la diferencia
+input:   15 pares: cinco que no caben (`MinInt64 - 1`, `0 - MinInt64`, `MaxInt64 - (-1)`, `MaxInt64 - MinInt64`, `MinInt64 - MaxInt64`) y diez que sí (`MinInt64 - 0`, `MaxInt64 - 0`, `(-1) - MaxInt64`, `0 - MaxInt64`, `MinInt64 - (-1)`, `(-1) - MinInt64`, `MinInt64 - MinInt64`, `MaxInt64 - MaxInt64`, `3 - 5`, `5 - 3`)
+expect:  los cinco primeros dan desbordamiento `true`; los diez restantes, `false` y exactamente `MinInt64`, `MaxInt64`, `MinInt64`, `MinInt64 + 1`, `MinInt64 + 1`, `MaxInt64`, `0`, `0`, `-2` y `2`; el valor de una resta que desborda no se mira
+why:     la resta no es una suma con otro nombre: desborda cuando los operandos tienen signo
+         distinto y el resultado no tiene el del primero, `(a^b)&(a^r) < 0`, y la fórmula de la
+         suma daría respuestas equivocadas con operandos que sí se parecen. `(-1) - MaxInt64` es
+         exactamente `MinInt64`, el último valor que cabe, y por eso está junto a `0 - MinInt64`,
+         que ya no cabe. `3 - 5` y `5 - 3` fijan el orden de los operandos
+ref:     TestPrims/sub_boundaries
+
+[T10.14] prims.mul_boundaries                              level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `mulInt` dice que hay desbordamiento exactamente cuando el producto no cabe en un `int64`, y cuando cabe devuelve el producto
+input:   21 pares: nueve que no caben (`3037000500 * 3037000500` y su versión con un factor negativo, `MinInt64 * (-1)` y `(-1) * MinInt64`, `2 * 2^62`, `MaxInt64 * 2`, `MinInt64 * 2`, `MinInt64 * MinInt64`, `MaxInt64 * MaxInt64`) y doce que sí (`3037000499 * 3037000499` y su versión con un factor negativo, `MinInt64 * 1` y `1 * MinInt64`, `0 * MinInt64`, `MinInt64 * 0`, `0 * 0`, `(-2) * 2^62` y `2^62 * (-2)`, `MaxInt64 * (-1)` y `(-1) * MaxInt64`, `7 * (-6)`)
+expect:  los nueve primeros dan desbordamiento `true`; los doce restantes, `false` y exactamente el producto, entre ellos `9223372030926249001` y su opuesto, `MinInt64` (para `(-2) * 2^62` y `2^62 * (-2)`) y `MinInt64 + 1` (para `MaxInt64 * (-1)` y `(-1) * MaxInt64`); el valor de un producto que desborda no se mira
+why:     el aviso es una división: un producto que ha dado la vuelta, dividido por `b`, no devuelve
+         `a`, así que desborda si `r/b != a`. Esa prueba tiene un punto ciego, `MinInt64 / -1`, que
+         en Go no falla sino que da la vuelta y devuelve `MinInt64`: sin su caso aparte, `MinInt64 *
+         (-1)` pasaría por bueno. El cero se responde antes de dividir, porque dividir por cero sí
+         es un `panic` de Go. `(-2) * 2^62` es exactamente `MinInt64`, y `2 * 2^62` es el primero
+         que ya no cabe
+ref:     TestPrims/mul_boundaries
+
+[T10.15] prims.neg_boundary                                level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `negInt` solo desborda con `MinInt64`, y con cualquier otro valor devuelve el opuesto
+input:   `MinInt64`, `MaxInt64`, `MinInt64 + 1`, `0`, `5` y `-5`
+expect:  `MinInt64` da desbordamiento `true`; los otros cinco, `false` y exactamente `MinInt64 + 1`, `MaxInt64`, `0`, `-5` y `5`
+why:     el rango de un `int64` no es simétrico: hay un negativo más que positivos, y el opuesto
+         de `MinInt64` es 2^63, que no cabe. Es el único caso, y `MinInt64 + 1` va al lado
+         para que un límite corrido una posición tampoco pase
+ref:     TestPrims/neg_boundary
+
+[T10.16] prims.div_rem                                     level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `divInt` trunca hacia cero, `remInt` toma el signo del dividendo, un divisor 0 es `divByZero` en las dos, y `MinInt64 / -1` es `divOverflow` mientras que `MinInt64 % -1` es 0
+input:   17 pares, entre ellos `-7` y `2`, `7` y `-2`, `-7` y `-2`, `-7` y `3`, `7` y `-3`, `MinInt64` y `-1`, `MinInt64` y `1`, `MinInt64` y `MinInt64`, `1` y `0`, `0` y `0`, `MinInt64` y `0`, cada uno con su cociente y su resto
+expect:  `-7 / 2 == -3` y `-7 % 2 == -1`; `7 / -2 == -3` y `7 % -2 == 1`; `-7 / -2 == 3` y `-7 % -2 == -1`; `-7 / 3 == -2` y `-7 % 3 == -1`; `7 / -3 == -2` y `7 % -3 == 1`; `MinInt64 / -1` da `divOverflow` y `MinInt64 % -1` da `0` con `divOK`; con divisor 0, las dos dan `divByZero`, también con `MinInt64` de dividendo; el valor de una división que falla no se mira
+why:     `/` y `%` van juntos porque `a == (a/b)*b + a%b`, y los cuatro signos posibles son donde
+         una implementación por defecto, la que redondea hacia abajo, se equivoca. Un divisor 0 da
+         `divByZero` aunque el dividendo sea un extremo (`MinInt64` y `MaxInt64` van en las filas), y
+         se descarta antes de dividir, porque Go hace `panic` con una división entera por cero.
+         `MinInt64 / -1` se comprueba aparte por la razón contraria: Go no hace `panic`, da
+         `MinInt64` sin avisar. `MinInt64 % -1` sí está definido, y vale 0: que el cociente desborde
+         no hace que el resto falle
+ref:     TestPrims/div_rem
+
+[T10.17] prims.unknown_cases_are_unreachable               level: core
+kind:    unit (go test)      file: internal/interp/prims_internal_test.go
+case:    `applyPrim` con una primitiva que no existe y `divResult` con un error de división que no existe hacen un `panic` con el texto `unreachable`
+input:   `Prim(15)` (la siguiente a la última), `Prim(255)` (la mayor que cabe) y `divOverflow + 1`
+expect:  en las tres, el valor que se recupera del `panic` es exactamente la cadena `unreachable`
+why:     el `switch` sobre una enumeración termina en `default: panic("unreachable")`, igual que el
+         de una interfaz sellada: el día que se añada una primitiva y se olvide un `switch`, el
+         fallo es un `panic` con su causa y no un valor nulo que se propaga. Decir que una rama «no
+         puede pasar» obliga a comprobarlo, y aquí se fuerza con valores que el paquete no tiene
+ref:     TestPrims/unknown_cases_are_unreachable
+
+[T10.18] machine.add_and_compare                           level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una suma y una comparación de enteros se evalúan y dan un `Bool`
+input:   `fn f() -> Bool { 1 + 2 == 3 }` y `fn f() -> Bool { 1 + 2 == 4 }`
+expect:  `Call(f)` devuelve exactamente `BoolV{true}` para la primera y `BoolV{false}` para la segunda
+why:     es la primera vez que la máquina evalúa una primitiva, con dos argumentos que son a su
+         vez expresiones: la suma tiene que estar hecha cuando llega la comparación. La segunda
+         fila existe porque una comparación que siempre diera `true` pasaría la primera
+ref:     TestMachine/add_and_compare
+
+[T10.19] machine.arithmetic                                level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    la suma, la resta, el producto y la negación dan el valor correcto, también anidados, y un resultado que cabe en un `int64` no es un `panic` aunque sea `MinInt64`
+input:   trece expresiones dentro de `fn f() -> Int { … }`: `40 + 2`, `10 - 3`, `3 - 10`, `6 * 7`, `-(5)`, `-(-5)`, `-9223372036854775807`, `-2 * 4611686018427387904`, `(-9223372036854775807 - 1) * 1`, `2 * 3 + 4 * 5`, `2 * 3 - 4 * 5`, `(1 + 2) * (3 + 4)` y `10 - (2 + 3)`
+expect:  `Call(f)` devuelve exactamente `IntV{42}`, `7`, `-7`, `42`, `-5`, `5`, `MinInt64 + 1`, `MinInt64`, `MinInt64`, `26`, `-14`, `21` y `5`
+why:     cada primitiva tiene que estar conectada a su función, y una que se confundiera con otra
+         (el producto con la suma, la resta con los operandos al revés) daría el valor de la otra.
+         Los dos productos que valen `MinInt64` justo caben, y la máquina no debe tratarlos como
+         un desbordamiento. Con los argumentos anidados se ve que el valor del primero no se
+         pierde mientras se evalúa el segundo
+ref:     TestMachine/arithmetic
+
+[T10.20] machine.primitive_steps                           level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una primitiva cuenta un paso por sí misma, uno por cada argumento y uno por cada marco que aplica, y su marco es uno solo a la vez, o dos si los argumentos de la primitiva de fuera son primitivas
+input:   `fn f() -> Int { 1 + 2 }`, `{ -5 }` y `{ (1 + 2) * (3 + 4) }`
+expect:  `Stats()` es exactamente `{Steps: 5, MaxDepth: 1, MaxEnvs: 1}`, `{Steps: 3, MaxDepth: 1, MaxEnvs: 1}` y `{Steps: 13, MaxDepth: 2, MaxEnvs: 1}`
+why:     los contadores son la forma de ver cómo crece la pila sin mirarla: una máquina que
+         dejara el marco del primer argumento al empujar el del segundo daría profundidad 2 en la
+         suma sencilla, y una primitiva unaria que evaluara un segundo argumento que no tiene
+         haría un `index out of range`. La profundidad 2 de la tercera es la de las dos sumas, una
+         dentro del producto
+ref:     TestMachine/primitive_steps
+
+[T10.21] machine.comparisons                               level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    los seis operadores de comparación de `Int` (`<`, `<=`, `>`, `>=`, `==`, `!=`) dan el valor correcto con el primer operando menor, igual y mayor que el segundo, con negativos y con los extremos de un `int64`
+input:   nueve pares (`1` y `2`, `2` y `2`, `3` y `2`, `-1` y `0`, `0` y `-1`, `MinInt64` y `MaxInt64`, `MaxInt64` y `MinInt64`, `MinInt64` y `MinInt64`, `MaxInt64` y `MaxInt64`), cada uno con los seis operadores: 54 funciones `fn cI_J() -> Bool { a op b }`
+expect:  cada `Call` devuelve exactamente el `Bool` de la tabla del test, y ninguna informa de un `panic`
+why:     un `<` que fuera `<=`, un `>` que fuera `<` o una comparación hecha como entero sin signo
+         solo se ven con el par adecuado: igual separa `<` de `<=`, `-1` y `0` separan el signo
+         del que no lo tiene, y los dos extremos lo confirman. Una máquina que solo probara `==`
+         pasaría el resto sin que nadie lo notara
+ref:     TestMachine/comparisons
+
+[T10.22] machine.bool_primitives                           level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `!`, `==` y `!=` sobre `Bool` dan el valor correcto con las cuatro combinaciones de operandos
+input:   `!true`, `!false` y, para `==` y para `!=`, `true` y `false` en las cuatro combinaciones, dentro de `fn f() -> Bool { … }`
+expect:  `Call(f)` devuelve exactamente `BoolV{false}` y `BoolV{true}` para las negaciones; `BoolV{true}` para `true == true`, `false == false`, `true != false` y `false != true`; y `BoolV{false}` para los otros cuatro
+why:     son las primitivas de `Bool`, y con una sola combinación una igualdad que fuera una
+         desigualdad, o una negación que no negara, pasaría por buena: hacen falta las cuatro
+         para que cada una de las dos respuestas aparezca con cada operador
+ref:     TestMachine/bool_primitives
+
+[T10.23] machine.division_truncates                        level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `/` sobre `Int` trunca hacia cero, con cualquier combinación de signos
+input:   `-7 / 2`, `7 / -2`, `-7 / -2`, `7 / 2`, `6 / 2` y `0 / 5` dentro de `fn f() -> Int { … }`
+expect:  `Call(f)` devuelve exactamente `IntV{-3}`, `-3`, `3`, `3`, `3` y `0`
+why:     el lenguaje que sale de aquí debe dar los mismos números en el intérprete, en la máquina
+         virtual y en el código nativo, y la división entera es donde los lenguajes se separan:
+         unos redondean hacia abajo y otros hacia cero. Ki trunca hacia cero, así que `-7 / 2`
+         es `-3` y no `-4`
+ref:     TestMachine/division_truncates
+
+[T10.24] machine.remainder_sign_of_dividend                level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `%` sobre `Int` toma el signo del dividendo, con cualquier combinación de signos
+input:   `-7 % 3`, `7 % -3`, `-7 % -3`, `7 % 3` y `6 % 3` dentro de `fn f() -> Int { … }`
+expect:  `Call(f)` devuelve exactamente `IntV{-1}`, `1`, `-1`, `1` y `0`
+why:     es la otra mitad de la división que trunca: con `a == (a/b)*b + a%b`, el resto lleva el
+         signo de `a`. Un resto que llevara el del divisor daría `2` para `-7 % 3`, que es lo que
+         responden Python y otros lenguajes
+ref:     TestMachine/remainder_sign_of_dividend
+
+[T10.25] machine.overflow_panics                           level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una suma que desborda hace un panic de Ki, en la posición del operador
+input:   `fn main() { let x = 9223372036854775807 + 1 }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: integer overflow at test.ki:1:41\n` (la columna 41 es la del `+`); stdout está vacío
+why:     el desbordamiento es un panic y no un valor que da la vuelta en silencio, y el panic es
+         un estado de la máquina, no uno de Go: el programa termina con el código 101 y con un
+         mensaje que dice dónde. La posición es la del operador, no la de la sentencia, porque
+         es el `+` lo que falla
+ref:     TestMachine/overflow_panics
+
+[T10.26] machine.sub_overflow_panics                       level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una resta que desborda hace un panic de Ki, en la posición del operador
+input:   `fn main() { let x = -9223372036854775807 - 2 }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: integer overflow at test.ki:1:42\n` (la columna 42 es la del `-` de la resta, no la del de la negación del literal); stdout está vacío
+why:     la resta y la suma son primitivas distintas y cada una necesita su aviso: una máquina que
+         comprobara el desbordamiento solo en la suma dejaría que la resta diera la vuelta. El
+         `-` del literal es otra primitiva, `neg_int`, y el panic sale del otro
+ref:     TestMachine/sub_overflow_panics
+
+[T10.27] machine.mul_overflow_panics                       level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un producto que desborda hace un panic de Ki, en la posición del operador
+input:   `fn main() { let x = 3037000500 * 3037000500 }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: integer overflow at test.ki:1:32\n` (la columna 32 es la del `*`); stdout está vacío
+why:     3037000500 es el primer número cuyo cuadrado no cabe en un `int64`, y el producto es la
+         operación en la que el desbordamiento es más fácil de pasar por alto: no basta mirar el
+         signo del resultado
+ref:     TestMachine/mul_overflow_panics
+
+[T10.28] machine.division_by_zero_panics                   level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    dividir por cero hace un panic de Ki, en la posición del operador y en la segunda línea
+input:   `fn main() { let z = 0` y, en la línea siguiente, ` let x = 1 / z }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: division by zero at test.ki:2:12\n` (la `/` es la columna 12 de la línea 2); stdout está vacío
+why:     en Go, dividir un entero por cero es un `panic` del propio Go, y un panic de Ki no puede
+         serlo: sería un volcado de pila en lugar de un `panic: division by zero` con su posición
+         y su código de salida. Está en la segunda línea para que la línea del mensaje no sea
+         siempre la primera
+ref:     TestMachine/division_by_zero_panics
+
+[T10.29] machine.remainder_by_zero_panics                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    el resto por cero hace el mismo panic que la división por cero, con el mismo texto
+input:   `fn main() { let z = 0` y, en la línea siguiente, ` let x = 1 % z }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: division by zero at test.ki:2:12\n` (el `%` es la columna 12 de la línea 2); stdout está vacío
+why:     `% 0` falla por lo mismo que `/ 0`, y el texto es el mismo (`division by zero`, no
+         `remainder by zero`); un mensaje distinto para cada operador obligaría a quien lee un
+         panic a saber de cuál de los dos viene
+ref:     TestMachine/remainder_by_zero_panics
+
+[T10.30] machine.min_div_minus_one_panics                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `MinInt64 / -1` desborda y hace un panic de Ki, en la posición de la `/`
+input:   `fn main() { let x = (-9223372036854775807 - 1) / -1 }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: integer overflow at test.ki:1:48\n` (la columna 48 es la de la `/`); stdout está vacío
+why:     el resultado, 2^63, no cabe, pero en Go `MinInt64 / -1` no falla: da la vuelta y
+         devuelve `MinInt64`, así que sin una comprobación aparte el programa seguiría con un
+         valor equivocado. El mensaje es el del desbordamiento, no el de la división por cero
+ref:     TestMachine/min_div_minus_one_panics
+
+[T10.31] machine.neg_min_panics                            level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    la negación de `MinInt64` desborda y hace un panic de Ki, en la posición del `-` de fuera
+input:   `fn main() { let x = -(-9223372036854775807 - 1) }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: integer overflow at test.ki:1:21\n` (la columna 21 es la del `-` de fuera); stdout está vacío
+why:     el opuesto de `MinInt64` es 2^63, que no cabe, y la negación es la única primitiva de un
+         solo argumento que puede desbordar. `MinInt64` no se puede escribir como literal (el
+         literal `9223372036854775808` da E0105), así que se llega a él con una resta
+ref:     TestMachine/neg_min_panics
+
+[T10.32] machine.min_rem_minus_one_is_zero                 level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `MinInt64 % -1` es 0 y no un panic
+input:   `fn f() -> Int { (-9223372036854775807 - 1) % -1 }`, llamada con `Call`
+expect:  `Call(f)` devuelve exactamente `IntV{0}`
+why:     el cociente de esa división desborda pero el resto está bien definido, y una máquina que
+         tratara `% -1` como `/ -1` haría un panic donde el lenguaje promete un valor. Es la otra
+         cara de `min_div_minus_one_panics`
+ref:     TestMachine/min_rem_minus_one_is_zero
+
+[T10.33] machine.arguments_run_left_to_right               level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    los argumentos de una primitiva se evalúan de izquierda a derecha: si los dos hacen panic, el que se informa es el de la izquierda
+input:   `fn main() { let x = 1 / 0 + (9223372036854775807 + 1) }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: division by zero at test.ki:1:23\n` (la columna 23 es la de la `/`); stdout está vacío
+why:     el orden de evaluación es parte del lenguaje, y lo que lo hace visible es cuál de dos
+         fallos llega primero. Un intérprete que evaluara de derecha a izquierda informaría del
+         desbordamiento, y el mismo programa daría un mensaje distinto en el intérprete y en el
+         código nativo
+ref:     TestMachine/arguments_run_left_to_right
+
+[T10.34] machine.call_after_a_panic_starts_clean           level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    tras un `Call` que hace un panic, el siguiente `Call` en la misma máquina no hereda ni los marcos que quedaron ni el panic
+input:   `fn bad(z: Int) -> Int { let x = 1 / z; x + 100 }` y `fn good() -> Int { let y = 5; let w = 6; y }`: `bad(0)`, después `good()` y después `bad(2)`, en la misma máquina
+expect:  `Call(bad, 0)` devuelve `nil` y `false`, y stderr es exactamente `panic: division by zero at test.ki:1:35\n`; `Call(good)` devuelve `IntV{5}` y `true`; `Call(bad, 2)` devuelve `IntV{100}` y `true`; al final stderr sigue siendo ese mismo mensaje y stdout está vacío
+why:     un panic deja la pila a medias: `bad` cae dentro del `Init` de un `Let`, y el marco de ese
+         `Let` sigue ahí. Si el siguiente `Call` no vaciara la pila, el valor de `good` iría a ese
+         marco, se escribiría en el slot de `x` y la máquina seguiría con el cuerpo de `bad`,
+         `x + 100`, dando 105 en lugar de 5. `good` tiene dos locales para que su entorno tenga ese
+         slot: con uno solo, el marco viejo escribiría fuera del entorno y el fallo sería un `panic`
+         de Go que para todo el binario de test, y no la respuesta equivocada. Y si el `Call` no
+         borrara el panic anterior, `good` ni siquiera empezaría
+ref:     TestMachine/call_after_a_panic_starts_clean

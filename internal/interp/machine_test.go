@@ -48,6 +48,31 @@ func panicText(work func()) (got any) {
 	return nil
 }
 
+// runMain compiles src, runs its `main` on a new Machine and returns the state
+// the machine ends in and what the program wrote to stdout and to stderr.
+func runMain(t *testing.T, src string) (h interp.Halt, stdout, stderr string) {
+	t.Helper()
+	m, out, errOut := machineOf(testsupport.Compile(t, src))
+	h = m.RunMain()
+	return h, out.String(), errOut.String()
+}
+
+// wantPanic checks that running the `main` of src ends in a Ki panic: Halt{101},
+// the message wantErr (the whole of stderr) and nothing on stdout.
+func wantPanic(t *testing.T, src, wantErr string) {
+	t.Helper()
+	h, stdout, stderr := runMain(t, src)
+	if h != (interp.Halt{Code: 101}) {
+		t.Errorf("RunMain() of %q = %+v, want Halt{Code: 101}", src, h)
+	}
+	if stderr != wantErr {
+		t.Errorf("stderr of %q = %q, want %q", src, stderr, wantErr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout of %q = %q, want it empty", src, stdout)
+	}
+}
+
 func TestMachine(t *testing.T) {
 	t.Run("literal", func(t *testing.T) {
 		rows := []struct {
@@ -303,6 +328,254 @@ fn idInt(x: Int) -> Int { x }
 			if got := panicText(row.work); got != row.want {
 				t.Errorf("%s: panicked with %#v, want the string %q", row.name, got, row.want)
 			}
+		}
+	})
+
+	t.Run("add_and_compare", func(t *testing.T) {
+		rows := []struct {
+			name, src string
+			want      bool
+		}{
+			{"sum_equals", "fn f() -> Bool { 1 + 2 == 3 }", true},
+			{"sum_differs", "fn f() -> Bool { 1 + 2 == 4 }", false},
+		}
+		for _, row := range rows {
+			_, got := call(t, row.src, "f")
+			if got != (interp.BoolV{V: row.want}) {
+				t.Errorf("%s: Call(f) = %#v, want BoolV{%v}", row.name, got, row.want)
+			}
+		}
+	})
+
+	t.Run("arithmetic", func(t *testing.T) {
+		rows := []struct {
+			name, expr string
+			want       int64
+		}{
+			{"add", "40 + 2", 42},
+			{"sub", "10 - 3", 7},
+			{"sub_not_commutative", "3 - 10", -7},
+			{"mul", "6 * 7", 42},
+			{"neg", "-(5)", -5},
+			{"neg_of_negative", "-(-5)", 5},
+			{"neg_max", "-9223372036854775807", math.MinInt64 + 1},
+			// The result is exactly MinInt64: it fits, so it does not panic.
+			{"mul_to_min", "-2 * 4611686018427387904", math.MinInt64},
+			{"min_by_one", "(-9223372036854775807 - 1) * 1", math.MinInt64},
+			{"sum_of_products", "2 * 3 + 4 * 5", 26},
+			{"difference_of_products", "2 * 3 - 4 * 5", -14},
+			{"products_of_sums", "(1 + 2) * (3 + 4)", 21},
+			{"right_operand_is_a_sum", "10 - (2 + 3)", 5},
+		}
+		for _, row := range rows {
+			_, got := call(t, "fn f() -> Int { "+row.expr+" }", "f")
+			if got != (interp.IntV{V: row.want}) {
+				t.Errorf("%s: %s = %#v, want IntV{%d}", row.name, row.expr, got, row.want)
+			}
+		}
+	})
+
+	t.Run("primitive_steps", func(t *testing.T) {
+		// A primitive takes a step for itself, one for each argument and one for
+		// each frame it applies: a binary one applies two (the first argument is
+		// ready, then the second), a unary one applies one. The stack holds one
+		// primFrame at a time, and two while the arguments of the outer primitive
+		// are themselves primitives.
+		rows := []struct {
+			name, expr string
+			want       interp.Stats
+		}{
+			{"binary", "1 + 2", interp.Stats{Steps: 5, MaxDepth: 1, MaxEnvs: 1}},
+			{"unary", "-5", interp.Stats{Steps: 3, MaxDepth: 1, MaxEnvs: 1}},
+			{"nested", "(1 + 2) * (3 + 4)", interp.Stats{Steps: 13, MaxDepth: 2, MaxEnvs: 1}},
+		}
+		for _, row := range rows {
+			m, _ := call(t, "fn f() -> Int { "+row.expr+" }", "f")
+			if got := m.Stats(); got != row.want {
+				t.Errorf("%s: Stats() = %+v, want %+v", row.name, got, row.want)
+			}
+		}
+	})
+
+	t.Run("comparisons", func(t *testing.T) {
+		const minSrc = "(-9223372036854775807 - 1)"
+		const maxSrc = "9223372036854775807"
+		ops := []string{"<", "<=", ">", ">=", "==", "!="}
+		// For each pair of operands, the answer of each operator in the order of
+		// ops, T for true and F for false. The pairs have the first operand less
+		// than, equal to and greater than the second, and the negative ones and
+		// the extremes tell a signed comparison from an unsigned one.
+		rows := []struct{ lhs, rhs, want string }{
+			{"1", "2", "TTFFFT"},
+			{"2", "2", "FTFTTF"},
+			{"3", "2", "FFTTFT"},
+			{"-1", "0", "TTFFFT"},
+			{"0", "-1", "FFTTFT"},
+			{minSrc, maxSrc, "TTFFFT"},
+			{maxSrc, minSrc, "FFTTFT"},
+			{minSrc, minSrc, "FTFTTF"},
+			{maxSrc, maxSrc, "FTFTTF"},
+		}
+		var src strings.Builder
+		for i, row := range rows {
+			for j, op := range ops {
+				fmt.Fprintf(&src, "fn c%d_%d() -> Bool { %s %s %s }\n", i, j, row.lhs, op, row.rhs)
+			}
+		}
+		c := testsupport.Compile(t, src.String())
+		m, _, _ := machineOf(c)
+		for i, row := range rows {
+			for j, op := range ops {
+				f := testsupport.FunNamed(t, c, fmt.Sprintf("c%d_%d", i, j))
+				got, ok := m.Call(f, nil)
+				want := interp.BoolV{V: row.want[j] == 'T'}
+				if !ok || got != want {
+					t.Errorf("%s %s %s = (%#v, %v), want (%#v, true)", row.lhs, op, row.rhs, got, ok, want)
+				}
+			}
+		}
+	})
+
+	t.Run("bool_primitives", func(t *testing.T) {
+		rows := []struct {
+			expr string
+			want bool
+		}{
+			{"!true", false},
+			{"!false", true},
+			{"true == true", true},
+			{"true == false", false},
+			{"false == true", false},
+			{"false == false", true},
+			{"true != true", false},
+			{"true != false", true},
+			{"false != true", true},
+			{"false != false", false},
+		}
+		for _, row := range rows {
+			_, got := call(t, "fn f() -> Bool { "+row.expr+" }", "f")
+			if got != (interp.BoolV{V: row.want}) {
+				t.Errorf("%s = %#v, want BoolV{%v}", row.expr, got, row.want)
+			}
+		}
+	})
+
+	t.Run("division_truncates", func(t *testing.T) {
+		rows := []struct {
+			expr string
+			want int64
+		}{
+			{"-7 / 2", -3},
+			{"7 / -2", -3},
+			{"-7 / -2", 3},
+			{"7 / 2", 3},
+			{"6 / 2", 3},
+			{"0 / 5", 0},
+		}
+		for _, row := range rows {
+			_, got := call(t, "fn f() -> Int { "+row.expr+" }", "f")
+			if got != (interp.IntV{V: row.want}) {
+				t.Errorf("%s = %#v, want IntV{%d}", row.expr, got, row.want)
+			}
+		}
+	})
+
+	t.Run("remainder_sign_of_dividend", func(t *testing.T) {
+		rows := []struct {
+			expr string
+			want int64
+		}{
+			{"-7 % 3", -1},
+			{"7 % -3", 1},
+			{"-7 % -3", -1},
+			{"7 % 3", 1},
+			{"6 % 3", 0},
+		}
+		for _, row := range rows {
+			_, got := call(t, "fn f() -> Int { "+row.expr+" }", "f")
+			if got != (interp.IntV{V: row.want}) {
+				t.Errorf("%s = %#v, want IntV{%d}", row.expr, got, row.want)
+			}
+		}
+	})
+
+	t.Run("overflow_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let x = 9223372036854775807 + 1 }",
+			"panic: integer overflow at test.ki:1:41\n")
+	})
+
+	t.Run("sub_overflow_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let x = -9223372036854775807 - 2 }",
+			"panic: integer overflow at test.ki:1:42\n")
+	})
+
+	t.Run("mul_overflow_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let x = 3037000500 * 3037000500 }",
+			"panic: integer overflow at test.ki:1:32\n")
+	})
+
+	t.Run("division_by_zero_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let z = 0\n let x = 1 / z }",
+			"panic: division by zero at test.ki:2:12\n")
+	})
+
+	t.Run("remainder_by_zero_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let z = 0\n let x = 1 % z }",
+			"panic: division by zero at test.ki:2:12\n")
+	})
+
+	t.Run("min_div_minus_one_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let x = (-9223372036854775807 - 1) / -1 }",
+			"panic: integer overflow at test.ki:1:48\n")
+	})
+
+	t.Run("neg_min_panics", func(t *testing.T) {
+		wantPanic(t, "fn main() { let x = -(-9223372036854775807 - 1) }",
+			"panic: integer overflow at test.ki:1:21\n")
+	})
+
+	t.Run("min_rem_minus_one_is_zero", func(t *testing.T) {
+		_, got := call(t, "fn f() -> Int { (-9223372036854775807 - 1) % -1 }", "f")
+		if got != (interp.IntV{V: 0}) {
+			t.Errorf("Call(f) = %#v, want IntV{0}", got)
+		}
+	})
+
+	t.Run("arguments_run_left_to_right", func(t *testing.T) {
+		// Both arguments of the outer `+` panic. The one that panics first is
+		// the report: the left one, the division by zero.
+		wantPanic(t, "fn main() { let x = 1 / 0 + (9223372036854775807 + 1) }",
+			"panic: division by zero at test.ki:1:23\n")
+	})
+
+	t.Run("call_after_a_panic_starts_clean", func(t *testing.T) {
+		// bad panics inside the Init of a Let, so a letFrame is still on the
+		// stack when it halts. good must not see that frame: the value of good
+		// would go to it, be written in the slot of x and make the machine go on
+		// with the body of bad's Let, `x + 100`, and answer 105. good has a second
+		// local, w, so that its environment has a slot for x to be written in;
+		// with one slot the stale frame would write outside the environment and
+		// the failure would be a Go panic that stops the whole test binary, and
+		// not the wrong answer. Nor must good see the halt itself.
+		c := testsupport.Compile(t, "fn bad(z: Int) -> Int { let x = 1 / z\n x + 100 }\nfn good() -> Int { let y = 5\n let w = 6\n y }")
+		m, out, errOut := machineOf(c)
+		bad, good := testsupport.FunNamed(t, c, "bad"), testsupport.FunNamed(t, c, "good")
+
+		const msg = "panic: division by zero at test.ki:1:35\n"
+		if v, ok := m.Call(bad, []interp.Value{interp.IntV{V: 0}}); v != nil || ok {
+			t.Errorf("Call(bad, 0) = (%#v, %v), want (nil, false)", v, ok)
+		}
+		if errOut.String() != msg {
+			t.Errorf("stderr after bad = %q, want %q", errOut.String(), msg)
+		}
+		if v, ok := m.Call(good, nil); v != (interp.IntV{V: 5}) || !ok {
+			t.Errorf("Call(good) after a panic = (%#v, %v), want (IntV{5}, true)", v, ok)
+		}
+		if v, ok := m.Call(bad, []interp.Value{interp.IntV{V: 2}}); v != (interp.IntV{V: 100}) || !ok {
+			t.Errorf("Call(bad, 2) after a panic = (%#v, %v), want (IntV{100}, true)", v, ok)
+		}
+		if errOut.String() != msg || out.Len() != 0 {
+			t.Errorf("after the calls, stderr = %q and stdout = %q, want %q and nothing", errOut.String(), out.String(), msg)
 		}
 	})
 }
