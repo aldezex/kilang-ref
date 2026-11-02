@@ -81,7 +81,7 @@ $ dlv version
 
 Comprobación con el binario de Ki: `dlv exec build/bin/ki -- run tests/golden/ch10/fib.ki` y, en el prompt, `continue`: el programa imprime `6765`.
 
-**Pendiente (2026-11-02).** `dlv` no está instalado todavía en esta máquina: ni `dlv version` ni la comprobación con `fib.ki` se han ejecutado. Quien lo instale anota aquí la salida de `dlv version` y la fecha.
+Comprobado el 2026-11-02 con Delve 1.27.2 (`Build: $Id: 360e7b2181d3da54115aaee4f569954bca95cfe3 $`) sobre `ch10-s4`: tras `continue`, el programa imprime `6765` y el proceso termina con estado 0. Se instala con `GOTOOLCHAIN=local go install github.com/go-delve/delve/cmd/dlv@v1.27.2`, fuera del repositorio. Sin terminal, como en un script, `dlv exec` pide además `--allow-non-terminal-interactive=true`.
 
 ## Historial de cambios de versión
 
