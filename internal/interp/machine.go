@@ -5,15 +5,22 @@
 // with the value when it is ready). All three are data in the Machine, and
 // running it is a loop over them (Machine.run), not a recursion over the tree.
 //
-// So far it evaluates literals, variables, `let` and the primitives, which is
-// where a program can panic: an overflow or a division by zero ends it with
-// Halt{Code: 101}. The rest of Core (calls and `match`) arrives in the next
-// session of this chapter.
+// It evaluates all of Core as Part I has it: literals, variables, `let`, the
+// primitives, `match`, and calls of the program's functions. A program can end
+// in two ways other than returning from `main`: a panic (an overflow or a
+// division by zero), with Halt{Code: 101}, and a stack that has grown past its
+// limit, with Halt{Code: 103}. A call that is the last thing its function does
+// reuses that function's frame and environment instead of adding another pair,
+// so a loop written as such calls does not make the stack grow. The functions
+// that the runtime provides, such as `print`, are not run yet.
 package interp
 
 import (
 	"fmt"
 	"io"
+	"math"
+	"os"
+	"strconv"
 
 	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/core"
@@ -21,8 +28,8 @@ import (
 
 // frame is one frame of the continuation: what the machine must do with the
 // next value it computes. It is a sealed interface like Value, and applyFrame
-// has the type switch over its kinds. So far there are two, letFrame and
-// primFrame; the others come with the expressions that need them.
+// has the type switch over its kinds: letFrame, primFrame, argFrame, matchFrame
+// and retFrame.
 type frame interface{ frame() }
 
 // letFrame waits for the value of the Init of a Let. When it arrives, the value
@@ -46,9 +53,42 @@ type primFrame struct {
 
 func (primFrame) frame() {}
 
+// argFrame waits for the value of the callee or of an argument of the Call
+// expression call. vals holds the values that have arrived, the callee's first
+// and then the arguments' from left to right, and has room for all of them.
+// When the callee's value has arrived and each argument's, the call is made.
+type argFrame struct {
+	call core.ExprID
+	vals []Value
+}
+
+func (argFrame) frame() {}
+
+// matchFrame waits for the value of the scrutinee of the Match expression
+// match. When it arrives, the arm that fits becomes the control.
+type matchFrame struct{ match core.ExprID }
+
+func (matchFrame) frame() {}
+
+// retFrame is where a function returns to. A call that is not in tail position
+// pushes one, and it stays on the stack until the function returns; a call in
+// tail position reuses the one that is there (see enter). env is the index in
+// envs of the environment of the function that made the call: applying the frame
+// cuts envs back to it, so that the environment of the function that returns is
+// no longer in envs, and hands the value on to the frame below.
+type retFrame struct{ env int }
+
+func (retFrame) frame() {}
+
+// The exit codes of a program that does not return normally (spec 8.10).
+const (
+	codePanic         = 101
+	codeStackOverflow = 103
+)
+
 // Halt is the state in which the machine ends. Code is the exit code of the
-// program: 0 when `main` returns, and 101 when the program panics. A Ki panic is
-// never a Go panic: it is a Halt.
+// program: 0 when `main` returns, 101 when the program panics and 103 when its
+// stack overflows. A Ki panic is never a Go panic: it is a Halt.
 type Halt struct{ Code int }
 
 // Stats counts what the machine has done, over all the calls made on it.
@@ -59,43 +99,74 @@ type Stats struct {
 	// MaxDepth is the most frames the stack has held at once.
 	MaxDepth int
 	// MaxEnvs is the largest len(envs) seen: the most environments that were
-	// alive at once, one for each function being run.
+	// alive at once, one for each function being run (a tail call replaces the
+	// environment of the function that makes it, so it adds none).
 	MaxEnvs int
 }
 
 // The limit of the stack is KI_STACK_MB mebibytes (spec 8.10), counted in frames
 // and not in bytes: a frame is assumed to take 64 bytes, so a mebibyte holds
-// 1<<14 of them. The machine does not check the limit yet, and does not read
-// KI_STACK_MB: New uses the default.
+// 1<<14 of them. New reads the variable (see framesFor) and enter checks the
+// limit. The environments are not counted: each call that is alive also holds
+// one, FrameSize slots of 16 bytes each (a Value is an interface), so the
+// memory used at the limit is that of the frames plus these environments, and
+// it grows with the number of variables of the functions that recurse.
 const (
+	stackEnv       = "KI_STACK_MB"
 	defaultStackMB = 256
 	framesPerMB    = 1 << 14
 )
+
+// framesFor returns the limit of the stack, in frames, for the value of
+// KI_STACK_MB: the number of mebibytes times 1<<14 when it is a positive
+// integer, and the default when it is anything else (empty, not a number, zero
+// or negative). A number too large for the product is cut to the largest that
+// fits, because the product would otherwise wrap around to a negative limit.
+func framesFor(setting string) int {
+	// The error says why Atoi failed, and the number says enough: it is 0 for a
+	// text that is not an integer, and the largest int of its sign for one that
+	// does not fit in an int.
+	mb, _ := strconv.Atoi(setting)
+	if mb <= 0 {
+		mb = defaultStackMB
+	}
+	return min(mb, math.MaxInt/framesPerMB) * framesPerMB
+}
 
 // Machine is a CEK machine over one Program. Make it with New. A Machine is not
 // safe for use by several goroutines.
 type Machine struct {
 	prog *core.Program
 	// sm is where the spans of Core are turned into positions, for the messages
-	// of the program's panics.
+	// of the program's panics and stack overflows.
 	sm *base.SourceManager
 	// out and err are the stdout and the stderr of the program.
 	out, err io.Writer
 
 	// envs are the environments of the functions being run, the one of the
-	// function that runs now being the last. Each has FrameSize slots. The code
-	// indexes envs and never keeps a pointer to one of its elements (&envs[i]):
-	// an append to envs may copy the slice headers it holds to a bigger array
-	// and leave that pointer on the old one. The slots do not move with them,
-	// because each header points to its own array.
+	// function that runs now being the last (a tail call replaces it). Each has
+	// FrameSize slots. The code indexes envs and never keeps a pointer to one of
+	// its elements (&envs[i]): an append to envs may copy the slice headers it
+	// holds to a bigger array and leave that pointer on the old one. The slots
+	// do not move with them, because each header points to its own array.
 	envs [][]Value
 	// stack is the continuation: the frames, the one to apply next being the last.
 	stack []frame
 	stats Stats
-	// maxFrames is the most frames the stack may hold, once the machine checks it.
+	// maxFrames is the limit of the stack: a call that is about to push its
+	// retFrame overflows if the stack already holds maxFrames frames or more (see
+	// enter). Stats.MaxDepth can still end above maxFrames, for two reasons. The
+	// check runs only when a call is entered, so at the check the stack can be
+	// over maxFrames by what the expressions around the call pushed since the
+	// previous check. And the check comes after the arguments of the call were
+	// evaluated, when the frames they used (its argFrame and those of the
+	// expressions inside the arguments) are gone, but MaxDepth had counted them.
+	// Both come from how the expressions nest, which MaxNesting (256, E0204)
+	// and, for a chain of operators, MaxChain (1024, E0205) limit together.
+	// TestMachine/stack_overflow_exits_103 works out the figure for its program.
 	maxFrames int
 	// halt is nil while the program runs, and the state it ended in once it has
-	// panicked. run stops as soon as it is set.
+	// panicked or overflowed its stack. run stops as soon as it is set.
 	halt *Halt
 
 	// The control is either an expression to evaluate (returning is false and
@@ -109,10 +180,12 @@ type Machine struct {
 
 // New returns a Machine for p. sm resolves the spans of p, and out and err are
 // the stdout and the stderr of the program. The machine writes the messages of
-// the program's panics to err, using sm for their positions; it does not write
-// to out yet, because nothing that it runs so far prints.
+// the program's panics and of its stack overflow to err, using sm for their
+// positions; it does not write to out yet, because nothing that it runs so far
+// prints. The limit of the stack is the one that the KI_STACK_MB variable says
+// when New reads it (see framesFor).
 func New(p *core.Program, sm *base.SourceManager, out, err io.Writer) *Machine {
-	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: defaultStackMB * framesPerMB}
+	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: framesFor(os.Getenv(stackEnv))}
 }
 
 // Stats returns the counts of what the machine has done since New.
@@ -120,9 +193,9 @@ func (m *Machine) Stats() Stats { return m.stats }
 
 // RunMain runs the function `main` of the program and returns the state the
 // machine ends in: Halt{Code: 0} when `main` returns, and the Halt of the panic
-// when the program panics (its message is then already on err). RunMain itself
-// panics if the program has no `main`, so whoever runs a program has to check
-// that first.
+// or of the stack overflow when the program ends in one (its message is then
+// already on err). RunMain itself panics if the program has no `main`, so
+// whoever runs a program has to check that first.
 func (m *Machine) RunMain() Halt {
 	if !m.prog.HasMain {
 		panic("interp: RunMain on a program without a main function")
@@ -134,8 +207,9 @@ func (m *Machine) RunMain() Halt {
 }
 
 // Call runs the function f with args, one for each of its parameters, and
-// returns its value. The second result is false if the program panicked, and
-// then the message is already on err and the value is nil.
+// returns its value. The second result is false if the program panicked or
+// overflowed its stack, and then the message is already on err and the value is
+// nil.
 //
 // Each call starts from an empty machine, so a Call never sees what an earlier
 // one left, not even the frames of a program that panicked; only Stats go on
@@ -151,11 +225,7 @@ func (m *Machine) Call(f core.FunID, args []Value) (Value, bool) {
 	if !fun.HasBody {
 		panic(fmt.Sprintf("interp: Call of function %d, which has no body", f))
 	}
-	env := make([]Value, fun.FrameSize)
-	for i, p := range fun.Params {
-		env[m.prog.Vars.Get(p).Slot] = args[i]
-	}
-	m.envs = append(m.envs[:0], env)
+	m.envs = append(m.envs[:0], m.newEnv(fun, args))
 	m.stack = m.stack[:0]
 	m.halt = nil
 	m.stats.MaxEnvs = max(m.stats.MaxEnvs, len(m.envs))
@@ -164,9 +234,10 @@ func (m *Machine) Call(f core.FunID, args []Value) (Value, bool) {
 }
 
 // run steps the machine until the control is a value and no frame is left, and
-// returns that value and true. If the program panics first, it stops there and
-// returns nil and false. It is a loop and not a recursion: how deep the program
-// is shows in the length of m.stack, not in the stack of Go.
+// returns that value and true. If the program panics or overflows its stack
+// first, it stops there and returns nil and false. It is a loop and not a
+// recursion: how deep the program is shows in the length of m.stack, not in the
+// stack of Go.
 func (m *Machine) run() (Value, bool) {
 	for m.halt == nil {
 		switch n := len(m.stack); {
@@ -176,6 +247,12 @@ func (m *Machine) run() (Value, bool) {
 		case n > 0:
 			m.stats.Steps++
 			f := m.stack[n-1]
+			// Cutting the slice does not clear the frame it drops: the backing
+			// array still points at it, and at the values it holds, until a later
+			// push overwrites it. The same goes for the environments that
+			// applyFrame cuts off envs. Nothing here needs it otherwise, because
+			// `ki run` makes one machine for one program and then ends; a machine
+			// reused after a deep run would have to clear them.
 			m.stack = m.stack[:n-1]
 			m.applyFrame(f, m.val)
 		default:
@@ -196,6 +273,10 @@ func (m *Machine) ret(v Value) {
 	m.expr, m.val, m.returning = 0, v, true
 }
 
+// stop records h, the state the program ends in: run returns as soon as it is
+// set. It is the one place that does.
+func (m *Machine) stop(h Halt) { m.halt = &h }
+
 // push adds f to the continuation.
 func (m *Machine) push(f frame) {
 	m.stack = append(m.stack, f)
@@ -206,9 +287,11 @@ func (m *Machine) push(f frame) {
 // its elements with the one in envs, so writing to it writes there.
 func (m *Machine) env() []Value { return m.envs[len(m.envs)-1] }
 
-// step evaluates the expression id: a literal or a variable returns its value,
-// a Let evaluates its Init under a letFrame that remembers what to do next, and
-// a PrimCall starts on its first argument under a primFrame.
+// step evaluates the expression id: a literal, a variable or a function name
+// returns its value; a Let evaluates its Init under a letFrame that remembers
+// what to do next; a PrimCall starts on its first argument under a primFrame; a
+// Call starts on its callee under an argFrame; and a Match starts on its
+// scrutinee under a matchFrame.
 func (m *Machine) step(id core.ExprID) {
 	x := m.prog.Exprs.Get(id)
 	switch x.Kind {
@@ -222,6 +305,8 @@ func (m *Machine) step(id core.ExprID) {
 		// A Core that Lint accepted binds a variable before it reads it, so the
 		// slot has been written.
 		m.ret(m.env()[m.prog.Vars.Get(x.Var).Slot])
+	case core.FunRef:
+		m.ret(FunV{Fun: x.Fun})
 	case core.Let:
 		m.push(letFrame{v: x.Var, body: x.Body})
 		m.eval(x.Init)
@@ -230,10 +315,17 @@ func (m *Machine) step(id core.ExprID) {
 		// that a PrimCall has that many.
 		m.push(primFrame{call: id})
 		m.eval(m.prog.Args(x.Args)[0])
+	case core.Call:
+		// The callee is a value like any other (Core allows any expression
+		// there), so it is evaluated first, and then each argument. The frame
+		// has room for all the values.
+		m.push(argFrame{call: id, vals: make([]Value, 0, 1+len(m.prog.Args(x.Args)))})
+		m.eval(x.Callee)
+	case core.Match:
+		m.push(matchFrame{match: id})
+		m.eval(x.Scrutinee)
 	default:
-		// FunRef, Call and Match are reachable from a program, but the machine
-		// does not run them yet.
-		panic(fmt.Sprintf("interp: cannot evaluate an expression of kind %d yet", x.Kind))
+		panic("unreachable")
 	}
 }
 
@@ -243,7 +335,12 @@ func (m *Machine) step(id core.ExprID) {
 // Lets does not make the stack grow. For a primFrame, v is the value of an
 // argument: either the second argument is evaluated next, or the primitive runs
 // and its value is returned, or, if it fails, the program panics and the
-// machine halts with the panic.
+// machine halts with the panic. For an argFrame, v is the value of the callee
+// or of an argument: either the next argument is evaluated, or the call is made
+// (see enter). For a matchFrame, v is the scrutinee, and the arm that fits
+// becomes the control, again with nothing pushed, so a call in an arm is still
+// in tail position. For a retFrame, the function that made the call is
+// returning v.
 func (m *Machine) applyFrame(f frame, v Value) {
 	switch f := f.(type) {
 	case letFrame:
@@ -265,12 +362,121 @@ func (m *Machine) applyFrame(f frame, v Value) {
 		}
 		r, msg := applyPrim(x.Prim, a, b)
 		if msg != "" {
-			h := m.panicAt(x.Span, msg)
-			m.halt = &h
+			m.stop(m.panicAt(x.Span, msg))
 			return
 		}
 		m.ret(r)
+	case argFrame:
+		x := m.prog.Exprs.Get(f.call)
+		vals := append(f.vals, v)
+		// The callee is vals[0], so the next argument is the one with index
+		// len(vals)-1, if there is one.
+		if args := m.prog.Args(x.Args); len(vals) <= len(args) {
+			m.push(argFrame{call: f.call, vals: vals})
+			m.eval(args[len(vals)-1])
+			return
+		}
+		m.enter(x, vals)
+	case matchFrame:
+		x := m.prog.Exprs.Get(f.match)
+		// The type checker has made the scrutinee a Bool, like the operands of a
+		// primitive (see applyPrim).
+		m.eval(selectArm(m.prog.ArmsOf(x.Arms), v.(BoolV).V))
+	case retFrame:
+		m.envs = m.envs[:f.env+1]
+		m.ret(v)
 	default:
 		panic("unreachable")
 	}
+}
+
+// selectArm returns the body of the arm of a Match that fits b: the first arm
+// whose pattern is that value, or, when there is none, the first wildcard arm.
+// A Core that Lint accepted has an arm for each value or a wildcard, so one
+// always fits; if none does, selectArm panics instead of going on with no arm.
+func selectArm(arms []core.Arm, b bool) core.ExprID {
+	var wildcard core.ExprID
+	haveWildcard := false
+	for _, arm := range arms {
+		switch arm.Pat {
+		case core.PatTrue:
+			if b {
+				return arm.Body
+			}
+		case core.PatFalse:
+			if !b {
+				return arm.Body
+			}
+		case core.PatWildcard:
+			if !haveWildcard {
+				wildcard, haveWildcard = arm.Body, true
+			}
+		default:
+			panic("unreachable")
+		}
+	}
+	if !haveWildcard {
+		panic("interp: no arm of the match fits the value")
+	}
+	return wildcard
+}
+
+// newEnv returns the environment of a call of fun with the arguments args: a
+// slice of fun.FrameSize slots with each argument in the slot of its parameter.
+// Lint checks that a call of a function that it names has as many arguments as
+// the function has parameters, and the type checker checks the others.
+func (m *Machine) newEnv(fun core.Fun, args []Value) []Value {
+	env := make([]Value, fun.FrameSize)
+	for i, p := range fun.Params {
+		env[m.prog.Vars.Get(p).Slot] = args[i]
+	}
+	return env
+}
+
+// enter makes the call of the Call expression call, once its argFrame has
+// collected the values vals (the callee first, then the arguments). It makes
+// the body of the callee the control, in a new environment.
+//
+// A call in tail position, one with no frame waiting for its value but the
+// retFrame of the function that makes it, reuses that retFrame and puts the new
+// environment in place of the caller's: the function that made the call has
+// nothing left to do, so neither it nor its environment needs to stay. That is
+// the machine's tail-call rule, and it is why a loop written as a tail call
+// does not grow the stack or envs. The function that Call starts has no
+// retFrame, so its own tail call pushes one, and the calls after that reuse it.
+// The stack is not checked in this case, because the call pushes nothing.
+//
+// Any other call pushes a retFrame that remembers the environment of the
+// caller, and appends the new one. If the stack already holds maxFrames frames
+// or more, it overflows instead: the machine writes the message at the span of
+// the call to err and halts with Halt{Code: 103}.
+func (m *Machine) enter(call core.Expr, vals []Value) {
+	// A callee that is not a function would be a bug of the type checker.
+	callee := vals[0].(FunV)
+	fun := m.prog.Funs.Get(callee.Fun)
+	if !fun.HasBody {
+		// The functions of the runtime (`print`) have no body, and the machine
+		// does not run them yet.
+		panic(fmt.Sprintf("interp: the program calls function %d, which has no body", callee.Fun))
+	}
+	env := m.newEnv(fun, vals[1:])
+
+	if n := len(m.stack); n > 0 && isRetFrame(m.stack[n-1]) {
+		m.envs[len(m.envs)-1] = env
+	} else {
+		if len(m.stack) >= m.maxFrames {
+			m.stop(m.haltAt(call.Span, "stack overflow", codeStackOverflow))
+			return
+		}
+		m.push(retFrame{env: len(m.envs) - 1})
+		m.envs = append(m.envs, env)
+	}
+	m.stats.MaxEnvs = max(m.stats.MaxEnvs, len(m.envs))
+	m.eval(fun.Body)
+}
+
+// isRetFrame reports whether f is a retFrame.
+func isRetFrame(f frame) bool {
+	_, ok := f.(retFrame)
+	return ok
 }

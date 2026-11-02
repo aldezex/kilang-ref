@@ -385,3 +385,240 @@ why:     un panic deja la pila a medias: `bad` cae dentro del `Init` de un `Let`
          de Go que para todo el binario de test, y no la respuesta equivocada. Y si el `Call` no
          borrara el panic anterior, `good` ni siquiera empezaría
 ref:     TestMachine/call_after_a_panic_starts_clean
+
+[T10.35] machine.call_with_args                            level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una llamada desde Ki evalúa el callee y luego cada argumento, de izquierda a derecha, y los liga a los parámetros en orden; `Call` desde fuera hace lo mismo; y una llamada de dos argumentos cuesta exactamente nueve pasos
+input:   `fn second(a: Int, b: Int) -> Int { b }` llamada con `Call(second, 1, 2)`; y, desde Ki, `zero()`, `one(5)`, `second(1, 2)`, `pick(1, 2, 3)` con `a * 100 + b * 10 + c`, `second(1 + 1, 2 * 3)`, `pick(one(4), second(0, 5), zero())`, `second(0, second(1, 2))` y la llamada a una función de `Bool`
+expect:  `Call(second, 1, 2)` devuelve exactamente `IntV{2}`; las demás devuelven `IntV{7}`, `IntV{5}`, `IntV{2}`, `IntV{123}`, `IntV{6}`, `IntV{457}`, `IntV{2}` y `BoolV{true}`; en la función que solo hace `second(1, 2)`, `Stats()` es exactamente `{Steps: 9, MaxDepth: 1, MaxEnvs: 2}`
+why:     la llamada es donde se juntan tres cosas que se rompen sin avisar: el orden de los
+         argumentos, el hueco de cada parámetro en el entorno y el valor de una llamada que está
+         dentro de los argumentos de otra. `pick` da a cada parámetro un peso distinto, de modo
+         que un orden cambiado o un argumento repetido cambia el número, y las llamadas anidadas
+         comprueban que cada `argFrame` guarda solo sus propios valores. Los nueve pasos (la
+         llamada, el callee, su marco, el `1`, su marco, el `2`, su marco, que hace la llamada,
+         la lectura de `b` y el `retFrame`) fijan que el callee y cada argumento se evalúan una
+         sola vez
+ref:     TestMachine/call_with_args
+
+[T10.36] machine.call_arguments_run_left_to_right          level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    los argumentos de una llamada se evalúan de izquierda a derecha: si los dos hacen panic, el que se informa es el de la izquierda
+input:   `fn f(a: Int, b: Int) -> Int { a }` y `fn main() { let x = f(1 / 0, 9223372036854775807 + 1) }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 101}`; stderr es exactamente `panic: division by zero at test.ki:2:25\n` (la columna 25 es la de la `/`); stdout está vacío
+why:     es el mismo orden que ya se comprobó en las primitivas, pero el de las llamadas lo lleva
+         otro código, el del `argFrame`, y puede estar mal aunque el de las primitivas esté bien.
+         Un intérprete que recorriera los argumentos al revés informaría del desbordamiento, y el
+         mismo programa daría un mensaje distinto en el intérprete y en el código nativo
+ref:     TestMachine/call_arguments_run_left_to_right
+
+[T10.37] machine.call_evaluates_the_callee                 level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    el callee de una llamada es una expresión que se evalúa: una función guardada en una variable se llama como cualquier otra
+input:   `fn dec(x: Int) -> Int { x - 1 }` y `fn inc(x: Int) -> Int { x + 1 }`, y tres funciones que llaman a través de variables: `let g = inc` y `g(41)`; `let g = dec`, `let h = g` y `h(41)`; y `let g = dec`, `let h = inc` y `g(10) * 100 + h(10)`
+expect:  `Call` devuelve exactamente `IntV{42}`, `IntV{40}` e `IntV{911}`
+why:     en Core el callee es un `ExprID` como cualquier otro, y en Ki una función puede ser el
+         valor de una variable: entonces el nodo del callee es un `VarRef`, que no dice qué
+         función es hasta que se lee. Una máquina que tomara la función del propio nodo del
+         callee, y no de su valor, llamaría a otra. `dec` va antes que `inc` y la tercera función
+         usa las dos, para que confundir una con otra cambie el número
+ref:     TestMachine/call_evaluates_the_callee
+
+[T10.38] machine.match_on_bool                             level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un `if` elige la rama que corresponde al valor de la condición y evalúa solo esa rama; la condición puede ser un literal, una comparación o una llamada, y los `if` pueden anidarse o no tener `else`
+input:   `if true { 1 } else { 2 }`, `if false { 1 } else { 2 }`, `if 1 < 2 { 10 } else { 20 }`, `if 2 < 1 { 10 } else { 20 }`, `if yes() { 1 } else { 2 }` con `fn yes() -> Bool { true }`, un `if` dentro de la rama `then` y otro dentro de la `else`, `if true { () }` y `if false { () }` sin `else`, y `if 3 > 2 { false } else { true }`
+expect:  `Call(f)` devuelve exactamente `IntV{1}`, `IntV{2}`, `IntV{10}`, `IntV{20}`, `IntV{1}`, `IntV{2}` (en `then`), `IntV{3}` (en `else`), `UnitV{}`, `UnitV{}` y `BoolV{false}`; en `if true { 1 } else { 2 }` y en `if false { 1 } else { 2 }`, `Stats()` es exactamente `{Steps: 4, MaxDepth: 1, MaxEnvs: 1}`
+why:     las ramas dan números distintos para que una rama cambiada se vea, y la condición que es
+         una llamada hace que el `matchFrame` espere mientras corre una función. Los cuatro pasos
+         (el `Match`, el escrutinio, el marco y la rama) dicen que solo se evalúa la rama
+         elegida, y que el `matchFrame` ya no está cuando la rama empieza, de modo que una
+         llamada dentro de una rama sigue en posición de cola. Una máquina que evaluara las dos
+         ramas daría más pasos
+ref:     TestMachine/match_on_bool
+
+[T10.39] machine.match_arms                                level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `Match` elige el brazo cuyo patrón es el valor del escrutinio, sea cual sea su orden; si ninguno lo es, el primer comodín; y un brazo con patrón gana a un comodín que va antes
+input:   un `Program` hecho a mano con 13 funciones (la elaboración solo produce los brazos `true` y `false`, en ese orden), cada una con un `Match` sobre un literal `Bool` cuyos brazos devuelven números distintos: 1 para `true`, 2 para `false`, 9 y 8 para los comodines y 7 para un segundo `true`
+expect:  `[true=>1, false=>2]` da 1 con `true` y 2 con `false`, y con los brazos al revés lo mismo; `[true=>1, _=>9]` da 9 con `false` y 1 con `true`; `[false=>2, _=>9]` da 9 con `true` y 2 con `false`; `[_=>9]` da 9 con `true` y con `false`; `[_=>9, true=>1]` da 1 con `true`; `[_=>9, _=>8]` da 9 con `false`; `[true=>1, true=>7]` da 1 con `true`; en todas, `Call` devuelve el número exacto y `true`
+why:     `Lint` acepta un `Match` con un comodín además de los dos literales, o en vez de ellos,
+         así que la máquina tiene que decidir quién gana. Aquí gana el patrón que encaja con el
+         valor y, si ninguno encaja, el primer comodín; entre dos iguales, el primero. Una
+         máquina que tomara siempre el primer brazo, o el comodín en cuanto lo viera, o el último
+         de dos iguales, da otro número en alguna fila
+ref:     TestMachine/match_arms
+
+[T10.40] machine.match_without_a_fitting_arm_panics        level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un `Match` en el que ningún brazo encaja con el valor hace un `panic` de Go con un mensaje que lo dice, en vez de seguir sin brazo
+input:   un `Match` hecho a mano sobre `false` con un único brazo, el de `true`
+expect:  `Call` hace un `panic` y el valor que se recupera es exactamente la cadena `interp: no arm of the match fits the value`
+why:     `Lint` rechaza un `Match` que no tiene los dos literales ni un comodín, así que ningún
+         programa que haya pasado por él llega aquí. Si llegara, seguir sin brazo evaluaría una
+         expresión cualquiera (la de id 0) y daría un resultado sin relación con el programa.
+         Decir que algo no puede pasar obliga a comprobar qué pasa si pasa
+ref:     TestMachine/match_without_a_fitting_arm_panics
+
+[T10.41] machine.unknown_kinds_are_unreachable             level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una clase de expresión y una clase de patrón que la máquina no conoce hacen un `panic` con el texto `unreachable`
+input:   un `Program` hecho a mano con dos funciones: una cuyo cuerpo es una `Expr` de clase 200 y otra cuyo cuerpo es un `Match` sobre `true` con un solo brazo de patrón 77
+expect:  en los dos, `Call` hace un `panic` y el valor que se recupera es exactamente la cadena `unreachable`
+why:     el `switch` de `step` sobre la clase de expresión y el que elige el brazo sobre la clase
+         de patrón terminan en `default: panic("unreachable")`, como el de las primitivas: el día
+         que se añada una clase y se olvide un `switch`, el fallo es un `panic` con su causa y no
+         una máquina que sigue con el valor de antes. Se fuerza con clases que Core no tiene, que
+         solo un `Program` hecho a mano puede contener
+ref:     TestMachine/unknown_kinds_are_unreachable
+
+[T10.42] machine.and_or_short_circuit                      level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `a && b` y `a || b` evalúan `b` solo cuando `a` no decide el resultado
+input:   `false && 1 / 0 == 0` y `true || 1 / 0 == 0`, cuyo lado derecho haría un panic; `fn boom() -> Bool { boom() }`, que no termina nunca ni desborda la pila (es una llamada de cola), con `false && boom()` y `true || boom()`; y `true && false`, `true && true`, `false || false`, `false || true`, `false && false` y `true || true`
+expect:  `Call(f)` devuelve exactamente `BoolV{false}`, `BoolV{true}`, `BoolV{false}`, `BoolV{true}`, `BoolV{false}`, `BoolV{true}`, `BoolV{false}`, `BoolV{true}`, `BoolV{false}` y `BoolV{true}`, sin ningún panic
+why:     el cortocircuito es parte del lenguaje: `false && boom()` tiene que valer `false` aunque
+         `boom` no termine. Una máquina que evaluara el lado derecho de esa fila no se pararía y el
+         test acabaría por tiempo, sin ningún mensaje. Por eso van antes dos filas cuyo lado derecho
+         hace panic: la máquina que lo evalúa falla en la primera, al momento y con el mensaje del
+         panic. Las filas en que el lado derecho sí se evalúa fijan que entonces la respuesta es la
+         suya y no la del izquierdo
+ref:     TestMachine/and_or_short_circuit
+
+[T10.43] machine.tail_call_constant_depth                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un bucle escrito como llamada de cola no hace crecer la pila: un millón de iteraciones usan como mucho tres marcos a la vez
+input:   `fn count(n: Int) -> Int { if n == 0 { 0 } else { count(n - 1) } }`, con `Call(count, 1000000)`
+expect:  `Call` devuelve exactamente `IntV{0}` y `Stats().MaxDepth` es exactamente 3 (el `retFrame` y, encima, los dos marcos que necesita evaluar una iteración)
+why:     una llamada es de cola cuando lo único que espera su valor es el `retFrame` de la
+         función que la hace; entonces se reutiliza ese `retFrame` en vez de empujar otro. Sin
+         esa regla, cada iteración dejaría un `retFrame` y la pila llegaría a un millón de
+         marcos: el contador es lo que lo delata, porque con el límite por defecto (4 194 304
+         marcos) el programa seguiría dando 0
+ref:     TestMachine/tail_call_constant_depth
+
+[T10.44] machine.tail_loop_does_not_grow_envs              level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    en ese bucle, el número de entornos tampoco crece: cada llamada de cola sustituye el entorno de la función que la hace
+input:   el mismo `count`, con `Call(count, 1000000)` y con `fn main() { let x = count(1000000) }` por `RunMain`
+expect:  `Call` devuelve exactamente `IntV{0}` y `Stats().MaxEnvs` es exactamente 2 (el de la entrada y el de `count`); `RunMain()` devuelve exactamente `Halt{Code: 0}`, con stderr vacío, y `Stats().MaxEnvs` es exactamente 2 (el de `main` y el de `count`)
+why:     `envs` y `stack` crecen por separado: una máquina puede reutilizar el `retFrame` y aun
+         así añadir un entorno por iteración, y tendría un millón de entornos vivos con la pila
+         en tres marcos. Es lo que explica por qué un bucle de cola no consume memoria. La
+         variante desde `main` fija además que «en cola» se decide por el marco de arriba de la
+         pila y no por el de abajo, que en ese caso es el `letFrame` de `main`
+ref:     TestMachine/tail_loop_does_not_grow_envs
+
+[T10.45] machine.tail_call_between_functions               level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una llamada de cola de una función a otra, con entornos de tamaños distintos, pone el entorno de la nueva y la nueva lee bien sus parámetros
+input:   `fn a(n: Int, acc: Int) -> Int { let t = acc + 1; let u = t; if n == 0 { u } else { b(n - 1, u) } }` y `fn b(n: Int, acc: Int) -> Int { if n == 0 { acc } else { a(n - 1, acc + 10) } }` (`a` tiene cuatro huecos y `b` dos), con `Call(a, 4, 0)` y con `Call(a, 1000000, 0)`
+expect:  `Call(a, 4, 0)` devuelve exactamente `IntV{23}`; `Call(a, 1000000, 0)` devuelve exactamente `IntV{5500001}`, con `Stats()` de `MaxDepth` 3 y `MaxEnvs` 2
+why:     `count` se llama a sí misma y su entorno siempre tiene el mismo tamaño; aquí un entorno
+         de cuatro huecos se cambia por uno de dos, y al revés. Una máquina que copiara los
+         argumentos sobre el entorno viejo, en vez de sustituirlo, dejaría huecos sin tocar o
+         fuera de rango, y el valor saldría mal. Cada función lee sus parámetros después de que
+         la otra le haya cambiado el entorno
+ref:     TestMachine/tail_call_between_functions
+
+[T10.46] machine.return_frees_environment                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    al volver una función, su entorno sale de `envs`: tres llamadas seguidas desde una misma función nunca tienen más de un entorno de ellas vivo
+input:   `fn g() -> Int { let a = 1; a }`, `fn f() -> Int { g() + g() + g() }` y `fn main() { let x = f() }`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 0}`, con stdout y stderr vacíos, y `Stats().MaxEnvs` es exactamente 3 (`main`, `f` y una `g` a la vez)
+why:     el `retFrame` guarda el índice del entorno de quien llama, y al aplicarlo se corta
+         `envs` hasta él. Si no se cortara, las tres `g` se acumularían y habría cinco entornos
+         en vez de tres. `g` tiene una variable a propósito: sin ella, `main` escribiría su `x`
+         en el entorno de la última `g`, que no tiene casillas, y el test acabaría con un
+         `index out of range` de Go que termina el binario de tests en vez de fallar solo. Un
+         índice que cortara de más dejaría a `main` sin su entorno, y uno que cortara de menos
+         dejaría el de la `g` que ha vuelto: los dos acaban en un panic de Go
+ref:     TestMachine/return_frees_environment
+
+[T10.47] machine.deep_non_tail_recursion                   level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una recursión que no es de cola, de 200 000 niveles, termina con el valor correcto: la profundidad vive en datos de la máquina y el límite por defecto la deja pasar
+input:   `fn sumTo(n: Int) -> Int { if n == 0 { 0 } else { n + sumTo(n - 1) } }`, con `Call(sumTo, 200000)` y con `KI_STACK_MB` vacío, que es el límite por defecto
+expect:  `Call` devuelve exactamente `IntV{20000100000}` y `Stats().MaxEnvs` es exactamente 200001 (el de la entrada y uno por cada llamada viva en el punto más hondo)
+why:     cada nivel deja en `stack` un `primFrame` y un `retFrame` y en `envs` un entorno, y
+         todos esos son slices que crecen, no marcos de la pila de Go. 200 000 niveles son 400
+         000 marcos, muy por debajo de los 4 194 304 del límite por defecto (256 MiB), así que no
+         hay desbordamiento. La suma comprueba además que cada nivel recupera su propio `n` al
+         volver
+ref:     TestMachine/deep_non_tail_recursion
+
+[T10.48] machine.stack_overflow_exits_103                  level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una recursión infinita que no es de cola acaba en un desbordamiento de pila, con código 103 y un mensaje que dice en qué llamada, cuando la pila llega al límite de `KI_STACK_MB`
+input:   `KI_STACK_MB=1` (16 384 marcos), `fn f(n: Int) -> Int { 1 + f(n + 1) }` y `fn main() { let x = f(0) }`, en `test.ki`
+expect:  `RunMain()` devuelve exactamente `Halt{Code: 103}`; stderr es exactamente `panic: stack overflow at test.ki:1:27\n` (la columna 27 es la de la llamada `f(n + 1)`); stdout está vacío; y `Stats().MaxDepth` es exactamente 16387
+why:     sin límite, esta recursión llenaría la memoria. El desbordamiento es un estado de la
+         máquina, como un panic, pero con su propio código (103, no 101) para que se distinga de
+         un error del programa. El límite se comprueba cuando una llamada va a empujar su
+         `retFrame`, aquí con 16 385 marcos (el `letFrame` de `main` y dos por nivel; 16 385 es
+         el primero que llega a 16 384). Los dos marcos que la evaluación de los argumentos de
+         esa llamada ya había empujado (su `argFrame` y el `primFrame` de `n + 1`) llevan el
+         máximo a 16 387: el límite decide cuándo se rechaza una llamada, no es una cota de la
+         pila
+ref:     TestMachine/stack_overflow_exits_103
+
+[T10.49] machine.stack_limit_counts_frames                 level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    el límite de la pila es `KI_STACK_MB << 14` marcos y la máquina deja pasar exactamente las llamadas que caben: con 1 MiB deja pasar 5461 llamadas y rechaza la siguiente, y con 2 MiB deja pasar 10922
+input:   `fn f(n: Int) -> Int { 1 + (1 + f(n + 1)) }`, con `Call(f, 0)`, con `KI_STACK_MB=1` y con `KI_STACK_MB=2` (cada nivel deja tres marcos, dos `primFrame` y un `retFrame`, y la entrada empieza con dos)
+expect:  en las dos, `Call` devuelve `nil` y `false` y stderr es exactamente `panic: stack overflow at test.ki:1:32\n`; `Stats().MaxEnvs` es exactamente 5462 con `1` y 10923 con `2` (el entorno de la entrada y los de las 5461 y las 10922 llamadas que se dejaron pasar)
+why:     la llamada número j, contando desde 0, encuentra 2 + 3j marcos y se rechaza en la
+         primera que tiene al menos 16 384 (1 MiB) o 32 768 (2 MiB): j = 5461 y j = 10922, que
+         son las llamadas que pasaron. Con 2 MiB, 2 + 3·10922 es exactamente 32 768, el caso en
+         que `>` y `>=` se separan: una máquina que comprobara con `>` dejaría pasar una llamada
+         más y daría 10924 entornos. El `1` fija que 1 MiB son 1<<14 marcos y el `2`, que la
+         escala es lineal
+ref:     TestMachine/stack_limit_counts_frames
+
+[T10.50] machine.tail_call_at_the_limit                    level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    una llamada de cola se permite aunque la pila esté justo en el límite, porque no empuja nada, y la llamada que no es de cola, un nivel más allá, se rechaza
+input:   `KI_STACK_MB=1`, `fn base() -> Int { 7 }` y `fn f(n: Int) -> Int { if n == 0 { base() } else { 1 + f(n - 1) } }`, con `Call(f, 8192)` y con `Call(f, 8193)`
+expect:  `Call(f, 8192)` devuelve exactamente `IntV{8199}` y `true`; `Call(f, 8193)` devuelve `nil` y `false`, y stderr es exactamente `panic: stack overflow at test.ki:2:55\n`
+why:     con `f(8192)` la pila tiene exactamente 16 384 marcos, el límite, cuando se llama a
+         `base`, y esa llamada está en posición de cola: no empuja nada y por eso no se
+         comprueba. La llamada anterior, la de `f(0)`, encontró 16 383 y pasó. Con `f(8193)`, la
+         de `f(0)` encuentra 16 385 y desborda. Una máquina que comprobara el límite antes de
+         decidir si la llamada es de cola rechazaría la primera
+ref:     TestMachine/tail_call_at_the_limit
+
+[T10.51] machine.fib_20                                    level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    `fib` con doble recursión, que no es de cola, da el valor correcto en sus casos base y en los siguientes
+input:   `fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }`, con `n` igual a 0, 1, 2, 3, 10 y 20
+expect:  `Call(fib, n)` devuelve exactamente `IntV{0}`, `IntV{1}`, `IntV{1}`, `IntV{2}`, `IntV{55}` e `IntV{6765}`
+why:     es el primer programa de verdad que corre en el intérprete: una condición, dos llamadas
+         y una suma. La segunda llamada, `fib(n - 2)`, necesita que `n` siga en el entorno de la
+         función cuando la primera ya ha vuelto, así que una máquina que liberara o pisara mal el
+         entorno al volver daría otro valor. Los casos 0 y 1 son los dos que no recursan y 2 y 3
+         los primeros que sí
+ref:     TestMachine/fib_20
+
+[T10.52] frames.unknown_frame_is_unreachable               level: core
+kind:    unit (go test)      file: internal/interp/machine_internal_test.go
+case:    `applyFrame` con un marco que el paquete no define hace un `panic` con el texto `unreachable`
+input:   un `type fakeFrame struct{}` con el método no exportado `frame()`, que solo se puede escribir dentro del paquete, pasado a `applyFrame` con `UnitV{}`
+expect:  `applyFrame(fakeFrame{}, UnitV{})` hace un `panic` y el valor que se recupera es exactamente la cadena `unreachable`
+why:     el type switch sobre una interfaz sellada termina en `default: panic("unreachable")`
+         para el día en que se añada un marco y se olvide un `switch`: ese día el fallo es un
+         `panic` con su causa y no una máquina que ignora el marco y sigue. Decir que una rama no
+         puede pasar obliga a comprobarlo, y aquí se fuerza con un marco que el paquete mismo no
+         tiene
+ref:     TestMachineFrames/unknown_frame_is_unreachable
+
+[T10.53] frames.stack_limit_setting                        level: core
+kind:    unit (go test)      file: internal/interp/machine_internal_test.go
+case:    el límite de la pila en marcos sale de `KI_STACK_MB`: el número de MiB por 1<<14 si es un entero positivo, y 256 MiB (4 194 304 marcos) si es cualquier otra cosa; un número demasiado grande se recorta
+input:   `framesFor` con `""`, `"1"`, `"2"`, `"256"`, `"300"`, `"0"`, `"-1"`, `"-256"`, `"abc"`, `"1.5"`, `"4MB"`, `" 4"`, `"4 "`, `"9223372036854775807"`, `"99999999999999999999"` y `"-99999999999999999999"`
+expect:  4 194 304 para `""`; 16 384 para `"1"`; 32 768 para `"2"`; 4 194 304 para `"256"`; 4 915 200 para `"300"`; 4 194 304 para `"0"`, `"-1"`, `"-256"`, `"abc"`, `"1.5"`, `"4MB"`, `" 4"`, `"4 "` y `"-99999999999999999999"`; y `(MaxInt >> 14) << 14`, es decir 9 223 372 036 854 759 424, para `"9223372036854775807"` y `"99999999999999999999"`
+why:     `KI_STACK_MB` la escribe una persona, y un valor raro no debe dejar la máquina con un
+         límite de cero marcos, con el que la primera llamada desbordaría la pila. Lo mismo
+         pasaría con un número enorme: multiplicado por 1<<14 daría la vuelta a un negativo, y
+         por eso se recorta. Los tests de desbordamiento comprueban que `New` lee la variable;
+         este, qué límite sale de cada texto
+ref:     TestMachineFrames/stack_limit_setting

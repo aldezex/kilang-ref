@@ -101,15 +101,22 @@ const (
 )
 
 // panicAt reports that the program panics at sp: it writes
-// "panic: <msg> at <path>:<line>:<col>\n" to err, where the position is the
-// start of sp, and returns Halt{Code: 101}. It is one Write, and its error is
-// not checked: there is nowhere better than err to tell that err failed, and the
-// exit code says that the program panicked either way. It does not stop the
-// machine: the caller records the Halt.
+// "panic: <msg> at <path>:<line>:<col>\n" to err and returns Halt{Code: 101}.
+// See haltAt for the rest, which it shares with the stack overflow.
 func (m *Machine) panicAt(sp base.Span, msg string) Halt {
+	return m.haltAt(sp, msg, codePanic)
+}
+
+// haltAt reports that the program ends at sp with the exit code code, and says
+// why: it writes "panic: <msg> at <path>:<line>:<col>\n" to err, where the
+// position is the start of sp, and returns Halt{Code: code}. It is one Write,
+// and its error is not checked: there is nowhere better than err to tell that
+// err failed, and the exit code says that the program ended either way. It does
+// not stop the machine: the caller records the Halt.
+func (m *Machine) haltAt(sp base.Span, msg string, code int) Halt {
 	pos := m.sm.LineCol(sp.File, sp.Lo)
 	fmt.Fprintf(m.err, "panic: %s at %s:%d:%d\n", msg, m.sm.DisplayPath(sp.File), pos.Line, pos.Col)
-	return Halt{Code: 101}
+	return Halt{Code: code}
 }
 
 // applyPrim computes the primitive p on the operands a and b. A primitive of one

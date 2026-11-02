@@ -48,22 +48,30 @@ func panicText(work func()) (got any) {
 	return nil
 }
 
-// runMain compiles src, runs its `main` on a new Machine and returns the state
-// the machine ends in and what the program wrote to stdout and to stderr.
-func runMain(t *testing.T, src string) (h interp.Halt, stdout, stderr string) {
+// runMainOn compiles src and runs its `main` on a new Machine. It returns the
+// machine, so that a test can read its Stats, the state the machine ends in and
+// what the program wrote to stdout and to stderr.
+func runMainOn(t *testing.T, src string) (m *interp.Machine, h interp.Halt, stdout, stderr string) {
 	t.Helper()
 	m, out, errOut := machineOf(testsupport.Compile(t, src))
 	h = m.RunMain()
-	return h, out.String(), errOut.String()
+	return m, h, out.String(), errOut.String()
 }
 
-// wantPanic checks that running the `main` of src ends in a Ki panic: Halt{101},
+// runMain is runMainOn for a test that does not read the machine.
+func runMain(t *testing.T, src string) (h interp.Halt, stdout, stderr string) {
+	t.Helper()
+	_, h, stdout, stderr = runMainOn(t, src)
+	return h, stdout, stderr
+}
+
+// wantHalt checks that running the `main` of src ends in the state want, with
 // the message wantErr (the whole of stderr) and nothing on stdout.
-func wantPanic(t *testing.T, src, wantErr string) {
+func wantHalt(t *testing.T, src string, want interp.Halt, wantErr string) {
 	t.Helper()
 	h, stdout, stderr := runMain(t, src)
-	if h != (interp.Halt{Code: 101}) {
-		t.Errorf("RunMain() of %q = %+v, want Halt{Code: 101}", src, h)
+	if h != want {
+		t.Errorf("RunMain() of %q = %+v, want %+v", src, h, want)
 	}
 	if stderr != wantErr {
 		t.Errorf("stderr of %q = %q, want %q", src, stderr, wantErr)
@@ -71,6 +79,13 @@ func wantPanic(t *testing.T, src, wantErr string) {
 	if stdout != "" {
 		t.Errorf("stdout of %q = %q, want it empty", src, stdout)
 	}
+}
+
+// wantPanic checks that running the `main` of src ends in a Ki panic: Halt{101},
+// the message wantErr and nothing on stdout.
+func wantPanic(t *testing.T, src, wantErr string) {
+	t.Helper()
+	wantHalt(t, src, interp.Halt{Code: 101}, wantErr)
 }
 
 func TestMachine(t *testing.T) {
@@ -576,6 +591,469 @@ fn idInt(x: Int) -> Int { x }
 		}
 		if errOut.String() != msg || out.Len() != 0 {
 			t.Errorf("after the calls, stderr = %q and stdout = %q, want %q and nothing", errOut.String(), out.String(), msg)
+		}
+	})
+
+	t.Run("call_with_args", func(t *testing.T) {
+		// A call from Ki evaluates the callee and then each argument, left to
+		// right, and binds them to the parameters in order. pick gives each
+		// parameter a different weight, so a swap or a repeat shows in the number.
+		const src = `
+fn second(a: Int, b: Int) -> Int { b }
+fn zero() -> Int { 7 }
+fn one(x: Int) -> Int { x }
+fn pick(a: Int, b: Int, c: Int) -> Int { a * 100 + b * 10 + c }
+fn callZero() -> Int { zero() }
+fn callOne() -> Int { one(5) }
+fn callSecond() -> Int { second(1, 2) }
+fn callPick() -> Int { pick(1, 2, 3) }
+fn callExpressions() -> Int { second(1 + 1, 2 * 3) }
+fn callNested() -> Int { pick(one(4), second(0, 5), zero()) }
+fn callInsideCall() -> Int { second(0, second(1, 2)) }
+fn callBool() -> Bool { idBool(true) }
+fn idBool(x: Bool) -> Bool { x }
+`
+		// The function of the brief, called from outside.
+		_, got := call(t, src, "second", interp.IntV{V: 1}, interp.IntV{V: 2})
+		if got != (interp.IntV{V: 2}) {
+			t.Errorf("Call(second, 1, 2) = %#v, want IntV{2}", got)
+		}
+
+		rows := []struct {
+			fun  string
+			want interp.Value
+		}{
+			{"callZero", interp.IntV{V: 7}},
+			{"callOne", interp.IntV{V: 5}},
+			{"callSecond", interp.IntV{V: 2}},
+			{"callPick", interp.IntV{V: 123}},
+			{"callExpressions", interp.IntV{V: 6}},
+			{"callNested", interp.IntV{V: 457}},
+			{"callInsideCall", interp.IntV{V: 2}},
+			{"callBool", interp.BoolV{V: true}},
+		}
+		for _, row := range rows {
+			if _, got := call(t, src, row.fun); got != row.want {
+				t.Errorf("Call(%s) = %#v, want %#v", row.fun, got, row.want)
+			}
+		}
+
+		// The steps of callSecond: the Call, the callee, the frame of the callee,
+		// `1`, its frame, `2`, its frame (which makes the call), the read of b and
+		// the retFrame: nine. The stack holds one frame at a time (the argFrame,
+		// then the retFrame) and there are two environments, the entry's and the
+		// callee's.
+		m, _ := call(t, src, "callSecond")
+		if s, want := m.Stats(), (interp.Stats{Steps: 9, MaxDepth: 1, MaxEnvs: 2}); s != want {
+			t.Errorf("Stats() of callSecond = %+v, want %+v", s, want)
+		}
+	})
+
+	t.Run("call_arguments_run_left_to_right", func(t *testing.T) {
+		// Both arguments panic. The report is the left one, the division by zero.
+		wantPanic(t, "fn f(a: Int, b: Int) -> Int { a }\nfn main() { let x = f(1 / 0, 9223372036854775807 + 1) }",
+			"panic: division by zero at test.ki:2:25\n")
+	})
+
+	t.Run("call_evaluates_the_callee", func(t *testing.T) {
+		// The callee of a Call is an expression like any other, and a function can
+		// be the value of a variable. dec comes before inc, so a machine that read
+		// the function from the callee's own node and not from its value would
+		// find no function there (a VarRef has none) and call the first function
+		// of the program.
+		const src = `
+fn dec(x: Int) -> Int { x - 1 }
+fn inc(x: Int) -> Int { x + 1 }
+fn viaVariable() -> Int { let g = inc
+ g(41) }
+fn viaTwoVariables() -> Int { let g = dec
+ let h = g
+ h(41) }
+fn bothFunctions() -> Int { let g = dec
+ let h = inc
+ g(10) * 100 + h(10) }
+`
+		rows := []struct {
+			fun  string
+			want int64
+		}{
+			{"viaVariable", 42},
+			{"viaTwoVariables", 40},
+			{"bothFunctions", 911},
+		}
+		for _, row := range rows {
+			if _, got := call(t, src, row.fun); got != (interp.IntV{V: row.want}) {
+				t.Errorf("Call(%s) = %#v, want IntV{%d}", row.fun, got, row.want)
+			}
+		}
+	})
+
+	t.Run("match_on_bool", func(t *testing.T) {
+		rows := []struct {
+			name, src string
+			want      interp.Value
+		}{
+			{"then_branch", "fn f() -> Int { if true { 1 } else { 2 } }", interp.IntV{V: 1}},
+			{"else_branch", "fn f() -> Int { if false { 1 } else { 2 } }", interp.IntV{V: 2}},
+			{"computed_condition_true", "fn f() -> Int { if 1 < 2 { 10 } else { 20 } }", interp.IntV{V: 10}},
+			{"computed_condition_false", "fn f() -> Int { if 2 < 1 { 10 } else { 20 } }", interp.IntV{V: 20}},
+			// The scrutinee is a call, so the matchFrame waits while a function runs.
+			{"condition_is_a_call", "fn yes() -> Bool { true }\nfn f() -> Int { if yes() { 1 } else { 2 } }", interp.IntV{V: 1}},
+			{"nested_in_then", "fn f() -> Int { if true { if false { 1 } else { 2 } } else { 3 } }", interp.IntV{V: 2}},
+			{"nested_in_else", "fn f() -> Int { if false { 1 } else { if true { 3 } else { 4 } } }", interp.IntV{V: 3}},
+			{"without_else_taken", "fn f() { if true { () } }", interp.UnitV{}},
+			{"without_else_skipped", "fn f() { if false { () } }", interp.UnitV{}},
+			{"bool_result", "fn f() -> Bool { if 3 > 2 { false } else { true } }", interp.BoolV{V: false}},
+		}
+		for _, row := range rows {
+			_, got := call(t, row.src, "f")
+			if got != row.want {
+				t.Errorf("%s: Call(f) = %#v, want %#v", row.name, got, row.want)
+			}
+		}
+
+		// Only the arm that fits is evaluated: the Match, its scrutinee, the
+		// matchFrame and the arm, four steps, whichever arm it is. The matchFrame
+		// is gone when the arm starts, so the arm adds no frame.
+		for _, src := range []string{
+			"fn f() -> Int { if true { 1 } else { 2 } }",
+			"fn f() -> Int { if false { 1 } else { 2 } }",
+		} {
+			m, _ := call(t, src, "f")
+			if s, want := m.Stats(), (interp.Stats{Steps: 4, MaxDepth: 1, MaxEnvs: 1}); s != want {
+				t.Errorf("Stats() of %q = %+v, want %+v", src, s, want)
+			}
+		}
+	})
+
+	t.Run("match_arms", func(t *testing.T) {
+		// Programs made by hand, because the elaboration only makes a Match with
+		// the arms true and false, in that order. Each row is one function whose
+		// body is `match scrutinee { arms }`, and every arm answers a different
+		// number. A literal arm wins over a wildcard that comes first, and the
+		// wildcard is for the value that no other arm fits.
+		const (
+			t1, f2, w9 = 1, 2, 9
+		)
+		type arm struct {
+			pat  core.PatKind
+			body int64
+		}
+		rows := []struct {
+			name string
+			scr  bool
+			arms []arm
+			want int64
+		}{
+			{"true_arm", true, []arm{{core.PatTrue, t1}, {core.PatFalse, f2}}, t1},
+			{"false_arm", false, []arm{{core.PatTrue, t1}, {core.PatFalse, f2}}, f2},
+			{"reversed_true", true, []arm{{core.PatFalse, f2}, {core.PatTrue, t1}}, t1},
+			{"reversed_false", false, []arm{{core.PatFalse, f2}, {core.PatTrue, t1}}, f2},
+			{"wildcard_after_true_gets_false", false, []arm{{core.PatTrue, t1}, {core.PatWildcard, w9}}, w9},
+			{"wildcard_after_true_leaves_true", true, []arm{{core.PatTrue, t1}, {core.PatWildcard, w9}}, t1},
+			{"wildcard_after_false_gets_true", true, []arm{{core.PatFalse, f2}, {core.PatWildcard, w9}}, w9},
+			{"wildcard_after_false_leaves_false", false, []arm{{core.PatFalse, f2}, {core.PatWildcard, w9}}, f2},
+			{"wildcard_alone_for_true", true, []arm{{core.PatWildcard, w9}}, w9},
+			{"wildcard_alone_for_false", false, []arm{{core.PatWildcard, w9}}, w9},
+			{"literal_wins_over_earlier_wildcard", true, []arm{{core.PatWildcard, w9}, {core.PatTrue, t1}}, t1},
+			{"first_of_two_wildcards", false, []arm{{core.PatWildcard, w9}, {core.PatWildcard, 8}}, w9},
+			{"first_of_two_equal_arms", true, []arm{{core.PatTrue, t1}, {core.PatTrue, 7}}, t1},
+		}
+		p := &core.Program{}
+		b := core.Builder{P: p}
+		sp := base.Span{File: 1}
+		funs := make([]core.FunID, len(rows))
+		for i, row := range rows {
+			arms := make([]core.Arm, len(row.arms))
+			for j, a := range row.arms {
+				arms[j] = core.Arm{Pat: a.pat, Body: b.LitInt(sp, a.body)}
+			}
+			body := b.Match(sp, b.LitBool(sp, row.scr), arms)
+			funs[i] = p.Funs.Push(core.Fun{Body: body, HasBody: true})
+		}
+		for i, row := range rows {
+			var out, errOut bytes.Buffer
+			m := interp.New(p, new(base.SourceManager), &out, &errOut)
+			got, ok := m.Call(funs[i], nil)
+			if !ok || got != (interp.IntV{V: row.want}) {
+				t.Errorf("%s: Call = (%#v, %v), want (IntV{%d}, true)", row.name, got, ok, row.want)
+			}
+		}
+	})
+
+	t.Run("match_without_a_fitting_arm_panics", func(t *testing.T) {
+		// Lint rejects a Match that has neither both literals nor a wildcard, so
+		// no program that passed Lint gets here; the machine says so instead of
+		// going on with no arm. Made by hand: only the arm true, and the value false.
+		p := &core.Program{}
+		b := core.Builder{P: p}
+		sp := base.Span{File: 1}
+		arms := []core.Arm{{Pat: core.PatTrue, Body: b.LitInt(sp, 1)}}
+		f := p.Funs.Push(core.Fun{Body: b.Match(sp, b.LitBool(sp, false), arms), HasBody: true})
+		got := panicText(func() {
+			interp.New(p, new(base.SourceManager), new(bytes.Buffer), new(bytes.Buffer)).Call(f, nil)
+		})
+		if want := "interp: no arm of the match fits the value"; got != want {
+			t.Errorf("Call panicked with %#v, want the string %q", got, want)
+		}
+	})
+
+	t.Run("unknown_kinds_are_unreachable", func(t *testing.T) {
+		// An ExprKind and a PatKind that the machine has no case for, which only
+		// a Program made by hand can hold: each switch ends in panic("unreachable").
+		p := &core.Program{}
+		b := core.Builder{P: p}
+		sp := base.Span{File: 1}
+		badExpr := p.Funs.Push(core.Fun{Body: p.Exprs.Push(core.Expr{Kind: core.ExprKind(200), Span: sp}), HasBody: true})
+		badPat := p.Funs.Push(core.Fun{HasBody: true, Body: b.Match(sp, b.LitBool(sp, true),
+			[]core.Arm{{Pat: core.PatKind(77), Body: b.LitInt(sp, 1)}})})
+		rows := []struct {
+			name string
+			fun  core.FunID
+		}{
+			{"expression_kind", badExpr},
+			{"pattern_kind", badPat},
+		}
+		for _, row := range rows {
+			got := panicText(func() {
+				interp.New(p, new(base.SourceManager), new(bytes.Buffer), new(bytes.Buffer)).Call(row.fun, nil)
+			})
+			if got != "unreachable" {
+				t.Errorf("%s: Call panicked with %#v, want the string \"unreachable\"", row.name, got)
+			}
+		}
+	})
+
+	t.Run("and_or_short_circuit", func(t *testing.T) {
+		// The two rows with a right operand that would panic come first: a
+		// machine that evaluated it ends the test at once, with the message of the
+		// panic (call fails the test when the call reports one). The rows with boom
+		// come after them because boom never returns and never overflows (its call
+		// is a tail call), so a machine that evaluated it would not stop, and the
+		// test would end by timeout.
+		const boom = "fn boom() -> Bool { boom() }\n"
+		rows := []struct {
+			name, src string
+			want      bool
+		}{
+			{"and_false_skips_a_panic", "fn f() -> Bool { false && 1 / 0 == 0 }", false},
+			{"or_true_skips_a_panic", "fn f() -> Bool { true || 1 / 0 == 0 }", true},
+			{"and_false_skips_the_right", boom + "fn f() -> Bool { false && boom() }", false},
+			{"or_true_skips_the_right", boom + "fn f() -> Bool { true || boom() }", true},
+			// When the left operand does not settle the answer, the right one is it.
+			{"and_true_gives_the_right_false", "fn f() -> Bool { true && false }", false},
+			{"and_true_gives_the_right_true", "fn f() -> Bool { true && true }", true},
+			{"or_false_gives_the_right_false", "fn f() -> Bool { false || false }", false},
+			{"or_false_gives_the_right_true", "fn f() -> Bool { false || true }", true},
+			{"and_false_false", "fn f() -> Bool { false && false }", false},
+			{"or_true_true", "fn f() -> Bool { true || true }", true},
+		}
+		for _, row := range rows {
+			_, got := call(t, row.src, "f")
+			if got != (interp.BoolV{V: row.want}) {
+				t.Errorf("%s: Call(f) = %#v, want BoolV{%v}", row.name, got, row.want)
+			}
+		}
+	})
+
+	t.Run("tail_call_constant_depth", func(t *testing.T) {
+		const src = "fn count(n: Int) -> Int { if n == 0 { 0 } else { count(n - 1) } }"
+		m, got := call(t, src, "count", interp.IntV{V: 1_000_000})
+		if got != (interp.IntV{V: 0}) {
+			t.Errorf("Call(count, 1000000) = %#v, want IntV{0}", got)
+		}
+		// The first call of count comes from the entry, which has no retFrame to
+		// reuse, so it pushes one; every call after it is in tail position and
+		// reuses that one. The deepest the stack gets is three frames: the
+		// retFrame, and above it the two that the evaluation of one iteration
+		// needs (the matchFrame and a primFrame of `n == 0`, or the argFrame and
+		// a primFrame of `n - 1`).
+		if s := m.Stats(); s.MaxDepth != 3 {
+			t.Errorf("Stats().MaxDepth = %d, want 3", s.MaxDepth)
+		}
+	})
+
+	t.Run("tail_loop_does_not_grow_envs", func(t *testing.T) {
+		const src = "fn count(n: Int) -> Int { if n == 0 { 0 } else { count(n - 1) } }"
+		m, got := call(t, src, "count", interp.IntV{V: 1_000_000})
+		if got != (interp.IntV{V: 0}) {
+			t.Errorf("Call(count, 1000000) = %#v, want IntV{0}", got)
+		}
+		// The environment of the entry and the one of count, which each tail call
+		// replaces with its own: two for a million iterations.
+		if s := m.Stats(); s.MaxEnvs != 2 {
+			t.Errorf("Stats().MaxEnvs = %d, want 2", s.MaxEnvs)
+		}
+
+		// The same from `main`, which is what `ki run` does: the environments
+		// are main's and count's.
+		m, h, _, stderr := runMainOn(t, src+"\nfn main() { let x = count(1000000) }")
+		if h != (interp.Halt{Code: 0}) || stderr != "" {
+			t.Errorf("RunMain() = %+v with stderr %q, want Halt{0} and nothing", h, stderr)
+		}
+		if s := m.Stats(); s.MaxEnvs != 2 {
+			t.Errorf("Stats().MaxEnvs from main = %d, want 2", s.MaxEnvs)
+		}
+	})
+
+	t.Run("tail_call_between_functions", func(t *testing.T) {
+		// Two functions that tail-call each other and have environments of
+		// different sizes (a has four slots, b two), each reading its own
+		// parameters after the other's tail call has replaced the environment.
+		const src = `
+fn a(n: Int, acc: Int) -> Int {
+  let t = acc + 1
+  let u = t
+  if n == 0 { u } else { b(n - 1, u) }
+}
+fn b(n: Int, acc: Int) -> Int {
+  if n == 0 { acc } else { a(n - 1, acc + 10) }
+}
+`
+		// a(n, x) adds 1 and goes on with b(n-1, x+1); b(n, x) goes on with
+		// a(n-1, x+10). By hand, a(4, 0): 1, then b(3, 1), a(2, 11), 12, b(1, 12),
+		// a(0, 22), 23. A million is even, so a runs at every even n, and each pair
+		// of calls adds 11: 500 000 pairs reach a(0, 5500000), which answers 5500001.
+		_, got := call(t, src, "a", interp.IntV{V: 4}, interp.IntV{V: 0})
+		if got != (interp.IntV{V: 23}) {
+			t.Errorf("Call(a, 4, 0) = %#v, want IntV{23}", got)
+		}
+		m, got := call(t, src, "a", interp.IntV{V: 1_000_000}, interp.IntV{V: 0})
+		if got != (interp.IntV{V: 5_500_001}) {
+			t.Errorf("Call(a, 1000000, 0) = %#v, want IntV{5500001}", got)
+		}
+		if s := m.Stats(); s.MaxDepth != 3 || s.MaxEnvs != 2 {
+			t.Errorf("Stats() = %+v, want MaxDepth 3 and MaxEnvs 2", s)
+		}
+	})
+
+	t.Run("return_frees_environment", func(t *testing.T) {
+		// g has a variable on purpose. If the environment of the last g stayed in
+		// envs, main would write its x there: with no slot in it, that write would
+		// be an index out of range, a Go panic that ends the whole test binary
+		// before the count below can fail. With a slot, the count fails alone.
+		m, h, stdout, stderr := runMainOn(t, "fn g() -> Int { let a = 1\n a }\nfn f() -> Int { g() + g() + g() }\nfn main() { let x = f() }")
+		if h != (interp.Halt{Code: 0}) || stdout != "" || stderr != "" {
+			t.Errorf("RunMain() = %+v, stdout %q, stderr %q, want Halt{0} and nothing written", h, stdout, stderr)
+		}
+		// main, f, and one g at a time: each g is gone from envs before the next
+		// one starts. Without that, the three g would pile up: five in all.
+		if s := m.Stats(); s.MaxEnvs != 3 {
+			t.Errorf("Stats().MaxEnvs = %d, want 3", s.MaxEnvs)
+		}
+	})
+
+	t.Run("deep_non_tail_recursion", func(t *testing.T) {
+		// The default limit: an empty setting is not a number, so it is the default
+		// whatever the environment this test runs in says.
+		t.Setenv("KI_STACK_MB", "")
+		const src = "fn sumTo(n: Int) -> Int { if n == 0 { 0 } else { n + sumTo(n - 1) } }"
+		m, got := call(t, src, "sumTo", interp.IntV{V: 200_000})
+		if got != (interp.IntV{V: 20000100000}) {
+			t.Errorf("Call(sumTo, 200000) = %#v, want IntV{20000100000}", got)
+		}
+		// The entry's environment and one for each of the 200 000 calls of sumTo
+		// that are alive at the deepest point.
+		if s := m.Stats(); s.MaxEnvs != 200_001 {
+			t.Errorf("Stats().MaxEnvs = %d, want 200001", s.MaxEnvs)
+		}
+	})
+
+	t.Run("stack_overflow_exits_103", func(t *testing.T) {
+		t.Setenv("KI_STACK_MB", "1")
+		m, h, stdout, stderr := runMainOn(t, "fn f(n: Int) -> Int { 1 + f(n + 1) }\nfn main() { let x = f(0) }")
+		if h != (interp.Halt{Code: 103}) {
+			t.Errorf("RunMain() = %+v, want Halt{Code: 103}", h)
+		}
+		if want := "panic: stack overflow at test.ki:1:27\n"; stderr != want {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want it empty", stdout)
+		}
+		// The limit decides whether a call is allowed, and it is checked when the
+		// call is about to push its retFrame: here with 16385 frames on the stack
+		// (main's letFrame, then a primFrame and a retFrame for each level of f,
+		// 1 + 2k, and 16385 is the first of those that is at least 1<<14). The
+		// arguments of that call had already pushed two frames more, its argFrame
+		// and the primFrame of `n + 1`, so the stack got to 16387 and not to 1<<14.
+		if s := m.Stats(); s.MaxDepth != 1<<14+3 {
+			t.Errorf("Stats().MaxDepth = %d, want %d", s.MaxDepth, 1<<14+3)
+		}
+	})
+
+	t.Run("stack_limit_counts_frames", func(t *testing.T) {
+		// Each level of f keeps three frames on the stack while the next one runs:
+		// the two primFrames that wait for the call, and the retFrame of the call.
+		// The first call comes from the entry with two frames already waiting, so
+		// the call number j finds 2 + 3j frames; it overflows at the first j for
+		// which that is at least the limit. The environments alive then are the
+		// entry's and the j calls that were allowed, 1 + j.
+		const src = "fn f(n: Int) -> Int { 1 + (1 + f(n + 1)) }"
+		rows := []struct {
+			mb      string
+			wantEnv int // 1 + j
+		}{
+			// 16384 frames: 2 + 3j >= 16384 first holds for j = 5461 (16385).
+			{"1", 5462},
+			// 32768 frames: 2 + 3j >= 32768 holds for j = 10922, with 32768 exactly,
+			// so a limit that was checked with `>` would let one more call through.
+			{"2", 10923},
+		}
+		for _, row := range rows {
+			t.Setenv("KI_STACK_MB", row.mb)
+			c := testsupport.Compile(t, src)
+			m, _, errOut := machineOf(c)
+			v, ok := m.Call(testsupport.FunNamed(t, c, "f"), []interp.Value{interp.IntV{V: 0}})
+			if v != nil || ok {
+				t.Errorf("KI_STACK_MB=%s: Call(f, 0) = (%#v, %v), want (nil, false)", row.mb, v, ok)
+			}
+			if want := "panic: stack overflow at test.ki:1:32\n"; errOut.String() != want {
+				t.Errorf("KI_STACK_MB=%s: stderr = %q, want %q", row.mb, errOut.String(), want)
+			}
+			if s := m.Stats(); s.MaxEnvs != row.wantEnv {
+				t.Errorf("KI_STACK_MB=%s: Stats().MaxEnvs = %d, want %d", row.mb, s.MaxEnvs, row.wantEnv)
+			}
+		}
+	})
+
+	t.Run("tail_call_at_the_limit", func(t *testing.T) {
+		// A tail call pushes no frame, so it is allowed whatever the size of the
+		// stack. Each level of f keeps two frames (a primFrame and a retFrame), and
+		// the call of base at the last level is in tail position: with f(8192) the
+		// stack holds 16384 frames, exactly the limit, when base is called. The
+		// call of f(0) before it found 16383 and was allowed. With f(8193) the
+		// call of f(0) finds 16385 and overflows.
+		t.Setenv("KI_STACK_MB", "1")
+		const src = "fn base() -> Int { 7 }\nfn f(n: Int) -> Int { if n == 0 { base() } else { 1 + f(n - 1) } }"
+		c := testsupport.Compile(t, src)
+		f := testsupport.FunNamed(t, c, "f")
+
+		m, _, errOut := machineOf(c)
+		if v, ok := m.Call(f, []interp.Value{interp.IntV{V: 8192}}); v != (interp.IntV{V: 8199}) || !ok {
+			t.Errorf("Call(f, 8192) = (%#v, %v), want (IntV{8199}, true); stderr %q", v, ok, errOut.String())
+		}
+
+		m, _, errOut = machineOf(c)
+		v, ok := m.Call(f, []interp.Value{interp.IntV{V: 8193}})
+		if v != nil || ok {
+			t.Errorf("Call(f, 8193) = (%#v, %v), want (nil, false)", v, ok)
+		}
+		if want := "panic: stack overflow at test.ki:2:55\n"; errOut.String() != want {
+			t.Errorf("stderr of Call(f, 8193) = %q, want %q", errOut.String(), want)
+		}
+	})
+
+	t.Run("fib_20", func(t *testing.T) {
+		const src = "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }"
+		rows := []struct{ n, want int64 }{
+			{0, 0}, {1, 1}, {2, 1}, {3, 2}, {10, 55}, {20, 6765},
+		}
+		for _, row := range rows {
+			_, got := call(t, src, "fib", interp.IntV{V: row.n})
+			if got != (interp.IntV{V: row.want}) {
+				t.Errorf("Call(fib, %d) = %#v, want IntV{%d}", row.n, got, row.want)
+			}
 		}
 	})
 }
