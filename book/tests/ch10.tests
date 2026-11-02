@@ -622,3 +622,442 @@ why:     `KI_STACK_MB` la escribe una persona, y un valor raro no debe dejar la 
          por eso se recorta. Los tests de desbordamiento comprueban que `New` lee la variable;
          este, qué límite sale de cada texto
 ref:     TestMachineFrames/stack_limit_setting
+
+[T10.54] out.buffers_until_flush                           level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    un `Writer` sin `lineFlush` guarda lo que se escribe, aunque lleve un salto de línea, y no lo pasa al destino hasta que se llama a `Flush`
+input:   `New(&dest, 0, false)`, `WriteString("a\n")`, `Write([]byte("b"))` y `Flush()`
+expect:  `WriteString` devuelve `2, nil` y `Write` devuelve `1, nil`; tras cada una el destino está vacío; `Flush` devuelve `nil` y deja en el destino exactamente `a\nb`
+why:     el buffer existe para que un programa que imprime miles de líneas no haga miles de llamadas
+         al sistema: un `Writer` que pasara cada escritura al destino sería correcto y lento, y
+         solo lo delata lo que hay en el destino antes de vaciar. Fíjate en que el destino sigue
+         vacío después de `a\n`: sin `lineFlush`, ni siquiera un salto de línea vacía el buffer
+ref:     TestWriter/buffers_until_flush
+
+[T10.55] out.flushes_on_newline_when_terminal              level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    con `lineFlush`, cada `Write` o `WriteString` pasa al destino todo lo que lleva hasta el último salto de línea que contiene, y lo que sigue a ese salto espera en el buffer
+input:   siete entradas, cada una por `WriteString` y por `Write`: `"a\nb"`, `"a\n"`, `"\n"`, `"ab"`, `"a\nb\nc"`, `"\nab"` y la cadena vacía; y la secuencia `"a\nb"`, `"c"`, `"d\ne"` sobre un mismo `Writer`
+expect:  tras cada entrada el destino tiene exactamente `a\n`, `a\n`, `\n`, vacío, `a\nb\n`, `\n` y vacío; cada llamada devuelve `len(entrada), nil` y un `Flush` posterior deja en el destino la entrada entera; en la secuencia, el destino tiene `a\n`, después `a\n` y por último `a\nbcd\n`
+why:     una terminal tiene que ver cada línea en cuanto se escribe, pero una línea a medias espera a
+         su salto: lo que sigue al último `\n` no sale. El test separa cuatro errores plausibles: vaciar
+         todo en cuanto hay un salto (`a\nb` entero), vaciar sin salto, cortar en el primer salto en
+         lugar de en el último (`a\nb\nc` dejaría `b\n` dentro) y cortar antes del `\n` (saldría `a` sin
+         su salto). La secuencia comprueba que `b`, que esperaba, sale con el salto que llega después
+ref:     TestWriter/flushes_on_newline_when_terminal
+
+[T10.56] out.zero_size_means_64k                           level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    un buffer de tamaño 0 (o negativo) es de 64 KiB, y uno de otro tamaño es de ese tamaño: guarda exactamente tantos bytes como mide sin pasar nada al destino, y los vuelca todos con el byte siguiente
+input:   `New(&dest, 0, false)`, `New(&dest, -1, false)` y `New(&dest, 8, false)`, con escrituras de 1 KiB (de 8 bytes, la tercera) hasta llenar el tamaño esperado y después un byte más
+expect:  tras 65 536 bytes con tamaño 0 y con tamaño -1, y tras 8 bytes con tamaño 8, el destino está vacío; después de un byte más, tiene exactamente 65 536, 65 536 y 8 bytes
+why:     el tamaño por defecto es una promesa del libro (64 KiB, como dice el spec) y la única forma
+         de verla desde fuera es llenar el buffer: con 4 KiB (el de `bufio`), con 32 KiB o con
+         128 KiB el destino se llenaría antes o después. Las escrituras son de 1 KiB para que
+         ninguna sea tan grande como para saltarse el buffer. La fila de 8 bytes comprueba que el
+         tamaño que se pide se usa
+ref:     TestWriter/zero_size_means_64k
+
+[T10.57] out.concurrent_writes_do_not_interleave           level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    varias goroutines que escriben a la vez en un mismo `Writer`, mientras otra lo vacía, no mezclan sus bytes: cada línea que se escribió de una vez sale entera, una sola vez y en el orden de su goroutine
+input:   8 goroutines (`go` y `sync.WaitGroup`) escriben, con `WriteString`, 1 000 líneas de 64 bytes cada una (la letra de la goroutine, el número de línea con 4 cifras y la letra repetida hasta los 63 bytes, y el salto); otra llama a `Flush` en bucle hasta que acaban las demás
+expect:  el destino tiene exactamente 8 000 líneas de 63 bytes más el salto; cada una empieza por la letra de su goroutine, sigue con su número de 4 cifras y se completa con esa misma letra; los números de cada goroutine salen en el orden 0, 1, … 999; cada `WriteString` devuelve `64, nil` y cada `Flush`, `nil`; lo mismo con y sin `lineFlush`
+why:     el `Writer` lo comparten los backends, y sin el `Mutex` dos goroutines escribirían en el mismo
+         `bufio.Writer` a la vez: el detector de carreras (`go test -race`, el de `ci-local.sh`) lo ve de inmediato, y las líneas
+         saldrían mezcladas. La novena goroutine, que vacía sin parar, prueba que `Flush` toma el
+         mismo cerrojo: sin él, vaciaría el buffer en mitad de una escritura
+ref:     TestWriter/concurrent_writes_do_not_interleave
+
+[T10.58] out.write_errors_are_reported_when_sent_on        level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    un fallo del destino no se ve en la llamada que solo guarda los bytes en el buffer, sino en la que los pasa al destino (un `Flush`, o el `Write` de un `Writer` con `lineFlush` que cierra una línea), y desde entonces toda llamada devuelve ese error
+input:   un destino cuyo `Write` siempre falla con un error `full`: sin `lineFlush`, `WriteString("a\n")`, `Flush()`, `WriteString("b")` y otro `Flush()`; con `lineFlush`, `WriteString("a\nb")`
+expect:  `WriteString("a\n")` devuelve `2, nil`; el primer `Flush`, `WriteString("b")` y el segundo `Flush` devuelven el error del destino; con `lineFlush`, `WriteString("a\nb")` devuelve ese error y `WriteString("a")`, en otro `Writer`, devuelve `1, nil`
+why:     un buffer cambia el sitio donde se ve un disco lleno: ya no es la llamada que escribe, sino
+         la que vacía. Si `Flush` se tragara el error, un programa saldría con 0 habiendo perdido su
+         salida sin que nadie se enterase. Un `Write` con `lineFlush` que devolviera `nil` al fallar
+         el vaciado no llega a tanto, porque `bufio` recuerda el error y `Exit` lo ve; lo que se
+         pierde es el aviso del propio comando, que fija T10.91. El caso de `"a"` con `lineFlush`
+         comprueba que sin salto de línea no hay vaciado, y por tanto tampoco error todavía
+ref:     TestWriter/write_errors_are_reported_when_sent_on
+
+[T10.59] out.flush_all_flushes_stdout_then_stderr          level: core
+kind:    unit (go test)      file: kirt/out/writer_test.go
+case:    `FlushAll` vacía `Stdout` y después `Stderr`, no deja nada en ninguno de los dos y devuelve el error del vaciado de `Stdout`, y solo ese
+input:   `Stdout` y `Stderr` sustituidos por dos `Writer` sin `lineFlush` sobre un mismo buffer; `Stderr.WriteString("e")` y después `Stdout.WriteString("o")`; y cuatro parejas de `Writer` con una `o` y una `e` pendientes: las dos funcionan, solo falla la de `Stdout`, solo falla la de `Stderr` y fallan las dos, cada una con su propio error
+expect:  antes de `FlushAll` el destino común está vacío; después contiene exactamente `oe`; y con las cuatro parejas `FlushAll` devuelve `nil`, el error de `Stdout`, `nil` y el error de `Stdout`
+why:     `Exit` termina con `os.Exit`, que no ejecuta los `defer`: lo que quede en un buffer se pierde,
+         y `FlushAll` es lo único que lo evita. El orden (primero lo que el programa imprimió, después
+         lo pendiente de stderr) es el mismo siempre, y un `FlushAll` que vaciara solo uno de los dos
+         perdería la otra salida. Lo que devuelve es lo que `Exit` usa para saber que la respuesta se
+         perdió: tiene que ser el error de `Stdout` y no el de `Stderr`, que es por donde se avisa, y
+         un `FlushAll` que devolviera el primer error de cualquiera de los dos culparía a `stdout`
+         de un fallo de `stderr`
+ref:     TestWriter/flush_all_flushes_stdout_then_stderr
+
+[T10.60] out.for_file_flushes_lines_only_for_a_character_device level: core
+kind:    unit (go test)      file: kirt/out/writer_internal_test.go
+case:    `ForFile` decide `lineFlush` por el modo del fichero: sí si es un dispositivo de caracteres, como una terminal, y no si es un fichero normal o no se puede inspeccionar
+input:   `ForFile` de un fichero normal, de `os.DevNull` y de un fichero cerrado, cuyo `Stat` falla
+expect:  `lineFlush` es `false` para el fichero normal, `true` para `os.DevNull` y `false` para el fichero cerrado
+why:     una terminal tiene que ver cada línea al momento y un fichero o una tubería no: vaciar en cada
+         salto costaría una llamada al sistema por línea. La decisión es un campo y no
+         se ve escribiendo (lo que hay en el buffer no se puede leer desde fuera, y `/dev/null` se
+         traga todo), así que el test vive en el paquete y lee `lineFlush`. `os.DevNull` es un
+         dispositivo de caracteres que no es una terminal: el código se guía por el modo, como dice su
+         comentario, y el test lo fija así
+ref:     TestWriterModes/for_file_flushes_lines_only_for_a_character_device
+
+[T10.61] out.stderr_always_flushes_lines                   level: core
+kind:    unit (go test)      file: kirt/out/writer_internal_test.go
+case:    `Stderr` vacía en cada salto de línea sea lo que sea a lo que esté conectado
+expect:  `Stderr.lineFlush` es `true`
+why:     un mensaje de error que se quedara en un buffer detrás de la salida normal llegaría tarde, o
+         no llegaría si el proceso muriera sin pasar por `Exit`. Por eso `Stderr` no depende de lo
+         que haya al otro lado, como sí hace `Stdout`. Lo que el test no ve es el de `Stdout`: depende
+         de dónde se ejecute `go test`
+ref:     TestWriterModes/stderr_always_flushes_lines
+
+[T10.62] externs.print_int_writes_decimal_and_newline      level: core
+kind:    unit (go test)      file: internal/interp/externs_test.go
+case:    `print(x)` escribe `x` en decimal y un salto de línea en el stdout del programa, nada en stderr, y el programa termina con `Halt{0}`; también cuando se llama desde otra función, con el resultado ligado a una variable o varias veces seguidas
+input:   `print(-5)`, `print(0)`, `print(42)`, `print(9223372036854775807)`, `print(-9223372036854775807 - 1)`, `print(1 + 2 * 3)`, dos `print` seguidos (`1` y `-20`), `print` desde una función propia (`say(3)`, `print(4)`, `say(5)`) y `let u = print(1)` seguido de `print(2)`
+expect:  `RunMain` devuelve `Halt{Code: 0}`, stderr está vacío y stdout es exactamente `-5\n`, `0\n`, `42\n`, `9223372036854775807\n`, `-9223372036854775808\n`, `7\n`, `1\n-20\n`, `3\n4\n5\n` y `1\n2\n`
+why:     es el primer programa de Ki que hace algo visible: la función `print` del preludio no tiene
+         cuerpo, y el intérprete la ejecuta con la tabla de externs. Los dos extremos de un `int64`
+         comprueban que el número sale en base 10 y con su signo, el salto de línea que sale uno por
+         llamada, y la fila `1 + 2 * 3` que el argumento se evalúa antes de llamar. Una máquina que
+         escribiera en stderr, o que olvidara el salto, falla la fila de `-5`
+ref:     TestExterns/print_int_writes_decimal_and_newline
+
+[T10.63] externs.print_returns_unit_and_adds_no_environment level: core
+kind:    unit (go test)      file: internal/interp/externs_test.go
+case:    llamar a `print` no ejecuta ningún cuerpo: no crea un entorno, y el valor de la llamada es la unidad
+input:   un `main` con tres `print`, y `fn f() { print(1) }` llamada con `Call`
+expect:  `RunMain` devuelve `Halt{Code: 0}` y `Stats().MaxEnvs` es exactamente 1, el entorno de `main`; `Call(f)` devuelve exactamente `UnitV{}`
+why:     una función de la biblioteca no tiene cuerpo ni variables: si la máquina le abriera un entorno
+         como a una función de Ki, `MaxEnvs` subiría a 2. El valor `UnitV{}` (y no `nil`) es el que ve quien ligue la llamada a una variable
+         o la devuelva como valor de su función
+ref:     TestExterns/print_returns_unit_and_adds_no_environment
+
+[T10.64] externs.print_inside_a_tail_loop                  level: core
+kind:    unit (go test)      file: internal/interp/externs_test.go
+case:    una llamada a `print` entre las llamadas de cola de un bucle no las estorba: el bucle sigue corriendo en el entorno de su primera llamada y uno más, y la pila no crece con las vueltas
+input:   `fn count(n: Int) { if n == 0 { () } else { print(n); count(n - 1) } }` y `fn main() { count(1000) }`, escrito con las dos sentencias en líneas separadas
+expect:  `RunMain` devuelve `Halt{Code: 0}`, stderr está vacío, stdout es exactamente los números del 1000 al 1 en orden decreciente, uno por línea, `Stats().MaxEnvs` es exactamente 2, el de `main` y el de `count`, y `Stats().MaxDepth` es exactamente 3, el `retFrame` de `count` y dos marcos encima
+why:     `print` es una sentencia (un `let _`) dentro de la rama del `if`, y la llamada de cola que la
+         sigue tiene que seguir siéndolo: la máquina devuelve el valor de `print` al marco que espera
+         y no empuja nada, así que el `retFrame` de `count` sigue encima de la pila. Una máquina que
+         dejara un marco de `print` en la pila la haría crecer con cada vuelta (`MaxDepth` sería
+         1003 y no 3), y una que diera a `print` un entorno haría subir `MaxEnvs` a 3
+ref:     TestExterns/print_inside_a_tail_loop
+
+[T10.65] externs.unknown_extern_is_unreachable             level: core
+kind:    unit (go test)      file: internal/interp/externs_test.go
+case:    una función sin cuerpo cuyo nombre de extern no está en la tabla hace un `panic` de Go con el texto `unknown extern <nombre>`, que es un error del compilador y no del programa; con un nombre que sí está, el mismo programa es Core válido y corre
+input:   un `Program` hecho a mano con el `Builder`, cuyo `main` llama, con el argumento 9, a una función sin cuerpo con `ExternName` `ki_print_int` (el control) y con `nope`, la cadena vacía, `KI_PRINT_INT`, `ki_print_int ` (con un espacio) y `ki_print`
+expect:  con `ki_print_int`: `core.Lint` no da ninguna violación, y `RunMain` da `Halt{Code: 0}`, stdout `9\n` y stderr vacío; con cada uno de los otros cinco nombres, `RunMain` hace un `panic` cuyo valor es exactamente la cadena `unknown extern ` seguida del nombre, y no escribe nada en stdout ni en stderr
+why:     solo la biblioteca estándar declara externs (E0304 lo impide a los programas), así que un
+         nombre que falta es un fallo del compilador y la máquina no inventa un valor: hace un panic
+         de Go, no un `Halt{101}`, porque un panic de Ki es siempre una falta del programa. El control
+         con `ki_print_int` demuestra que el `Program` hecho a mano es Core válido (`Lint` no encuentra
+         nada en él) y que el panic es por el nombre; los nombres casi iguales (otra capitalización,
+         un espacio, un prefijo) fijan que la búsqueda es exacta
+ref:     TestExterns/unknown_extern_is_unreachable
+
+[T10.66] run.empty_file_reports_E0303                      level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    `ki run` de un fichero vacío da E0303 y sale con 1, y el diagnóstico dibuja la línea 1 como `1 |`, sin un espacio detrás de la barra
+input:   un fichero sin ningún byte y `ki run RUTA`
+expect:  sale con 1, stdout vacío y stderr exactamente siete líneas: ``error[E0303]: no `main` function``, ` --> RUTA:1:1`, `  |`, `1 |`, ``  | ^ this file has no `fn main()` ``, ``  = note: `ki run` starts the program at `fn main()`; `ki check` does not need one`` y ``  = help: add `fn main() { … }` ``
+why:     un fichero sin ningún byte es el caso límite de «no hay `main`»: no hay código que enseñar, y
+         el diagnóstico tiene que dibujar la línea 1 vacía sin añadirle un espacio tras la barra: un
+         espacio final no se ve a simple vista, y un editor que recorta los espacios lo borraría de
+         un golden. El test compara el texto entero, no solo que contenga el código
+ref:     TestRun/empty_file_reports_E0303
+
+[T10.67] run.missing_main_in_each_format                   level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    un fichero que define una función pero no `main` da E0303 en los tres formatos de diagnóstico, con la etiqueta, la nota y la ayuda del catálogo y sin ninguna edición sugerida
+input:   `fn helper() -> Int { 1 }` con `--diagnostics=human`, `--diagnostics=short` y `--diagnostics=json`
+expect:  sale con 1, stdout vacío y stderr exactamente: en `human`, siete líneas (el error, `-->` con `RUTA:1:1`, la barra, la línea de código, el `^` con su etiqueta, la nota y la ayuda); en `short`, la línea `RUTA:1:1: error[E0303]: no `main` function`; en `json`, una línea con código `E0303`, mensaje, `path`, `line` 1, `col` 1, la etiqueta primaria, la nota, la ayuda y `fixits` vacío
+why:     `ki check` acepta este fichero y `ki run` no: lo único que falta es lo que `ki run` necesita.
+         La edición queda fuera a propósito (dónde va `main` y qué hace no es algo que el compilador
+         pueda decidir), y el test lo fija con `"fixits":[]`. La ayuda lleva la elipsis `…`, un solo
+         carácter, y no tres puntos
+ref:     TestRun/missing_main_in_each_format
+
+[T10.68] run.missing_main_is_at_the_start_of_the_user_file level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    el diagnóstico E0303 es el único que da `ki run`, y su espacio primario es el vacío `[0, 0)` al principio del fichero del usuario
+input:   `run` de `fn helper() -> Int { 1 }`, ejecutado sobre una `Session` para leer después su `Sink`
+expect:  `run` sale con 1; la sesión tiene exactamente un diagnóstico, de código E0303, con `Primary.Span.Lo` 0 y `Hi` 0, en el fichero cuya ruta es la del usuario
+why:     los tres formatos enseñan la ruta, la línea y la columna, y un espacio vacío y uno de un
+         carácter se escriben igual. Por eso el test lee el diagnóstico en la sesión: es el único
+         que ve que el espacio es vacío. Comprueba también el fichero, que T10.67 ya fija en el texto
+ref:     TestRun/missing_main_is_at_the_start_of_the_user_file
+
+[T10.69] run.front_end_errors_stop_before_main_is_checked  level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    si el fichero tiene errores del front end, `ki run` escribe solo esos errores y sale con 1, tenga `main` o no: no ejecuta nada y no añade E0303
+input:   `fn main() { print(true) }` y `fn f() -> Int { true }`, con `--diagnostics=short`
+expect:  sale con 1, stdout vacío y stderr exactamente `RUTA:1:19: error[E0401]: mismatched types` para el primero y `RUTA:1:17: error[E0401]: mismatched types` para el segundo, cada una con su salto de línea
+why:     el error de un fichero con `main` no debe ejecutar nada (la máquina solo recibe Core de
+         programas sin errores) y el de uno sin `main` no debe sumar un E0303 que no ayuda: la falta de
+         `main` se cuenta después, cuando el resto está bien. Un `ki run` que comprobara `main` antes
+         que los errores diría dos cosas donde basta una
+ref:     TestRun/front_end_errors_stop_before_main_is_checked
+
+[T10.70] run.unreadable_file_exits_1                       level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    `ki run` de una ruta que no existe sale con 1 y escribe una sola línea en stderr, como `ki check`
+input:   `ki run /nonexistent/x.ki`
+expect:  sale con 1, stdout vacío y stderr es una sola línea que empieza por ``error: cannot read file `/nonexistent/x.ki`: ``
+why:     un fichero ilegible no es un diagnóstico del programa ni un error de uso: el código es 1,
+         como en `ki check`, y la máquina no arranca. Un `ki run` que no mirara el resultado de la
+         carga seguiría con un fichero que no existe y acabaría en un panic de Go
+ref:     TestRun/unreadable_file_exits_1
+
+[T10.71] run.exit_code_is_the_one_the_program_ends_with    level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    el código de salida de `ki run` es el del estado en que termina el programa, y un panic conserva lo que el programa imprimió antes y escribe su mensaje en stderr
+input:   tres programas: `print(7)`; `print(1)` y después `print(9223372036854775807 + 1)`; `print(1)` y después `print(1 / 0)`
+expect:  con `fn main() { print(7) }`, sale con 0, stdout `7\n` y stderr vacío; con un `main` que imprime 1 y después desborda en la línea 3, columna 29, sale con 101, stdout `1\n` y stderr `panic: integer overflow at RUTA:3:29\n`; con uno que divide por cero en la línea 3, columna 11, sale con 101, stdout `1\n` y stderr `panic: division by zero at RUTA:3:11\n`
+why:     el código de salida es lo que un script ve del programa. Un `ki run` que devolviera siempre
+         0 falla las dos filas de panic, y uno que devolviera siempre 101 falla la de `print(7)`. Esas
+         dos filas comprueban además que stdout y stderr no se mezclan y que el `1` impreso antes del
+         panic no se pierde
+ref:     TestRun/exit_code_is_the_one_the_program_ends_with
+
+[T10.72] run.unknown_backend_is_usage_error                level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    `--backend` solo admite `interp`, y un valor que no es exactamente ese es un error de uso (2) tanto con fichero como sin él; el valor se comprueba después de `--diagnostics` y antes de contar los argumentos
+input:   `ki run` con `--backend=vm` y un fichero, `--backend=vm` sin fichero, `--backend=` , `--backend=Interp`, `--backend=vm --diagnostics=xml` y `--backend=interp` con un fichero que imprime 7
+expect:  con `vm` (con y sin fichero), con la cadena vacía y con `Interp`, sale con 2, stdout vacío y stderr ``ki run: unknown backend "<valor>"`` y la línea `usage: ki run [--backend=interp] [--diagnostics=human|short|json] FILE`; con `--backend=vm --diagnostics=xml`, el error es el de `--diagnostics`; con `--backend=interp` el programa corre y sale con 0 con stdout `7\n`
+why:     hoy solo hay un backend, pero la bandera existe desde ya para que `ki run` no cambie cuando
+         lleguen los otros. Un valor que se aceptara por prefijo (la cadena vacía lo sería) o sin
+         distinguir mayúsculas funcionaría hoy y dejaría de hacerlo el día en que otro backend se
+         llame de forma parecida. El orden de las comprobaciones es: `--diagnostics`, después
+         `--backend` y por último los argumentos
+ref:     TestRun/unknown_backend_is_usage_error
+
+[T10.73] run.usage_errors                                  level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    los errores de uso de `ki run` son los de los otros comandos con fichero, con su línea `usage:`: sin fichero, con uno de más, con una bandera desconocida; y `-h` imprime esa línea en stdout y sale con 0
+input:   `run`, `run --backend=interp`, `run a.ki b.ki`, `run --speed=fast a.ki` y `run -h`
+expect:  sin fichero (y sin fichero tras `--backend=interp`): ``ki run: missing FILE``; con `a.ki b.ki`: ``ki run: unexpected argument "b.ki"``; con `--speed=fast`: `ki run: flag provided but not defined: -speed`; los tres salen con 2, stdout vacío y la línea `usage: ki run [--backend=interp] [--diagnostics=human|short|json] FILE`; `-h` sale con 0, stdout esa línea y stderr vacío
+why:     `run` comparte con `check` la función que lee sus palabras, y le añade una bandera: si esa
+         ampliación dejara de contar los argumentos, o de registrar las banderas de `run`, estas
+         filas lo verían. Las comprobaciones de `check` no cubren `run`
+ref:     TestRun/usage_errors
+
+[T10.74] run.stack_overflow_exits_103                      level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    un programa cuya recursión no acaba desborda la pila de la máquina, y `ki run` sale con 103 y escribe en stderr el aviso con la posición de la llamada
+input:   `KI_STACK_MB=1` y `fn f(n: Int) -> Int { 1 + f(n + 1) }` con `fn main() { let x = f(0) }`
+expect:  sale con 103, stdout vacío y stderr exactamente `panic: stack overflow at RUTA:1:27\n`
+why:     el límite de la pila es `KI_STACK_MB` MiB: con 1 se alcanza deprisa y el test no depende de
+         cuánta memoria tenga la máquina. La posición, línea 1 columna 27, es la del `f(n + 1)` de
+         dentro de `f`, que es la llamada que desbordó. El código es 103 y no 101: un script distingue
+         un panic del programa de una pila que se acabó
+ref:     TestRun/stack_overflow_exits_103
+
+[T10.75] run.debug_hook_exits_70_in_each_pass              level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    con `KI_DEBUG_PANIC_IN` igual al nombre de uno de los siete pases que `ki run` ejecuta (`lex`, `parse`, `resolve`, `check`, `elaborate`, `lint` y `run`), ese pase hace un panic al empezar y el comando termina con el informe del ICE y el código 70
+input:   `ki run` de `fn main() { print(7) }`, sin el gancho y con `KI_DEBUG_PANIC_IN` igual a cada uno de los siete nombres
+expect:  sin el gancho, `ki run` sale con 0, stdout `7\n` y stderr vacío; con el gancho en cada pase, sale con 70, stdout vacío y stderr empieza por ``internal compiler error: <pase>: debug panic requested`` y un salto de línea, y lo que sigue empieza por `goroutine `
+why:     es la fila de `ki run` en la comprobación de que cada comando que ejecuta un pase lo hace
+         bajo la frontera de los ICE: `ki run` es el segundo comando que baja a Core y tiene que
+         llamar a `lint` justo después de `Lower`, y es el primero que ejecuta la máquina, que es
+         un pase más, el de nombre `run`. Sin el control de arriba, una fila podría acabar en 70
+         por otro motivo
+ref:     TestRun/debug_hook_exits_70_in_each_pass
+
+[T10.76] run.go_panic_in_the_machine_is_an_ice             level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    un panic de Go dentro de la máquina sale como el ICE del pase `run`: `execute` hace un panic con un `*ICE` cuyo valor es el del panic, y con un programa válido devuelve su código y deja lo que imprime en stdout
+input:   `execute` de un `Program` hecho a mano con un `main` que llama, con el argumento 9, a una función sin cuerpo con `ExternName` `nope` y, de control, con `ki_print_int`
+expect:  con un `main` que llama a un extern que la tabla no tiene, `execute` hace un panic con un `*ICE` de pase `run` y valor exactamente `unknown extern nope`; con `ki_print_int`, devuelve 0 y stdout es `9\n`
+why:     el panic de un extern desconocido es un fallo del compilador, y la promesa es que acaba en
+         el informe y el código 70 en lugar de en el volcado de Go con código 2, que es también el de
+         un uso incorrecto. El gancho de depuración no lo demuestra: hace el panic antes de que la
+         máquina arranque, y no distingue una máquina dentro de la frontera de otra fuera. Este es
+         el único de `TestRun` en que falla la máquina
+ref:     TestRun/go_panic_in_the_machine_is_an_ice
+
+[T10.77] exit_codes.go_panic_exits_2                       level: core
+kind:    unit (go test)      file: internal/toolchain/exitcodes_test.go
+case:    un `panic` de Go que nadie recupera termina el proceso con el código 2 y escribe `panic: boom` en stderr
+input:   el binario de test, ejecutado de nuevo con `KI_TEST_HELPER=panic`, cuyo ayudante hace `panic("boom")`
+expect:  el proceso ayudante sale con 2 y su stderr contiene `panic: boom`
+why:     el 2 es también el código de uso incorrecto de `ki`: por eso un panic de Go dentro de Ki
+         nunca puede dejarse salir, y los pases lo convierten en un ICE con el 70. El test lo prueba
+         con un proceso de verdad: un test no puede ver el código de salida del suyo, así que vuelve a
+         ejecutar el binario de test con `-test.run=^TestHelperProcess$` y mira cómo acaba
+ref:     TestExitCodes/go_panic_exits_2
+
+[T10.78] exit_codes.os_exit_skips_deferred_calls           level: core
+kind:    unit (go test)      file: internal/toolchain/exitcodes_test.go
+case:    `os.Exit` termina el proceso al instante y no ejecuta las llamadas diferidas
+input:   el binario de test, ejecutado de nuevo con `KI_TEST_HELPER=exit101`, cuyo ayudante hace `defer fmt.Println("deferred")` y después `os.Exit(101)`
+expect:  el proceso ayudante sale con 101 y su stdout no contiene `deferred`
+why:     es la razón de `out.Exit`: un programa de Ki que acabara con `os.Exit(101)` tras un panic y
+         dejara el vaciado del buffer en un `defer` perdería su última salida. Es un hecho de Go y no
+         de Ki, y por eso está fijado aquí, junto a los demás hechos de versión de
+         `docs/toolchain.md`. El 101 comprueba que el ayudante llegó a `os.Exit`: un ayudante que no
+         corriera tampoco imprimiría `deferred`
+ref:     TestExitCodes/os_exit_skips_deferred_calls
+
+[T10.79] imports.kirt_only_std_and_kirt                    level: core
+kind:    unit (go test)      file: kirt/imports_test.go
+case:    cada import de cada fichero `.go` de `kirt/`, tests incluidos, es de la biblioteca estándar (su primer elemento no lleva punto) o empieza por `github.com/aldezex/kilang/kirt/`
+input:   el árbol del repositorio bajo `kirt/` y nueve árboles de ficheros `.go` escritos en `t.TempDir()`
+expect:  en el repositorio, la regla no encuentra ningún problema y lee al menos un fichero; en nueve árboles hechos a propósito, encuentra exactamente los que tienen un import de otro paquete del módulo, de la raíz del módulo, de `kirtx`, de `golang.org/x/sys/unix`, de `golang.org/x/text` en un test a varios niveles, un import malo tras uno bueno y dos ficheros malos, en el orden de los ficheros, con el mensaje exacto, y no encuentra nada en los que importan la biblioteca estándar, `kirt/out` o `vendor/lib.v2`
+why:     el spec dice que `kirt` solo importa la biblioteca estándar y sus propios paquetes. Una regla que no
+         encuentra nada en el repositorio no demuestra nada hasta que se la ve encontrar algo, así
+         que cada fila es un error que la regla existe para cazar: un `kirtx` que solo empieza igual, un
+         módulo de terceros, un test que importa lo que el código no puede. La búsqueda lee los
+         `import` con `go/parser` y no el texto, para no confundirse con un comentario
+ref:     TestImports/kirt_only_std_and_kirt
+
+[T10.80] imports.interp_only_whitelisted_kirt              level: core
+kind:    unit (go test)      file: kirt/imports_test.go
+case:    el intérprete, `internal/interp`, solo importa de `kirt` los paquetes `kirt/out`, `kirt/splitmix` y `kirt/fmtnum`
+input:   el árbol del repositorio bajo `internal/interp/` y ocho árboles de ficheros `.go` escritos en `t.TempDir()`
+expect:  en el repositorio, la regla no encuentra ningún problema y lee al menos un fichero; en árboles hechos a propósito, encuentra `kirt/heap`, `kirt/poll`, `kirt` y `kirt/out/sub` (con el mensaje exacto, también cuando es el segundo import del fichero) y no encuentra nada en los que importan los tres permitidos, la biblioteca estándar u otros paquetes del módulo, ni en un `internal/driver` que importa `kirt/heap`
+why:     el oráculo es con lo que se comparan los otros backends, y la lista blanca (spec 8) son tres
+         hojas sin planificador ni heap: si importara el heap o el poller de `kirt`, no podría
+         encontrar sus fallos y dejaría de ser un punto de comparación independiente. La regla es
+         solo para el intérprete: otro paquete puede importar lo que quiera de `kirt`, y la última
+         fila lo fija
+ref:     TestImports/interp_only_whitelisted_kirt
+
+[T10.81] imports.unsafe_only_in_kirt_heap                  level: core
+kind:    unit (go test)      file: kirt/imports_test.go
+case:    `unsafe` no se importa en ningún fichero `.go` del módulo, tests incluidos, salvo bajo `kirt/heap/`, que todavía no existe; el recorrido salta `build/`, `.git/`, `.claude/` y `.superpowers/` de la raíz
+input:   el árbol completo del repositorio y doce árboles de ficheros `.go` escritos en `t.TempDir()`
+expect:  en el repositorio, la regla no encuentra ningún problema y lee al menos un fichero; en árboles hechos a propósito, encuentra el `unsafe` de `internal/x/`, de `kirt/out/`, de `kirt/heapx/`, de `kirt/heap.go`, de `cmd/ki/` (con nombre: `import u "unsafe"`) y de `internal/build/`, y los dos de `a/` y `b/` en ese orden, y no encuentra el de `kirt/heap/`, de un test o de un subdirectorio suyo, el de los directorios saltados ni la palabra `unsafe` en un comentario o una cadena
+why:     el spec 7.2 reserva `unsafe` a un solo paquete, el heap, y a sus tests, para que el resto
+         del compilador y del runtime sea memoria segura. Mirar los `import` y no el texto es lo que
+         deja `unsafe` en este comentario sin problema. `kirt/heapx/` y un fichero `kirt/heap.go`
+         no son `kirt/heap/`, y un directorio llamado `build` que no está en la raíz sí es código
+         del módulo; `.claude/` y `.superpowers/` son copias del árbol y notas, no código
+ref:     TestImports/unsafe_only_in_kirt_heap
+
+[T10.82] run.fib_golden                                    level: core
+kind:    run                 file: tests/golden/ch10/fib.ki
+case:    `ki run` de `fib` con doble recursión, que calcula `fib(20)` y lo imprime
+expect:  sale con 0, stderr vacío y stdout exactamente `6765\n`
+why:     es el primer programa de Ki que corre de punta a punta: la carga, los pases, Core, la máquina
+         y el `print` del preludio, con el binario de verdad cuando lo ejecuta `ki test`. La recursión
+         doble de `fib` no es de cola
+ref:     tests/golden/ch10/fib.ki
+
+[T10.83] run.overflow_golden                               level: core
+kind:    run                 file: tests/golden/ch10/overflow.ki
+case:    `ki run` de un programa que imprime `9223372036854775807 + 1`
+expect:  sale con 101, stdout vacío y stderr exactamente `panic: integer overflow at tests/golden/ch10/overflow.ki:6:29`
+why:     el desbordamiento de `Int` es un panic de Ki, no un envoltorio silencioso como en Go, y la
+         posición que da es la del `+`, línea 6 columna 29, no la de la llamada a `print`. El fichero
+         tiene cuatro líneas de cabecera, y por eso el `+` está en la 6: si alguien añade una línea a
+         la cabecera, el golden se lo dice
+ref:     tests/golden/ch10/overflow.ki
+
+[T10.84] run.print_then_panic_golden                       level: core
+kind:    run                 file: tests/golden/ch10/print_then_panic.ki
+case:    `ki run` de un programa que imprime 1 y después desborda con `9223372036854775807 + 1`
+expect:  sale con 101, stdout exactamente `1\n` y stderr exactamente `panic: integer overflow at tests/golden/ch10/print_then_panic.ki:8:29`
+why:     un panic no debe llevarse lo que el programa ya imprimió. El `1` sale porque `haltAt` vacía
+         stdout antes de escribir el mensaje (T10.92 fija ese orden en proceso). Este golden fija lo
+         que se ve desde fuera: el `1` en stdout, el mensaje solo en stderr y el 101. Bajo `go test`
+         corre en proceso; `ki test` lo ejecuta como un subproceso del binario de verdad. El vaciado
+         solo lo pone en rojo si fallan a la vez `haltAt` y `out.Exit`: un `main` que acabara con
+         `os.Exit` lo dejaría en verde. El vaciado de `out.Exit` lo protegen T10.82 (bajo `ki test`:
+         `fib` sale con 0 y solo `out.Exit` saca su `6765`) y T10.91
+ref:     tests/golden/ch10/print_then_panic.ki
+
+[T10.85] run.division_golden                               level: core
+kind:    run                 file: tests/golden/ch10/division.ki
+case:    `ki run` de `7 / 2`, `-7 / 2`, `7 % 3`, `-7 % 3` y `7 % -3`
+expect:  sale con 0, stderr vacío y stdout exactamente cinco líneas: `3`, `-3`, `1`, `-1` y `1`
+why:     la división de `Int` trunca hacia cero y el resto toma el signo del dividendo (spec 5.10): las
+         cinco líneas son las que separan una división que redondea hacia abajo (`-7 / 2` daría -4) y
+         un resto que toma el signo del divisor (`7 % -3` daría -2), que son las que hacen otros lenguajes
+ref:     tests/golden/ch10/division.ki
+
+[T10.86] run.div_by_zero_golden                            level: core
+kind:    run                 file: tests/golden/ch10/div_by_zero.ki
+case:    `ki run` de un programa que divide por una variable que vale 0
+expect:  sale con 101, stdout vacío y stderr exactamente `panic: division by zero at tests/golden/ch10/div_by_zero.ki:7:11`
+why:     dividir por cero es un panic de Ki y no el de Go (`integer divide by zero`, código 2). El
+         divisor es una variable, `zero`, y no un literal, y la posición es la del `/`: línea 7 columna
+         11, con cuatro líneas de cabecera
+ref:     tests/golden/ch10/div_by_zero.ki
+
+[T10.87] run.min_int_golden                                level: core
+kind:    run                 file: tests/golden/ch10/min_int.ki
+case:    `ki run` de `-9223372036854775807 - 1`, la forma de escribir el mínimo de `Int`
+expect:  sale con 0, stderr vacío y stdout exactamente `-9223372036854775808\n`
+why:     `-9223372036854775808` no se puede escribir como literal, porque `9223372036854775808` no cabe
+         (E0105), pero el mínimo sí es un `Int` válido: se obtiene restando. El golden comprueba el
+         camino entero, resta sin desbordar y `print` de un número negativo con 19 dígitos
+ref:     tests/golden/ch10/min_int.ki
+
+[T10.88] run.tail_loop_golden                              level: core
+kind:    run                 file: tests/golden/ch10/tail_loop.ki
+case:    `ki run` de un bucle de cola que cuenta hasta un millón
+expect:  sale con 0, stderr vacío y stdout exactamente `1000000\n`
+why:     un bucle de un millón de iteraciones escrito como llamada de cola: el test de la máquina mide
+         que su profundidad y sus entornos son constantes, y este golden comprueba el resultado con
+         el programa entero y el límite de pila por defecto
+ref:     tests/golden/ch10/tail_loop.ki
+
+[T10.89] run.deep_recursion_golden                         level: core
+kind:    run                 file: tests/golden/ch10/deep_recursion.ki
+case:    `ki run` de una recursión que no es de cola, de 200 000 niveles
+expect:  sale con 0, stderr vacío y stdout exactamente `20000100000\n`
+why:     la pila de Ki es un slice y no la pila de Go: 200 000 niveles que no son de cola caben en el
+         límite por defecto, 256 MiB. El resultado es la suma de 1 a 200 000
+ref:     tests/golden/ch10/deep_recursion.ki
+
+[T10.90] run.no_main_golden                                level: core
+kind:    diag                file: tests/golden/ch10/no_main.ki
+case:    `ki run` de un fichero que define `helper` y no tiene `main`
+expect:  sale con 1 y el único error es E0303 en la línea 1, columna 1 (anotación en el propio fichero)
+why:     es la prueba de punta a punta de E0303: el fichero pasa por el binario completo, y el
+         error sale de `ki run` y no de `ki check`. La posición es el inicio del fichero, 1:1, que es
+         donde el diagnóstico apunta cuando no hay una línea a la que culpar
+ref:     tests/golden/ch10/no_main.ki
+
+[T10.91] main.binary_lost_stdout_is_reported_and_exits_1   level: core
+kind:    unit (go test)      file: cmd/ki/main_test.go
+case:    cuando `ki` no puede escribir su stdout y iba a salir con 0, dice por stderr que no pudo y sale con 1, aunque el fallo solo se vea en el último vaciado del buffer; con otro código, el código y stderr se quedan como están
+input:   el binario de `ki` como proceso hijo (el binario de test, que vuelve a ejecutarse), con `out.Stdout` sustituido por un `Writer` sobre un destino que falla siempre con «no space left on device»: uno con buffer, con `--version` y con `ki run` de un programa que imprime 7 y después divide por cero (en 3:11); uno que vacía en cada línea, con `ki run` de un programa que solo imprime 7 y con `--version`; y, de control, esos dos programas con el stdout de verdad
+expect:  con buffer y `--version`: sale con 1, stdout vacío y stderr exactamente `ki: cannot write to stdout: no space left on device` y un salto de línea; con buffer y el programa que hace panic: sale con 101, stdout vacío y stderr solo el mensaje del panic (`panic: division by zero at <ruta>:3:11`); con el `Writer` que vacía en cada línea y el programa que solo imprime: sale con 1, stdout vacío y esa misma línea; con ese `Writer` y `--version`: sale con 1 y stderr es exactamente `ki --version: cannot write to stdout: no space left on device` y un salto de línea, el aviso del propio comando y ninguno más; en los controles, el programa que imprime sale con 0, stdout `7` y un salto de línea y stderr vacío, y el que hace panic sale con 101, con el mismo stdout y solo el mensaje del panic
+why:     un `Writer` con buffer no escribe en el momento: el disco lleno solo aparece cuando el buffer se
+         vacía, y eso pasa dentro de `out.Exit`, después de que `driver.Main` haya devuelto 0. Sin
+         este test `ki` salía con 0 y sin una palabra con la respuesta perdida, que es justo lo que
+         prohíbe el spec (8.7): «una respuesta que se perdió no es un éxito». Un script que
+         redirige la salida a un fichero daba por buena una ejecución sin resultado. Con otro código
+         no hay nada que cambiar: un programa que hizo panic sigue saliendo con 101, y si el propio
+         comando ya avisó de que no pudo escribir (lo hace cuando el fallo está en el `Write` de la
+         línea) un segundo aviso sería ruido, por eso hay una fila con `--version`. Con el `Writer`
+         que vacía en cada línea y un programa que solo imprime, `print` no mira el error del `Write`,
+         pero el `Writer` recuerda su primer error y `Exit` lo ve al final. Solo el binario entero lo
+         prueba, porque `out.Exit` termina el proceso
+ref:     TestBinary/lost_stdout_is_reported_and_exits_1
+
+[T10.92] externs.a_panic_empties_stdout_before_its_message level: core
+kind:    unit (go test)      file: internal/interp/externs_test.go
+case:    cuando el programa hace un panic o desborda la pila, lo que imprimió antes sale antes que el mensaje, aunque stdout guarde lo que se le da hasta que lo vacían
+input:   un stdout que retiene lo escrito hasta que se llama a `Flush` y un stderr que escribe directo, los dos sobre un mismo registro, con `KI_STACK_MB=1`; tres programas: `print(1)` y después `print(2 / 0)`; `print(1)` y después `print(f(0))` con `fn f(n: Int) -> Int { 1 + f(n + 1) }`, que desborda la pila; y, de control, `print(1)` y nada más
+expect:  el primero termina con `Halt{Code: 101}` y el registro es exactamente `1`, un salto de línea, `panic: division by zero at test.ki:3:11` y otro salto de línea; el segundo, con `Halt{Code: 103}` y `1`, un salto de línea, `panic: stack overflow at test.ki:1:27` y otro salto de línea; el control, con `Halt{Code: 0}` y el registro vacío: `print` solo escribe en lo retenido y no lo vacía
+why:     con `ki run prog.ki 2>&1 | cat` las dos salidas van al mismo sitio. stderr se vacía en cada línea y
+         stdout no, así que sin vaciar stdout antes de escribir el mensaje el `panic:` salía antes que
+         el `1` que el programa había impreso antes: el orden de lo que ocurrió quedaba al revés. Las
+         dos filas fijan el orden, también en el desbordamiento de pila, que tiene su propio camino
+         hasta el mensaje. El control demuestra que el vaciado lo hace el final con panic y no `print`
+         en cada llamada, que dejaría el buffer sin objeto
+ref:     TestExterns/a_panic_empties_stdout_before_its_message

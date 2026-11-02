@@ -7,6 +7,13 @@ import (
 	"os"
 
 	"github.com/aldezex/kilang/internal/driver"
+	"github.com/aldezex/kilang/kirt/out"
 )
 
-func main() { os.Exit(driver.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
+// main writes through the Writers of kirt/out, which buffer, so it ends with
+// out.Exit and never with os.Exit: os.Exit skips deferred calls, and what is
+// still in the buffers would be lost.
+func main() {
+	code := driver.Main(os.Args[1:], os.Stdin, out.Stdout, out.Stderr)
+	out.Exit(code)
+}

@@ -24,6 +24,7 @@ var commands = []command{
 	newCommand("check", "ki check [--diagnostics=human|short|json] FILE", runCheck),
 	newCommand("test", "ki test [--root DIR] [--update] PATH...", runTest),
 	newCommand("emit", "ki emit tokens|ast|core [--diagnostics=human|short|json] FILE", runEmit),
+	newCommand("run", "ki run [--backend=interp] [--diagnostics=human|short|json] FILE", runRun),
 }
 
 // newCommand returns a command, called name, whose Run calls run with the
@@ -78,14 +79,34 @@ func parseFlags(s *Session, c *command, fs *flag.FlagSet, args []string) (code i
 // and done == true, and the command must return it. That is the case for a
 // request for help (code 0) and for a usage error (2).
 func fileArgs(s *Session, c *command, args []string) (path string, code int, done bool) {
+	return fileArgsWith(s, c, args, nil)
+}
+
+// fileArgsWith is fileArgs for a command that has flags of its own besides
+// --diagnostics, as run has --backend. If extra is not nil it is called with the
+// command's FlagSet before the arguments are parsed, to define the flags, and
+// it returns the function that checks their values once they are parsed (nil
+// for none). The check comes after the one of --diagnostics and before the count
+// of the arguments, so that a bad value is reported whether or not FILE is
+// there; an error from it is a usage error, like any other.
+func fileArgsWith(s *Session, c *command, args []string, extra func(fs *flag.FlagSet) (check func() error)) (path string, code int, done bool) {
 	fs := newFlagSet(c)
 	diagnostics := fs.String("diagnostics", "human", "how to write diagnostics: human, short or json")
+	var check func() error
+	if extra != nil {
+		check = extra(fs)
+	}
 	if code, done := parseFlags(s, c, fs, args); done {
 		return "", code, true
 	}
 	format, err := parseDiagFormat(*diagnostics)
 	if err != nil {
 		return "", usageError(s, c, err), true
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return "", usageError(s, c, err), true
+		}
 	}
 	switch fs.NArg() {
 	case 0:

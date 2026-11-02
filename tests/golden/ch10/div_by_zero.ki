@@ -1,0 +1,8 @@
+// test: T10.86
+// run: run
+// expect-exit: 101
+// expect-stderr: panic: division by zero at tests/golden/ch10/div_by_zero.ki:7:11
+fn main() {
+  let zero = 0
+  print(1 / zero)
+}

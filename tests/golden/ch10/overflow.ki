@@ -1,0 +1,7 @@
+// test: T10.83
+// run: run
+// expect-exit: 101
+// expect-stderr: panic: integer overflow at tests/golden/ch10/overflow.ki:6:29
+fn main() {
+  print(9223372036854775807 + 1)
+}

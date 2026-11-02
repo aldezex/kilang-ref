@@ -138,10 +138,12 @@ func lintOrPanic(p *core.Program, in *base.Interner) {
 // lint checks the Core that Lower made, as the pass "lint" (see runPass). Lower
 // does not call it, so this is a rule for the commands and not something the
 // code enforces: every command that lowers a program must call lint right after
-// Lower and before it runs or shows the Core. `ki emit core` is the only one so
-// far, and the row of TestICE/debug_hook_exits_70 with the hook in lint is what
-// shows that it does; the next command that lowers needs its own row. If the
-// Core is not valid, lint does not return: it panics with the *ICE.
+// Lower and before it runs or shows the Core. `ki emit core` and `ki run` are the
+// two so far, and the row with the hook in lint of TestICE/debug_hook_exits_70
+// (for the first) and of TestRun/debug_hook_exits_70_in_each_pass (for the
+// second) is what shows that each does; the next command that lowers needs its
+// own row. If the Core is not valid, lint does not return: it panics with the
+// *ICE.
 func (s *Session) lint(p *core.Program) {
 	s.runPass("lint", func() { lintOrPanic(p, s.Interner) })
 }

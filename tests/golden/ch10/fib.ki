@@ -1,0 +1,11 @@
+// test: T10.82
+// run: run
+// expect-stdout: 6765
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  let x = fib(20)
+  print(x)
+}

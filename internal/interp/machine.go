@@ -12,7 +12,8 @@
 // limit, with Halt{Code: 103}. A call that is the last thing its function does
 // reuses that function's frame and environment instead of adding another pair,
 // so a loop written as such calls does not make the stack grow. The functions
-// that the runtime provides, such as `print`, are not run yet.
+// that the runtime provides, such as `print`, have no body in Core: the machine
+// runs them from the table in externs.go.
 package interp
 
 import (
@@ -179,11 +180,11 @@ type Machine struct {
 }
 
 // New returns a Machine for p. sm resolves the spans of p, and out and err are
-// the stdout and the stderr of the program. The machine writes the messages of
-// the program's panics and of its stack overflow to err, using sm for their
-// positions; it does not write to out yet, because nothing that it runs so far
-// prints. The limit of the stack is the one that the KI_STACK_MB variable says
-// when New reads it (see framesFor).
+// the stdout and the stderr of the program. What the program prints (`print`,
+// see externs) goes to out. The machine writes the messages of the program's
+// panics and of its stack overflow to err, using sm for their positions. The
+// limit of the stack is the one that the KI_STACK_MB variable says when New
+// reads it (see framesFor).
 func New(p *core.Program, sm *base.SourceManager, out, err io.Writer) *Machine {
 	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: framesFor(os.Getenv(stackEnv))}
 }
@@ -215,8 +216,8 @@ func (m *Machine) RunMain() Halt {
 // one left, not even the frames of a program that panicked; only Stats go on
 // counting. Call panics, with a message that says why, if f takes another number
 // of parameters than len(args) or has no body (a function that the runtime
-// provides): those are mistakes of the caller, and not something a Ki program
-// can do.
+// provides, which only a call from Ki runs: see enter): those are mistakes of
+// the caller, and not something a Ki program can do.
 func (m *Machine) Call(f core.FunID, args []Value) (Value, bool) {
 	fun := m.prog.Funs.Get(f)
 	if len(args) != len(fun.Params) {
@@ -435,7 +436,10 @@ func (m *Machine) newEnv(fun core.Fun, args []Value) []Value {
 
 // enter makes the call of the Call expression call, once its argFrame has
 // collected the values vals (the callee first, then the arguments). It makes
-// the body of the callee the control, in a new environment.
+// the body of the callee the control, in a new environment. A callee with no
+// body is a function of the runtime: it runs at once (see callExtern) and its
+// value goes to the top frame. It pushes no frame and no environment, so it
+// adds nothing to envs.
 //
 // A call in tail position, one with no frame waiting for its value but the
 // retFrame of the function that makes it, reuses that retFrame and puts the new
@@ -455,9 +459,8 @@ func (m *Machine) enter(call core.Expr, vals []Value) {
 	callee := vals[0].(FunV)
 	fun := m.prog.Funs.Get(callee.Fun)
 	if !fun.HasBody {
-		// The functions of the runtime (`print`) have no body, and the machine
-		// does not run them yet.
-		panic(fmt.Sprintf("interp: the program calls function %d, which has no body", callee.Fun))
+		m.ret(m.callExtern(fun.ExternName, vals[1:]))
+		return
 	}
 	env := m.newEnv(fun, vals[1:])
 

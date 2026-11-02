@@ -1,0 +1,15 @@
+// test: T10.85
+// run: run
+// expect-stdout:
+// | 3
+// | -3
+// | 1
+// | -1
+// | 1
+fn main() {
+  print(7 / 2)
+  print(-7 / 2)
+  print(7 % 3)
+  print(-7 % 3)
+  print(7 % -3)
+}

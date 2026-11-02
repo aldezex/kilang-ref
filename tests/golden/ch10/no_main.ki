@@ -1,0 +1,3 @@
+// test: T10.90
+// run: run
+fn helper() -> Int { 1 }  // ERROR(E0303) @1:1

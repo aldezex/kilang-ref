@@ -1,0 +1,10 @@
+// test: T10.88
+// run: run
+// expect-stdout: 1000000
+fn count(n: Int, acc: Int) -> Int {
+  if n == 0 { acc } else { count(n - 1, acc + 1) }
+}
+
+fn main() {
+  print(count(1_000_000, 0))
+}

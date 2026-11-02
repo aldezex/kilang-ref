@@ -1,0 +1,10 @@
+// test: T10.89
+// run: run
+// expect-stdout: 20000100000
+fn sumTo(n: Int) -> Int {
+  if n == 0 { 0 } else { n + sumTo(n - 1) }
+}
+
+fn main() {
+  print(sumTo(200_000))
+}

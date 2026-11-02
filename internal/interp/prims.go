@@ -109,11 +109,21 @@ func (m *Machine) panicAt(sp base.Span, msg string) Halt {
 
 // haltAt reports that the program ends at sp with the exit code code, and says
 // why: it writes "panic: <msg> at <path>:<line>:<col>\n" to err, where the
-// position is the start of sp, and returns Halt{Code: code}. It is one Write,
-// and its error is not checked: there is nowhere better than err to tell that
-// err failed, and the exit code says that the program ended either way. It does
-// not stop the machine: the caller records the Halt.
+// position is the start of sp, and returns Halt{Code: code}. The message is one
+// Write, and its error is not checked: there is nowhere better than err to tell
+// that err failed, and the exit code says that the program ended either way. It
+// does not stop the machine: the caller records the Halt.
+//
+// What the program printed comes out first. If out can flush (a kirt/out
+// Writer, which holds what it is given), haltAt flushes it before it writes the
+// message: otherwise, when stdout and stderr go to the same place, the message
+// would come before the lines that the program printed earlier. That flush
+// cannot fail the program either, and a Writer that fails keeps its error for
+// the flush that ends the process.
 func (m *Machine) haltAt(sp base.Span, msg string, code int) Halt {
+	if f, ok := m.out.(interface{ Flush() error }); ok {
+		_ = f.Flush()
+	}
 	pos := m.sm.LineCol(sp.File, sp.Lo)
 	fmt.Fprintf(m.err, "panic: %s at %s:%d:%d\n", msg, m.sm.DisplayPath(sp.File), pos.Line, pos.Col)
 	return Halt{Code: code}

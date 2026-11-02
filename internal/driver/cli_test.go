@@ -126,7 +126,7 @@ func TestCLI(t *testing.T) {
 	})
 	t.Run("usage_lists_commands", func(t *testing.T) {
 		code, out, err := runCLI(t)
-		want := "usage: ki <command> [args]\ncommands: --version, version, check, test, emit\n"
+		want := "usage: ki <command> [args]\ncommands: --version, version, check, test, emit, run\n"
 		if code != 2 || out != "" || err != want {
 			t.Fatalf("got %d %q %q, want 2 \"\" %q", code, out, err, want)
 		}

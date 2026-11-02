@@ -26,6 +26,13 @@ export GOTOOLCHAIN=local GOFLAGS= GOENV=off GOWORK=off
 # reads the environment. The tests of steps 5 and 6 clear it themselves.
 unset KI_DEBUG_PANIC_IN
 
+# KI_STACK_MB sets the limit of the stack of the interpreter (see
+# internal/interp/machine.go). Exported by mistake it would make a golden file
+# that recurses deeply (tests/golden/ch10/deep_recursion.ki) overflow in step 7,
+# where the real binary runs them and reads the environment. The tests of step 5
+# clear it themselves, or set the value they need.
+unset KI_STACK_MB
+
 # 1. The installed Go is the one this tree's go.mod asks for. The script reads
 #    the toolchain line of go.mod instead of a literal, so an old tag is still
 #    checked against its own patch release of Go.
