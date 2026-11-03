@@ -74,8 +74,9 @@ func (m *SourceManager) Size(id FileID) uint32 {
 }
 
 // HadBOM reports whether the file started with a UTF-8 byte order mark that
-// Load stripped. Contents never includes the mark; a tool that rewrites the
-// file (ki test --update) uses this to put it back.
+// Load stripped. Contents never includes the mark, so a tool that rewrites the
+// file could use this to put it back. ki test --update does not: it reads the
+// file itself and finds the mark in its bytes.
 func (m *SourceManager) HadBOM(id FileID) bool {
 	return m.files.Ptr(id).hadBOM
 }
