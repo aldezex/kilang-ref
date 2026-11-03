@@ -1029,7 +1029,7 @@ kind:    golden              file: tests/golden/ch06/fib_ast.ki
 case:    `ki emit ast` sobre la función `fib` con un `if` y dos llamadas recursivas
 expect:  sale con 0, stderr vacío y stdout exactamente una línea: `(fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))`
 why:     es el árbol de punta a punta: el binario completo, el lexer, el parser y el volcado. Es el formato
-         contra el que se escriben los goldens de los capítulos siguientes, y la función que va a ejecutar
+         contra el que se escriben los golden de los capítulos siguientes, y la función que va a ejecutar
          el intérprete más adelante
 ref:     tests/golden/ch06/fib_ast.ki
 

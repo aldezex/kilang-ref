@@ -165,8 +165,8 @@ func guard(pass string, f func()) (ice *ICE) {
 **El gancho.** Para probar la frontera sin un bug a mano, con `KI_DEBUG_PANIC_IN=<pase>` ese pase hace panic al empezar. Lo lee `Main` y no `NewSession`: una `Session` de test no depende del entorno.
 
 :::more Lo que la frontera no cubre
-- **Un `fatal error`** no es un panic: el `defer` con `recover` no llega a correr, y el código es 2.
-- **Los diagnósticos pendientes.** Cuando salta un ICE, los que ya estaban en el sink no se escriben: con el gancho en `resolve`, un fichero con un error de sintaxis da el informe y ningún `error[`.
+- **Un `fatal error`** no es un panic: el `defer` con `recover` no corre, y el código es 2.
+- **Los diagnósticos pendientes.** Cuando salta un ICE, los que ya estaban en el sink no se escriben: con el gancho en `resolve`, un error de sintaxis da el informe y ningún `error[`.
 - **Lo que no es un pase.** `core.Print`, `syntax.DumpTokens`, `syntax.PrintModule` y `ReportAll` corren fuera de `runPass`, y un panic ahí saldría con 2.
 :::
 
@@ -286,7 +286,7 @@ En `parser.go`, `parser_expr.go` y `parser_stmt.go`, cada `appendRange(` pasa a 
 - **`Main`** gana un resultado con nombre para que `defer s.catchICE(&code)` lo escriba a través del puntero.
 - **`catchICE`** es ella misma la función diferida, y por eso su `recover` funciona.
 
-Los tests del gancho ponen `KI_DEBUG_PANIC_IN` con `t.Setenv`, que la restaura al acabar. Un shell que la exporte rompería los goldens, así que sus runners la borran:
+Los tests del gancho ponen `KI_DEBUG_PANIC_IN` con `t.Setenv`, que la restaura al acabar. Un shell que la exporte rompería los golden, así que sus runners la borran:
 
 {{file ch09-s1 tests/main_test.go}}
 
@@ -304,7 +304,7 @@ Ahora conecta los pases. `runPass` recibe un `func()` sin resultado, así que ca
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch09-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch09-s1` (mensaje: `ch09-s1: the Core IR, the builder and the ICE boundary`); compárate con `ref/ch09-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch09-s1`; compárate con `ref/ch09-s1`.
 
 ### Sesión 2: elaboración a Core S0 (≈ 2 h)
 
@@ -355,7 +355,7 @@ func Compile(t *testing.T, source string) *Compiled
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch09-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch09-s2` (mensaje: `ch09-s2: elaboration to Core S0`); compárate con `ref/ch09-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch09-s2`; compárate con `ref/ch09-s2`.
 
 ### Sesión 3: Core Lint, el impresor y `ki emit core` (≈ 2 h)
 
@@ -379,8 +379,8 @@ func (s *Session) lint(p *core.Program)
 // usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE
 ```
 
-2. **Míralos fallar.** `internal/core` e `internal/driver` no compilan, y los goldens salen con 2.
-3. **Añade stubs vacíos** de `Subexprs` (un iterador vacío, no `nil`), `Lint`, `Print`, `lintOrPanic` y `lint`. Fallan 20 subtests y los dos goldens, sin panic. Los tres casos de aceptación ya pasan: un `Lint` vacío lo acepta todo, y por eso existen los de rechazo.
+2. **Míralos fallar.** `internal/core` e `internal/driver` no compilan, y los golden salen con 2.
+3. **Añade stubs vacíos** de `Subexprs` (un iterador vacío, no `nil`), `Lint`, `Print`, `lintOrPanic` y `lint`. Fallan 20 subtests y los dos golden, sin panic. Los tres casos de aceptación ya pasan: un `Lint` vacío lo acepta todo, y por eso existen los de rechazo.
 
 #### El código
 
@@ -390,13 +390,14 @@ func (s *Session) lint(p *core.Program)
 - **`scope` cuenta los binders abiertos de cada `Var`:** un conjunto sacaría de ámbito una `Var` con dos binders al acabar el `Let` interior. `delete(m, k)` quita una entrada de un mapa.
 - **`Lint` recibe el `Interner`** porque su texto es el mensaje del informe, y quien lo lee no tiene los ids.
 - **En los tests,** `slices.Collect` convierte un `iter.Seq` en un slice.
+- **Amplía el comentario de `Var`** (`core.go`): en la Parte I, `Lint` tampoco comprueba su binder único (ejercicio 1).
 
 {{file ch09-s3 internal/core/print.go}}
 
 `Print` también recorre con una pila propia. Escribe los literales con `strconv.FormatInt`, el inverso de `ParseInt` (capítulo 5), y `strconv.FormatBool`.
 
 :::more `Print` es para leer, no para parsear
-Un `Let` como callee no tiene delimitador: `print({ let g = f; g }(1))` se imprime `print(let g = f;` y, debajo, `g(1))`, que parece un `Let` cuyo cuerpo es la llamada.
+Un `Let` como *callee* (la función llamada) no tiene delimitador: `print({ let g = f; g }(1))` se imprime `print(let g = f;` y, debajo, `g(1))`, que parece un `Let` cuyo cuerpo es la llamada.
 :::
 
 Ahora conecta `ki emit core`:
@@ -410,7 +411,7 @@ Ahora conecta `ki emit core`:
 - **`emitCore` para antes de `Lower` si hay errores:** un error del programa da su diagnóstico y código 1.
 - **`Lower` no llama a `lint`.** Debe llamarlo cada comando que baja un programa.
 
-Los dos goldens:
+Los dos golden:
 
 {{file ch09-s3 tests/golden/ch09/fib_core.ki}}
 
@@ -424,7 +425,7 @@ Los dos goldens:
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch09-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch09-s3` (mensaje: `ch09-s3: Core Lint, printer and ki emit core`); compárate con `ref/ch09-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch09-s3`; compárate con `ref/ch09-s3`.
 
 ## Ejecútalo
 
@@ -785,7 +786,7 @@ Porque Core es estricto: evalúa los argumentos antes de la llamada, y `and_bool
 :::
 
 :::review
-¿Por qué `Subexprs` y `Lint` usan una pila propia, si la de Go llega a 1 GB?
+¿Por qué `Subexprs` y `Lint` usan una pila propia, si el límite de la de Go es 1 GB?
 :::
 
 :::answer
