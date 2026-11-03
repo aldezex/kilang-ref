@@ -51,11 +51,11 @@ Una clave con `Vec<TypeId>` compila, y `&[TypeId]` garantiza lo que aquí nadie 
 :::
 
 :::more El embedding, que ya usa el capítulo 9
-Un struct puede llevar otro sin nombre de campo: `type Mark struct { Range; Text string }`. Si `Range` tiene `Lo` y un método `Len`, `m.Lo` y `m.Len()` son de `Range`, promovidos; `m.Range` nombra el campo entero.
+Un struct puede llevar otro sin nombre de campo (capítulo 3): `type Mark struct { Range; Text string }`. Si `Range` tiene `Lo` y un método `Len`, `m.Lo` y `m.Len()` son de `Range`, promocionados; `m.Range` nombra el campo entero.
 
 No es herencia: quien pide un `Range` necesita `m.Range`.
 
-Lo verás en el `Compiled` del capítulo 9, con un `*Program`; el capítulo 14 lo desarrolla.
+Lo verás en `Compiled`, con un `*Program`; el capítulo 14 lo desarrolla.
 :::
 
 ### Union-find sobre slices
@@ -66,8 +66,6 @@ El nodo `TypeVariable` indexa con `Var` un registro `TypeVar`: si está ligada y
 
 - **`Bind(v, to)`** une: escribe el enlace y no comprueba nada.
 - **`Resolve(id)`** busca: sigue los enlaces hasta un tipo que no es una variable ligada. Un segundo bucle, la **compresión de caminos**, liga cada variable del camino a ese final, y la siguiente consulta da un solo paso.
-
-Los campos de `TypeTable` empiezan por minúscula: fuera de `sema` no existen. Por eso los tests que leen `tbl.vars` son `package sema`.
 
 ### Unificación de Robinson y el occurs check
 
@@ -87,7 +85,9 @@ El algoritmo de Robinson mira sus cabezas (el nodo de fuera), ya resueltas:
 
 Unas cuarenta líneas lo construyen con parámetros sin anotación: llamar a uno lo liga a una función de los tipos de sus argumentos (`p1(p0, p0)`, `p2(p1, p1)`…).
 
-Por eso `Occurs` y `Unify` llevan un conjunto de lo ya visitado: un map con valores `struct{}`, que no ocupan nada (el valor se escribe `struct{}{}`). Usan pila propia, sin recursión, porque la profundidad de un tipo la decide el programa.
+Por eso `Occurs` y `Unify` llevan un conjunto de lo ya visitado: un map con valores `struct{}` (el valor se escribe `struct{}{}`); solo importa la clave. El tipo mide cero bytes, pero en Go 1.27 su hueco en el map ocupa lo mismo que con `bool`.
+
+Usan pila propia, sin recursión, porque la profundidad de un tipo la decide el programa.
 
 ### Comprobación bidireccional
 
@@ -156,7 +156,7 @@ Es `thread::spawn` con un `mpsc::channel` y `rx.recv_timeout(d)`.
 
 {{cards}}
 
-Escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`.
+Escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega su referencia.
 
 Las tarjetas describen el final del capítulo. Las que cambian después se escriben, en su sesión, como en `git show ref/ch08-sK:book/tests/ch08.tests`.
 
@@ -237,7 +237,7 @@ func (t *TypeTable) showAll(ids ...TypeID) []string // one set of names for all 
 ```
 
 2. **Míralos fallar.** Sobre `ch08-s1` no compila: `undefined: Reason`.
-3. **Copia `reason.go` entero y escribe un `Unify` que devuelva `true`.** Fallan nueve de los diez subtests, sin panic; el de dos tipos iguales ya pasa: ahí `true` es correcto.
+3. **Copia `reason.go` entero y escribe un `Unify` que devuelva `true`.** Fallan nueve de los diez subtests, sin panic; el de dos tipos iguales ya pasa.
 
 #### El código
 
@@ -359,7 +359,7 @@ Copia `fixits.go`, que aplica las ediciones:
 
 2. **Añade a `analyze_fuzz_test.go` las tres semillas de T07.94** (`git show ref/ch08-s4:book/tests/ch07.tests`).
 3. **Míralos fallar.** Sobre `ch08-s3` no compila: `it.ParamList undefined`.
-4. **Añade los cuatro campos, sin rellenarlos.** Fallan los tests de `main`, E0406, cascadas tras un error de sintaxis, spans de la firma y el sink lleno. El de E0301 y los cuatro golden ya pasan: la sesión 3 cumple lo que fijan.
+4. **Añade los cuatro campos, sin rellenarlos.** Fallan los tests de `main` (también en T08.23), E0406, cascadas tras un error de sintaxis, spans de la firma y el sink lleno. El de E0301 y los cuatro golden ya pasan: la sesión 3 cumple lo que fijan.
 
 Un golden de `tests/errors/ch08`:
 
@@ -740,7 +740,7 @@ Porque una palabra que no molesta se queda para siempre: el ejemplo seguiría si
 
 **Los mensajes, revisados como producto.** Los UI tests de rustc guardan la salida esperada y exigen anotar los errores en la fuente. En Ki, un golden guarda el texto entero, y otro el código y la posición de todos los errores.
 
-**Claves compuestas.** `go/types` también reutiliza instancias genéricas idénticas, con claves `string`, porque una lista no puede ser clave.
+**Claves compuestas.** `go/types` también reutiliza instancias genéricas idénticas, con claves `string`: dos tipos idénticos pueden ser punteros distintos, así que la clave escribe su estructura.
 
 :::more Por qué un `string` busca más rápido
 Los maps tienen caminos rápidos para dos formas de clave: 4 u 8 bytes que se comparan como memoria, y strings. Cualquier otra va por el camino general, que llama a las funciones de hash e igualdad del tipo.

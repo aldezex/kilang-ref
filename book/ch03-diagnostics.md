@@ -125,7 +125,7 @@ Fuera de `shape`, `isShape` no se puede nombrar, así que nadie fuera la impleme
 
 El receptor de `func (Circle) isShape() {}` no tiene nombre porque no se usa. `%T` escribe el tipo concreto.
 
-**El sello tiene una grieta.** Un struct de otro paquete que **incrusta** la interfaz, `type Sneaky struct{ shape.Shape }`, la cumple. Incrustar es declarar un campo con el nombre de su tipo, cuyos métodos se **promocionan** al struct.
+**El sello tiene una grieta.** Un struct de otro paquete que **incrusta** (*embedding*) la interfaz, `type Sneaky struct{ shape.Shape }`, la cumple. Incrustar es declarar un campo con el nombre de su tipo, cuyos métodos se **promocionan** al struct.
 
 **Y el type switch no es exhaustivo:** si añades `Tri` y olvidas su `case`, compila. Por eso todo type switch sobre una interfaz sellada del libro termina en `default: panic("unreachable")`.
 

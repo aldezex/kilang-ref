@@ -28,7 +28,7 @@ why:     la igualdad de tipos es la igualdad de ids, y para las funciones eso so
          que devuelva sean los correctos: la tabla crecería con cada consulta. Y la copia de los parámetros
          protege al tipo: sin ella, un llamador que reutilice su slice cambiaría un tipo que ya está en la
          tabla y en todos los sitios que lo usan. Y el nodo de una función sin parámetros guarda `nil` y no
-         un slice vacío, como dicen el comentario de `Fun` y el capítulo: si la tabla copiara el slice vacío
+         un slice vacío, como dice el comentario de `Fun`: si la tabla copiara el slice vacío
          que le dan, todas las comparaciones por longitud seguirían pasando y nada avisaría de que la
          representación ha cambiado
 ref:     TestTypeTable/fun_types_hash_cons
