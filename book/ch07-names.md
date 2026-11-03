@@ -40,7 +40,7 @@ Las dos últimas líneas son un *fix-it*. La sesión 4 lleva a ese nivel los die
 El capítulo 4 enseñó lo básico de `map[K]V`, con su `nil` que se lee y no se escribe. Falta lo que importa a un resolvedor:
 
 - **El orden** cambia a propósito, y ninguna salida del compilador depende de él: lo que se muestra se ordena antes, por id o por nombre.
-- **Semántica de referencia.** Pasar un map copia un descriptor de su tabla: si `add(m)` hace `m["b"] = 2`, cambia el map de quien la llama.
+- **Semántica de referencia.** Pasar un map copia un puntero a su tabla: si `add(m)` hace `m["b"] = 2`, cambia el map de quien la llama.
 - **Claves comparables.** La clave tiene que admitir `==`, y un slice no: `map[[]byte]int` no compila.
 - **`clear(m)`** lo vacía, y sigue sin ser `nil`.
 - **Tablas suizas.** Por dentro, grupos de 8 casillas; el orden sigue siendo aleatorio.
@@ -159,7 +159,7 @@ Comparten la anatomía de un `Diagnostic`:
 
 Desde la sesión 4, los diecinueve códigos cumplen ese listón (spec 7.3), y cada código nuevo nace completo.
 
-Los capítulos 3, 5 y 6 no se reescriben, porque muestran la salida de sus tags: una fe de erratas remite aquí.
+Los capítulos 3, 5 y 6 no se reescriben, porque muestran la salida de sus etiquetas: una fe de erratas remite aquí.
 
 ### Los fix-its
 
@@ -194,7 +194,7 @@ Las tarjetas describen el final del capítulo. Las que cambian en la sesión 4 s
 
 #### Los tests, en rojo
 
-1. **Escribe T07.01–T07.17,** con T07.02 y T07.05–T07.07 en su forma de esta sesión. `resolve_test.go` es `package sema_test`: `testsupport` importa `driver`, que importa `sema`, y desde dentro sería un ciclo. La interfaz:
+1. **Escribe T07.01–T07.17,** con T07.02 y T07.05–T07.07 en su forma de esta sesión. `embed_test.go` es `package kilang`. `resolve_test.go` es `package sema_test`: `testsupport` importa `driver`, que importa `sema`, y desde dentro sería un ciclo. La interfaz:
 
 ```go
 // package kilang (embed.go): //go:embed stdlib
@@ -238,8 +238,8 @@ func ErrorCodes(p *Program) []string
 {{diff ch06-s4..ch07-s1 internal/syntax/parser_stmt_internal_test.go}}
 
 4. **Míralos fallar:** no compila, `undefined: Stdlib`.
-5. **Escribe enteros `embed.go`, `stdlib/prelude.ki` y `pipeline.go`:** con stubs, los tests hacen panic.
-6. **Añade los tipos de `sema` y un `Resolve` que solo crea las tablas, con una fila por nodo.**
+5. **Añade los tipos de `sema` y un `Resolve` que solo crea las tablas, con una fila por nodo.**
+6. **Escribe enteros `embed.go`, `stdlib/prelude.ki` y `pipeline.go`:** con stubs, los tests hacen panic.
 7. **Evita tres panics:** tres subtests leen `Sink.All()[0]` tras un `t.Errorf`. En tu versión, pon un `t.Fatalf` delante; con la referencia, `go test ./... -skip 'TestResolve/(duplicate_definition_E0302|extern_only_in_std_E0304|unknown_attribute_E0305)$'`.
 8. **Mira qué falla:** cinco subtests de la resolución (ocho con tus `t.Fatalf`), uno del pipeline, dos del parser y el golden.
 
@@ -275,7 +275,7 @@ func ErrorCodes(p *Program) []string
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch07-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch07-s1` (mensaje: `ch07-s1: the prelude, embed.go and top-level definitions`); compárate con `ref/ch07-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch07-s1`; compárate con `ref/ch07-s1`.
 
 ### Sesión 2: ámbitos, variables locales y sombreado (≈ 2 h)
 
@@ -302,13 +302,17 @@ func (s *scope) visible() iter.Seq[base.Symbol] // for the suggestions of sessio
 - **`bodies`** recorre las `Def`, no los items: cada variable tiene por dueña la definición que se recorre, también la segunda de un E0302.
 - **`name`** busca en los ámbitos y luego en las definiciones. Sin nada, informa E0301 y deja `ResError`: los pases siguientes lo dan por explicado.
 
+Y un comentario:
+
+{{diff ch07-s1..ch07-s2 internal/driver/check.go}}
+
 {{reftest T07.21}}
 
 {{reftest T07.25}}
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch07-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch07-s2` (mensaje: `ch07-s2: scopes, locals and shadowing`); compárate con `ref/ch07-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch07-s2`; compárate con `ref/ch07-s2`.
 
 ### Sesión 3: «did you mean» y la comprobación de nombres (≈ 2 h)
 
@@ -341,13 +345,19 @@ func (r *resolver) candidates() []string
 - **El descarte por largo**: cada edición cambia el largo en uno como mucho, así que no se mide un candidato que difiere en más que el umbral.
 - **El freno**: pasados los 100 errores, no se buscan candidatos. La ayuda iría a un diagnóstico que nadie ve.
 
+Y dos comentarios:
+
+{{diff ch07-s2..ch07-s3 internal/driver/check.go}}
+
+{{diff ch07-s2..ch07-s3 internal/sema/scope.go}}
+
 {{reftest T07.26}}
 
 {{reftest T07.30}}
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch07-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch07-s3` (mensaje: `ch07-s3: did you mean and name checking`); compárate con `ref/ch07-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch07-s3`; compárate con `ref/ch07-s3`.
 
 ### Sesión 4: diagnósticos al nivel de rustc y el catálogo (≈ 2,5 h)
 
@@ -399,7 +409,7 @@ const maxSuggestLen = 128 // a longer unknown name gets no suggestion
 {{diff ch07-s3..ch07-s4 internal/syntax/parser_fuzz_test.go}}
 
 5. **Míralos fallar:** no compila, `undefined: Replace`.
-6. **Añade stubs** que devuelven el valor cero; `WithFixIt` devuelve `d` y `Attr` gana los dos campos. Fallan 110 subtests de 17 funciones, sin panic. No uses `-update` todavía: congelaría el stub.
+6. **Añade stubs** que devuelven el valor cero; `WithFixIt` devuelve `d` y `Attr` gana los dos campos. Fallan 110 subtests de 17 funciones, sin panic; sin `tests/errors_docs_test.go`, que se lista más abajo, 106 de 16. No uses `-update` todavía: congelaría el stub.
 7. **Escribe el catálogo:** un fichero por código, los diecinueve, como `E0301.md`, con el formato del comentario al principio del test (más abajo). Con él, su test ya pasa: los códigos existen.
 
 {{file ch07-s4 docs/errors/E0301.md}}
@@ -474,6 +484,10 @@ Un ejemplo va en una valla `ki erroneous` o `ki corrected`, con estas palabras d
 - **`broken`** guarda los nombres que conservan los `ItemError`: llamar a una función de firma rota no suma un E0301.
 - **`maxSuggestLen`.** La distancia cuesta el producto de los dos largos.
 
+Y un comentario:
+
+{{diff ch07-s3..ch07-s4 internal/driver/check.go}}
+
 **El test del catálogo:**
 
 {{file ch07-s4 tests/errors_docs_test.go}}
@@ -520,7 +534,7 @@ Con el código escrito y `ki` recompilado:
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch07-s4` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch07-s4` (mensaje: `ch07-s4: rustc-style diagnostics: fix-it suggestions, the bar for E01xx–E03xx and the docs/errors catalog`); compárate con `ref/ch07-s4`.
+Al terminar: tus tests en verde, commit y etiqueta `ch07-s4`; compárate con `ref/ch07-s4`.
 
 ## Ejecútalo
 
@@ -791,12 +805,12 @@ No: el listón pide la edición solo cuando es mecánica. El token hallado es `h
 :::
 
 :::answer
-Que no envejecen en silencio: si un código cambia de mensaje o desaparece, o si el parser empieza a admitir cadenas en una expresión, la CI falla en esa sesión. La palabra `also=` está hecha para eso: hay que quitarla en cuanto el E0201 deje de salir.
+Que no envejecen en silencio: si un código desaparece o deja de salir en su ejemplo, o si el parser empieza a admitir cadenas en una expresión, la CI falla en esa sesión. La palabra `also=` está hecha para eso: hay que quitarla en cuanto el E0201 deje de salir.
 :::
 
 ## Resumen
 
-- Un map es un descriptor de una tabla: copiarlo es compartirla.
+- Un map es un puntero a una tabla: copiarlo es compartirla.
 - Nada visible depende del orden de un map.
 - `//go:embed stdlib` mete el preludio en el binario.
 - La distancia de edición es programación dinámica con dos filas.
@@ -807,14 +821,14 @@ Que no envejecen en silencio: si un código cambia de mensaje o desaparece, o si
 
 ## Go en el trabajo
 
-**Un map ganó casi siempre a un slice ordenado.** Una clave string hay que hashearla y compararla byte a byte: por eso el compilador busca por `Symbol`. Lo que tardó una búsqueda al azar:
+**Un map ganó casi siempre a un slice ordenado.** Una clave string hay que hashearla y compararla byte a byte: por eso el compilador busca por `Symbol`. Lo que tardó una búsqueda en orden salteado:
 
 | Búsqueda | Clave `string` | Clave `uint32` |
 |---|---|---|
 | `map`, 8 claves | unos 8 ns | 4,3 ns |
 | `map`, 1 000 claves | 11 ns | 6,8 ns |
 | `map`, 100 000 claves | 24 ns | 13,5 ns |
-| `slices.BinarySearch` sobre un slice ordenado | perdió en los tres tamaños | solo ganó con 8 claves |
+| `slices.BinarySearch` sobre un slice ordenado | perdió en los tres tamaños | solo empató o ganó por poco con 8 claves |
 
 **La iteración aleatoria en CI.** Un test que compara las claves de un map, sin ordenar, pasa en tu portátil y a veces falla en la CI. `go test -count=100` lo destapa.
 
