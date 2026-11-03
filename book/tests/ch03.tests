@@ -76,7 +76,7 @@ kind:    unit (go test)      file: internal/diag/sink_test.go
 case:    informar de un error más que el máximo
 input:   101 errores `E(101)` con mensajes "e1" … "e101"
 expect:  `ErrorCount()` es 100, `Truncated()` es verdadero y `All()` tiene 100 diagnósticos, del "e1" al "e100"
-why:     el front end se detiene tras 100 errores para que un fichero roto no inunde la terminal; lo
+why:     tras 100 errores el sink descarta el resto para que un fichero roto no inunde la terminal; lo
          que se descarta tiene que ser el error 101 y no uno de los primeros, que son los que tienen
          la causa
 ref:     TestSink/stops_after_max_errors
@@ -252,7 +252,7 @@ expect:  solo la línea 1, con once marcas `^` desde la `{` hasta el final de la
          el borde, bajo los `...` (cuándo entra una etiqueta lo cuenta el capítulo 7), y la salida no pasa de 2000 bytes en ningún caso.
          Los bytes de continuación sueltos no son el resto de un carácter: el extremo de la ventana avanza como mucho tres
          bytes para llegar a un inicio de carácter y no recorre la tirada entera (ventana de 44 bytes con la etiqueta en la
-         "a"; de 82, con contexto a los dos lados, con la etiqueta en medio)
+         "a"; de 82, con una etiqueta de dos bytes en medio de la tirada)
 why:     un delimitador sin cerrar abarca medio fichero; el renderizador corta el span al final de la
          línea donde empieza para mostrar una sola línea y no desbordar el margen ni inventar
          columnas, y marca todo lo que queda de ella, no solo su primera columna. Una línea muy larga

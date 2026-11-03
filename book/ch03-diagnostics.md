@@ -25,7 +25,7 @@ error[E0101]: invalid UTF-8 byte 0xFF
 Sin lexer, el único error posible es un fichero que no es texto, pero diagnósticos y runner ya son los definitivos.
 
 :::note
-**Fe de erratas.** Estos mensajes de error mejoran en el capítulo 7.
+**Fe de erratas (2026-10-28).** Estos mensajes de error mejoran en el capítulo 7.
 :::
 
 ## Teoría
@@ -52,7 +52,7 @@ const (
 )
 ```
 
-En un bloque `const`, `iota` vale 0 y aumenta en uno con cada línea; una línea sin expresión repite la anterior. `Severity` es un tipo definido (capítulo 2).
+En un bloque `const`, `iota` vale 0 y aumenta en uno con cada constante; una constante sin expresión repite la anterior. `Severity` es un tipo definido (capítulo 2).
 
 Go **no** cierra el conjunto: `Severity(7)` compila, y un `switch` incompleto no avisa. Por eso `String()` termina escribiendo `Severity(7)`: un valor que solo puede salir de un fallo se ve como tal.
 
@@ -153,7 +153,7 @@ func find(bad bool) error {
 
 `errors.Join` reúne varios errores y descarta los `nil`; `errors.Is` encuentra cada uno.
 
-`errors.As` (capítulo 2) desenvuelve: el runner saca así la causa de un `*fs.PathError`, porque esa capa repite una ruta absoluta. `errors.AsType`, su versión genérica, espera al capítulo 4.
+`errors.As` (capítulo 2) desenvuelve: el runner saca así la causa de un `*fs.PathError`, porque esa capa repite la ruta. `errors.AsType`, su versión genérica, espera al capítulo 4.
 
 ### Sin `Option` ni `Result`
 
@@ -206,12 +206,12 @@ var update = flag.Bool("update", false, "rewrite golden files")
 ### Compiladores: diagnósticos como datos
 
 - **Códigos estables.** No se reutilizan nunca: los buscas en la documentación y los comparan los tests. Su centena dice la etapa.
-- **Un límite.** Tras 100 errores el compilador se detiene: lo demás suele ser cascada del primero.
+- **Un límite.** Tras 100 errores el sink descarta el resto: lo demás suele ser cascada del primero.
 - **Una comprobación previa.** `syntax.CheckSource` rechaza el primer byte de UTF-8 inválido (E0101) o de control, salvo tabulador, `\n` y `\r` (E0102): el lexer del capítulo 5 recibe texto limpio.
 - **Una cabecera estricta.** Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Una mal escrita e ignorada no comprobaría nada.
 - **Anotaciones.** Un error esperado, marcado en línea (`// ERROR(E0101) @9`), se compara por (código, línea, columna), no por su texto: reformular un mensaje no rompe cien golden.
 
-**Dos clases de columna.** La posición cuenta code points, lo que entiende un editor. El caret cuenta **columnas visuales**, con el tabulador hasta el siguiente múltiplo de 4. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
+**Dos clases de columna.** La posición cuenta code points, como rustc; el tabulador vale uno, como en un editor. El caret cuenta **columnas visuales**, con el tabulador hasta el siguiente múltiplo de 4. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
 
 ```console
 $ printf 'fn main() {\n\tlet x = \xff\n}\n' > build/bad.ki
@@ -332,7 +332,7 @@ Deshazlo y compara:
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch03-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch03-s1` (mensaje: `ch03-s1: diagnostics as values`); compárate con `ref/ch03-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch03-s1`; compárate con `ref/ch03-s1`.
 
 ### Sesión 2: los renderizadores human, short y json (≈ 2,5 h)
 
@@ -430,7 +430,7 @@ El golden que salta dos líneas no lo distingue; el que salta una, sí. Deshazlo
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch03-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch03-s2` (mensaje: `ch03-s2: human, short and json renderers`); compárate con `ref/ch03-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch03-s2`; compárate con `ref/ch03-s2`.
 
 ### Sesión 3: la comprobación previa al léxico, `ki check` y el runner golden (≈ 2,5 h)
 
@@ -500,7 +500,6 @@ La cabecera son las líneas iniciales que empiezan por `//`; la primera que no, 
 ```console
 $ go test ./...
 github.com/aldezex/kilang/internal/syntax: no non-test Go files in …/internal/syntax
-github.com/aldezex/kilang/internal/kitest: no non-test Go files in …/internal/kitest
 # github.com/aldezex/kilang/internal/kitest [github.com/aldezex/kilang/internal/kitest.test]
 internal/kitest/runner_internal_test.go:27:14: undefined: unreadableDirectory
 …
@@ -638,7 +637,7 @@ $ printf '// test: T03.59\n// run: check\nlet x = 1\x01  // ERROR(E0102) @10\n' 
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch03-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch03-s3` (mensaje: `ch03-s3: source check, ki check and the golden runner`); compárate con `ref/ch03-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch03-s3`; compárate con `ref/ch03-s3`.
 
 ## Ejecútalo
 
@@ -842,7 +841,7 @@ Porque hay muchos y no deben cortar la ejecución: el pase sigue, y el sink los 
 :::
 
 :::answer
-Porque el sello tiene una grieta (un struct que incrusta la interfaz la cumple) y, sobre todo, porque el type switch no es exhaustivo: añadir un tipo y olvidar su `case` compila. El `default` convierte el olvido en un panic inmediato con el tipo en el mensaje.
+Porque el sello tiene una grieta (un struct que incrusta la interfaz la cumple) y, sobre todo, porque el type switch no es exhaustivo: añadir un tipo y olvidar su `case` compila. El `default` convierte el olvido en un panic inmediato.
 :::
 
 :::review
@@ -858,7 +857,7 @@ Porque la copia comparte el array de `Notes` con el original, y con capacidad de
 :::
 
 :::answer
-Sirven a dos usos. La posición la lee un editor, para el que un tabulador es un carácter. El caret cae bajo el carácter en la terminal, donde un tabulador ocupa hasta cuatro columnas y `<U+202E>`, ocho; `displayLine` traduce cada offset de byte a su columna visual.
+Sirven a dos usos. La posición la lee un editor, para el que un tabulador es un carácter. El caret va en la terminal, donde un tabulador ocupa hasta cuatro columnas y `<U+202E>`, ocho; `displayLine` traduce cada offset de byte a su columna visual.
 :::
 
 :::review
@@ -892,6 +891,6 @@ Para probar lo que vería una shell: el binario real y su código de salida. Per
 
 **Errores como valores.** La FAQ de Go: acoplar las excepciones a `try-catch-finally` «results in convoluted code» y empuja a tratar como excepcionales errores corrientes.
 
-**Envolver.** El blog de Go: «wrapping an error makes that error part of your API». Envuelve una vez, en la frontera del paquete, y comprueba con `errors.Is` o `errors.As`.
+**Envolver.** El blog de Go: «wrapping an error makes that error part of your API». Envuelve para exponer la causa a quien llama; si es un detalle interno, usa `%v`. Comprueba con `errors.Is` o `errors.As`.
 
 **Golden en Go.** `src/cmd/gofmt/testdata/` guarda parejas `.input`/`.golden`, y `gofmt_test.go` declara el mismo flag.

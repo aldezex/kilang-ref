@@ -721,7 +721,7 @@ error[E0401]: mismatched types
    = help: write `2.0`; Ki never converts Int to Float implicitly
 ```
 
-**Recuperación:** el lexer salta los bytes inválidos; el parser resincroniza e inserta nodos Error, sin emitir errores nuevos a menos de 3 tokens del anterior; los nombres desconocidos se ligan a una definición de error, y `?err` unifica en silencio; cada item de nivel superior se comprueba por separado; el front end se detiene tras 100 errores, y las etapas posteriores solo corren sobre entrada sin errores.
+**Recuperación:** el lexer salta los bytes inválidos; el parser resincroniza e inserta nodos Error, sin emitir errores nuevos a menos de 3 tokens del anterior; los nombres desconocidos se ligan a una definición de error, y `?err` unifica en silencio; cada item de nivel superior se comprueba por separado; el front end deja de informar tras 100 errores, y las etapas posteriores solo corren sobre entrada sin errores.
 
 ---
 
