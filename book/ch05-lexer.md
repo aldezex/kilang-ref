@@ -8,7 +8,7 @@ milestone: `ki emit tokens`
 
 ## Objetivo
 
-Al terminar, `ki` tiene su primera etapa de compilador: el lexer convierte los bytes de un fichero en tokens, decide qué saltos de línea terminan una sentencia y sigue adelante tras cada error. Lo enseña un comando nuevo:
+Al terminar, `ki` tiene su primera etapa de compilador: un lexer que convierte bytes en tokens, decide qué saltos de línea terminan una sentencia y sigue adelante tras cada error. Lo enseña un comando nuevo:
 
 ```console
 $ cat fib.ki
@@ -33,34 +33,32 @@ $ ki emit tokens fib.ki
 No hay `Newline` antes de `|>`, que continúa la línea, y el string se parte en cabeza, expresión y cola. El parser del capítulo 6 leerá estos tokens, camino del hito M1 (capítulo 10).
 
 :::note
-**Fe de erratas (2026-10-28).** Los mensajes de los errores de este capítulo mejoran en el capítulo 7 («El listón: errores al nivel de rustc»), que los explica.
+**Fe de erratas (2026-10-28).** Los mensajes de error de este capítulo mejoran en el capítulo 7.
 :::
 
 ## Teoría
 
 ### Bytes, runas y el maximal munch
 
-El lexer trabaja casi siempre con bytes: todo lo que tiene significado es ASCII, y ningún byte de un carácter multibyte cae por debajo de 0x80. Solo decodifica, con `utf8.DecodeRune(b)` (capítulo 2), donde importa el carácter entero:
+El lexer trabaja casi siempre con bytes: lo que tiene significado es ASCII, y ningún byte de un carácter multibyte baja de 0x80.
 
-- **Un carácter inesperado.** Byte a byte, `é` daría dos errores de medio carácter.
-- **Un escape inválido.** `\é` consume la `é` entera.
-- **Un literal de carácter.** `'é'` debe ser un solo code point, y `DecodeRune` lo comprueba.
+Solo decodifica, con `utf8.DecodeRune(b)` (capítulo 2), donde importa el carácter entero:
 
-Además:
+- un carácter inesperado: byte a byte, `é` daría dos errores;
+- un escape inválido: `\é` consume la `é` entera;
+- un literal de carácter: `'é'` debe ser un code point.
 
-- `utf8.ValidRune(r)` dice si el número de un `\u{…}` es un escalar Unicode.
-- `utf8.RuneError` (U+FFFD) es el valor de un literal roto.
-- En los mensajes, lo que `unicode.IsPrint(r)` no da por visible sale como `<U+XXXX>` (`visible`).
+Un `\u{…}` solo admite escalares Unicode, code points que no son sustitutos: lo comprueba `utf8.ValidRune(r)`.
 
 :::from Rust
-`char` de Rust solo admite escalares (`char::from_u32(0xD800)` es `None`); un `rune` de Go es un `int32` cualquiera, y la comprobación es tuya.
+`char` de Rust solo admite escalares; un `rune` de Go es un `int32` cualquiera, y la comprobación es tuya.
 :::
 
-**Maximal munch.** Ante `|>=>`, el lexer toma siempre el token más largo posible: `|>`, después `=>`, y no `=` y `>`. Ninguna puntuación de Ki pasa de dos caracteres, así que basta mirar un byte más.
+**Maximal munch.** Ante `|>=>`, el lexer toma siempre el token más largo: `|>`, después `=>`. Ninguna puntuación de Ki pasa de dos caracteres: basta mirar un byte más.
 
-**Tablas de clases.** Muchos lexers clasifican cada byte con una tabla `[256]uint8`, un array cuyo tamaño es parte del tipo: indexado con un `byte`, nunca se sale. A Ki le basta un `switch`, porque sus clases son pocas.
+:::more Clasificar bytes con una tabla
+Muchos lexers clasifican cada byte con una tabla `[256]uint8`. El tamaño es parte del tipo: indexada con un `byte`, nunca se sale. A Ki, con pocas clases, le basta un `switch`.
 
-:::more Una tabla de clases en Go, y qué es un escalar Unicode (`utf8`, `IsPrint`)
 ```go
 const (
 	other uint8 = iota
@@ -82,115 +80,112 @@ var classes = func() (t [256]uint8) {
 func class(c byte) uint8 { return classes[c] }
 ```
 
-`classes` se calcula una vez, al iniciar el paquete, con una función literal que se llama en el acto. Que el índice nunca se salga lo sabe también el compilador: con `-gcflags=-d=ssa/check_bce/debug=1`, que informa de cada comprobación de límites que deja en el binario, `class` no aparece, y la misma función con un parámetro `int` sí (`Found IsInBounds`).
-
-Un escalar Unicode es un code point que no es un sustituto. `utf8.ValidRune`: `0xD7FF` y `0xE000` sí; los sustitutos `0xD800` y `0xDFFF`, no; `0x10FFFF` sí y `0x110000` no. `utf8.AppendRune(b, r)` añade la codificación de un escalar a un `[]byte`.
-
-`unicode.IsPrint` es falso para el tabulador, U+0085, U+2028, U+200B, U+202E y U+00A0 (que `unicode.IsGraphic` sí acepta). El lexer escribe esos caracteres con `fmt.Fprintf(&b, "<U+%04X>", r)`: `%04X`, el hexadecimal en mayúsculas con al menos cuatro cifras.
-
-La sintaxis `\u{1F600}`, de 1 a 6 cifras, es la de Rust, donde el literal `"\u{D800}"` no compila (`invalid unicode character escape`).
+`classes` se calcula una vez, al iniciar el paquete, con una función literal que se llama en el acto. El compilador también sabe que el índice no se sale: en `class` no deja comprobación de límites, y con un parámetro `int` sí.
 :::
 
 ### Números con `strconv`
 
-`strconv.ParseInt(s, base, 64)` y `strconv.ParseFloat(s, 64)` convierten texto en `int64` y `float64`. Sus errores son `*strconv.NumError`: `Err` guarda la causa (`strconv.ErrRange`, `strconv.ErrSyntax`), y `Unwrap` deja que `errors.Is` (capítulo 2) la encuentre.
+`strconv.ParseInt(s, base, 64)` y `strconv.ParseFloat(s, 64)` convierten texto en `int64` y `float64`. Sus errores son `*strconv.NumError`: `Err` guarda la causa (`strconv.ErrRange`, `strconv.ErrSyntax`), y `errors.Is` (capítulo 2) la encuentra.
 
-Dos comportamientos deciden el diseño:
+Dos comportamientos de `strconv` deciden el diseño:
 
 - **Un desbordamiento da el máximo (o `+Inf`) junto al error.** Guardarlo daría valor a un literal rechazado; por eso el token se queda con 0.
-- **Los `_` de `1_000`.** `ParseInt` en base 10 los rechaza y `ParseFloat`, en texto decimal, solo los acepta entre dos dígitos; por eso el lexer los quita él.
+- **Los `_` de `1_000`.** `ParseInt` en base 10 los rechaza, así que el lexer los quita él.
 
-:::from Python
-`int("9223372036854775808")` funciona porque los enteros de Python no tienen tamaño. El `Int` de Ki tiene 64 bits.
+:::more `ParseInt` y `ParseFloat` en los límites
+Lo que devuelve cada llamada. Un underflow no es un error, y por eso `1e-999` vale 0 sin diagnóstico.
+
+| Llamada | Resultado |
+|---|---|
+| `ParseInt("9223372036854775808", 10, 64)` | `9223372036854775807` y `value out of range` |
+| `ParseInt("1_000", 10, 64)` | `0` y `invalid syntax` (con base 0, `1000`) |
+| `ParseFloat("1e999", 64)` | `+Inf` y `value out of range` |
+| `ParseFloat("1e-999", 64)` | `0` y `nil` |
+| `ParseFloat("1_000.5", 64)` | `1000.5` y `nil`; con `1__0.5`, `invalid syntax` |
 :::
 
 ### `go generate`: el generador escrito a mano
 
-Las 71 clases de token viven en `token_kinds.txt`, y un programa Go genera con esa lista `token_kind.go`: las constantes, los nombres de `String` y el mapa de palabras clave. En C++ serían X-macros.
+Los tipos de token viven en una sola lista, `token_kinds.txt`, y un programa Go genera con ella `token_kind.go`: las constantes, los nombres de `String` y el mapa de palabras clave.
 
-- **La directiva.** `//go:generate go run ./gen -o token_kind.go`, en `token.go` y sin espacio tras `//`. `go generate ./internal/syntax` ejecuta el comando en el directorio del paquete; `go build` y `go test`, nunca.
+- **La directiva.** `//go:generate go run ./gen -o token_kind.go`, sin espacio tras `//`. `go generate ./internal/syntax` la ejecuta en el directorio del paquete; `go build` y `go test`, nunca, y por eso lo generado se versiona.
 - **La cabecera.** `// Code generated … DO NOT EDIT.` avisa a personas y herramientas de que no se edita a mano.
-- **`go/format`.** `format.Source(src)` formatea como `gofmt`, así que el generador no se preocupa de alinear.
-- **El test que lo vigila.** Como nada regenera solo, T05.01 ejecuta `go run ./gen` sin `-o` con `os/exec` (capítulo 1) y compara su stdout con `token_kind.go`.
+- **`go/format`.** `format.Source(src)` formatea como `gofmt`: el generador no alinea nada.
+- **El test.** Como nada regenera solo, un test ejecuta `go run ./gen` con `os/exec` (capítulo 1) y compara su stdout con `token_kind.go`.
 
-:::from Rust
-Lo más parecido es una `macro_rules!`, pero se expande en cada compilación, y `go generate` solo cuando lo pides: por eso lo generado se versiona.
+:::more Leer por líneas con `bufio.Scanner`
+`gen` lee la lista entera; para leer por líneas, lo habitual es `sc := bufio.NewScanner(r)`, `for sc.Scan() { line := sc.Text() }` y `sc.Err()` al final. El `Scanner` quita el `\r` de un CRLF, y una línea de 64 KiB o más (`bufio.MaxScanTokenSize`) detiene el bucle con un error.
 :::
 
 ### Los modos del lexer y la interpolación
 
-En `"a${x}b"`, la `x` es código y la `b` vuelve a ser texto: el lexer cambia de modo. Como un `${…}` puede contener otro string, los modos se apilan (`modeString`, `modeCode`), y la pila vacía es el código del fichero.
+En `"a${x}b"`, la `x` es código y la `b`, texto: el lexer cambia de modo. Un `${…}` puede contener otro string, así que los modos se apilan (`modeString`, `modeCode`). Con dos interpolaciones, `"a${x}b${y}c"` da `StringHead`, `x`, `StringMid`, `y`, `StringTail`.
 
-Lo difícil es la `}`: en `"${ g({ y }) }"`, la primera cierra una llave y la segunda, la interpolación. Por eso hay una pila de llaves: cada `{` apila una entrada normal y cada `${`, un **centinela** (`InterpSentinel`). Si la cima es el centinela, la `}` vuelve al texto del string; si no, cierra una llave.
+Lo difícil es la `}`: en `"${ g({ y }) }"`, la primera cierra una llave y la segunda, la interpolación. Por eso hay una pila de llaves: cada `{` apila una entrada normal y cada `${`, un **centinela** (`InterpSentinel`). Con el centinela en la cima, la `}` vuelve al texto.
 
-Solo las llaves entran en esa pila, porque solo la `}` tiene que decidir: en `${ ( }`, la `}` cierra igual la interpolación.
-
-:::from Python
-Python 3.14 parte los f-strings con `FSTRING_START`, `FSTRING_MIDDLE` y `FSTRING_END`, y las llaves aparte; Ki las junta con el texto.
-:::
+Solo las llaves entran, porque solo la `}` tiene que decidir: en `${ ( }`, cierra igual la interpolación.
 
 ### La regla de línea y la de Go
 
-Ki no pide `;`: el lexer anota cada salto en el token siguiente (`NewlineBefore`), inserta un token `Newline` donde acaba una sentencia, y el parser nunca mira líneas. Un salto de línea acaba una sentencia si se cumplen tres condiciones:
+Ki no pide `;`. El lexer anota cada salto en el token siguiente (`NewlineBefore`) e inserta un `Newline` donde acaba una sentencia. El parser nunca mira líneas.
 
-1. el delimitador abierto más interno es una llave, o no hay ninguno (dentro de `(` y `[`, el salto es un espacio);
+El `\r\n` es un solo salto, y su `Newline` ocupa los dos bytes. Un `\r` suelto es un espacio.
+
+Un salto acaba una sentencia si:
+
+1. el delimitador abierto más interno es una llave, o no hay ninguno (dentro de `(` y `[`, es un espacio);
 2. el token anterior puede cerrar una expresión: un nombre, un literal, `)`, `]`, `}`, `?`, `_`, `true`, `false`, `return`, `break`, `continue`;
-3. la línea siguiente no empieza por `|>`, `.`, `&&`, `||` o `else`.
+3. y la línea siguiente no empieza por `|>`, `.`, `&&`, `||` o `else`.
 
-Go inserta `;` mirando solo el final de la línea. Ki mira también los delimitadores y la línea siguiente, y por eso acepta lo que Go rechaza (`⏎`: salto de línea): una línea que empieza por `.` (una cadena de métodos); `}` y `else` en dos líneas; `f(1, 2⏎)`.
+Nunca hay `Newline` ante el `Eof`.
+
+Go inserta `;` mirando solo el final de la línea; Ki mira también los delimitadores y la línea siguiente, y acepta lo que Go rechaza (`⏎`: salto de línea):
+
+- una línea que empieza por `.`;
+- `}` y `else` en dos líneas;
+- `f(1, 2⏎)`.
 
 :::from TS
-JavaScript inserta `;` sobre todo cuando el token siguiente no puede continuar la línea: `let x = a⏎-b` es una resta. En Ki son dos sentencias.
+JavaScript inserta `;` sobre todo si el token siguiente no puede continuar la línea: `let x = a⏎-b` es una resta. En Ki, dos sentencias.
 :::
 
-:::more La regla exacta de Go, sus errores en esos tres casos y el ejemplo de JavaScript
-Dice su especificación: «a semicolon is automatically inserted into the token stream immediately after a line's final token if that token is» un identificador, un literal, `break`, `continue`, `fallthrough`, `return`, `++`, `--`, `)`, `]` o `}`. En `go/scanner`, cada token deja `insertSemi` a `true` o `false`. En Go 1.27, los tres casos dan:
-
-- línea que empieza por `.`: `syntax error: unexpected ., expected }`;
-- `}` y `else` en dos líneas: `syntax error: unexpected keyword else, expected }`;
-- `f(1, 2⏎)`: `syntax error: unexpected newline in argument list; possibly missing comma or )`.
-
-En JavaScript, `let x = a⏎-b`, con `a = 1` y `b = 2`, imprime `-1` en Node 24.
-:::
-
-### CRLF, el `\r` suelto y la recuperación
-
-Ki cuenta el `\r\n` como un solo salto, y su `Newline` ocupa los dos bytes. Un `\r` suelto es un espacio.
+### La recuperación
 
 Recuperarse es seguir lexando tras un error sin inventar nada:
 
-- Un carácter inesperado da un `Error`, y el lexer sigue.
-- Un literal no admite saltos de línea: uno sin cerrar acaba con su línea, y una comilla olvidada estropea una línea, no el fichero.
-- Cada error de un literal da un diagnóstico, y el literal deja un token en su sitio (`Int` con 0, `Char` con U+FFFD, `Error` si es un string sin cerrar) para que el parser no añada otro error.
+- Un carácter inesperado da un `Error` (E0104), y el lexer sigue.
+- Un literal no admite saltos de línea: una comilla olvidada estropea una línea, no el fichero.
+- Un literal roto deja un token en su sitio (`Int` con 0, `Char` con `utf8.RuneError`, `Error` en un string sin cerrar), para que el parser no añada otro error.
 
-**Un token `Error` nunca cierra una expresión.** Tras un error léxico no se sabe qué quería decir la línea, y un `Newline` tras un `$` suelto daría al parser dos sentencias y un segundo error.
+**Un token `Error` nunca cierra una expresión.** Tras un error no se sabe qué quería decir la línea, y un `Newline` tras un `$` suelto daría al parser un segundo error.
 
 ### Fuzzing nativo
 
-A un lexer, con cualquier entrada, no se le puede pedir el resultado exacto, sino **propiedades**: que no haga panic, que el último token sea `Eof`, que cada span cumpla `Lo <= Hi <= len` y que los `Lo` no decrezcan.
+A un lexer, con cualquier entrada, no se le pide el resultado exacto, sino **propiedades**:
 
-Un test de fuzzing es una función `FuzzXxx(f *testing.F)`: `f.Add(…)` registra semillas y `f.Fuzz(func(t *testing.T, src string) { … })` recibe el objetivo (el *fuzz target*), que corre con cada entrada. `go test` lo ejecuta solo con las semillas; `go test -run='^$' -fuzz=FuzzLex -fuzztime=10s` genera entradas, guiado por la cobertura.
+- que no haga panic;
+- que el último token sea `Eof`;
+- que cada span cumpla `Lo <= Hi <= len`;
+- que los `Lo` no decrezcan.
 
-Las que abren caminos nuevos van a la caché (`$GOCACHE/fuzz`); una que hace fallar el objetivo va a `testdata/fuzz/FuzzLex/` y pasa a ser una semilla.
+Un test de fuzzing es una función `FuzzXxx(f *testing.F)`. `f.Add(…)` registra semillas y `f.Fuzz(func(t *testing.T, src string) { … })` recibe el objetivo (el *fuzz target*).
 
-:::from Rust
-En Rust el fuzzing vive fuera de la biblioteca (cargo-fuzz invoca a libFuzzer). En Go, viene con `go test`.
-:::
+`go test` solo corre las semillas. `go test -run='^$' -fuzz=FuzzLex -fuzztime=10s` genera entradas, guiado por la cobertura. Una entrada que hace fallar el objetivo va a `testdata/fuzz/FuzzLex/` y pasa a ser una semilla.
 
 ## Tests primero
 
 {{cards}}
 
-Úsalas como siempre: escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`. Describen el final del capítulo; cada sesión dice qué filas esperan.
+Escribe el test de cada tarjeta, míralo fallar, implementa y solo entonces despliega su referencia. Describen el final del capítulo; cada sesión dice qué filas aplaza.
 
-:::more Los ayudantes de test, sesión por sesión
-Están al principio de cada fichero de test, en `ref/ch05-sK`. Los tests del lexer van en `package syntax_test`, salvo T05.65, que mira por dentro `bracketStack`. Un directorio admite los dos paquetes de test, y la función de T05.65 no es `TestLineRule` sino `TestBracketStack`, porque en este libro cada `TestXxx` vive en un solo fichero.
+:::more Los ayudantes de test
+Están al principio de cada fichero de test, en `ref/ch05-sK`.
 
-- **Sesión 1, `lexer_test.go`.** `lexAll` y `lexFile` lexan un texto y devuelven los tokens y el sink (`lexFile`, además, el id del fichero y el interner); `lexKinds` y `wantKinds` comparan la lista de tipos; `dumpTokens` devuelve el volcado. `wantOne`, de `source_check_test.go` (capítulo 3), exige un único diagnóstico con su código, mensaje, span y etiqueta.
-- **Sesión 2, `numbers_test.go`.** `intValues` y `floatValues` sacan los valores de los literales, `wantNoDiags` exige cero diagnósticos, `wantKindList` compara los tipos de un buffer y `wantIntsAndName`, los enteros y, opcionalmente, el nombre de un token.
-- **Sesión 3, `strings_test.go`.** `shape` escribe cada token como en el volcado y `wantShape` compara esa lista; `wantSpans`, `wantNewlines`, `wantOrdered` y `wantText` comprueban spans, `NewlineBefore`, que los `Lo` no decrezcan y el texto de un string; `wantBadEscape`, `wantUnterminated` y `wantBadChar` exigen un único E0106, E0110 o E0108.
-- **Sesión 4, `line_rule_test.go`.** Una fila `lineRow` lleva el texto, la forma de sus tokens, los spans de sus `Newline` y cuántos diagnósticos da, y `checkLineRows` comprueba las tres cosas.
-- **Sesión 4, `update_test.go`.** `runUpdate` ejecuta el runner con `Update` sobre un fichero temporal con una salida inventada y devuelve el fichero resultante y el informe, y `checkUpdateRows` recorre filas `updateRow` con lo mismo.
+- **`lexer_test.go`.** `lexAll` y `lexFile` lexan un texto y devuelven los tokens y el sink (`lexFile`, además, el id del fichero y el interner); `lexKinds` y `wantKinds` comparan la lista de tipos; `dumpTokens` devuelve el volcado. `wantOne`, de `source_check_test.go` (capítulo 3), exige un único diagnóstico con su código, mensaje, span y etiqueta.
+- **`numbers_test.go`.** `intValues` y `floatValues` sacan los valores de los literales, y `wantNoDiags` exige cero diagnósticos.
+- **`strings_test.go`.** `shape` escribe cada token como en el volcado y `wantShape` compara esa lista.
+- **`line_rule_test.go`.** Una fila `lineRow` lleva el texto, la forma de sus tokens, los spans de sus `Newline` y cuántos diagnósticos da, y `checkLineRows` comprueba las tres cosas.
+- **`update_test.go`.** `runUpdate` ejecuta el runner con `Update` sobre un fichero temporal y devuelve el fichero resultante y el informe.
 :::
 
 ## Implementación
@@ -199,7 +194,7 @@ Están al principio de cada fichero de test, en `ref/ch05-sK`. Los tests del lex
 
 #### Los tests, en rojo
 
-1. **Escribe T05.01–T05.13.** Describen esta interfaz:
+1. **Escribe T05.01–T05.13,** en `package syntax_test`. Describen esta interfaz:
 
 ```go
 //go:generate go run ./gen -o token_kind.go     // in token.go
@@ -224,7 +219,7 @@ FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
 ```
 
 4. **Escribe la lista, el generador y `token.go`,** y ejecuta `go generate ./internal/syntax`.
-5. **Añade dos stubs,** porque el paquete de test no compila sin los dos: `Lex` devuelve `TokenBuffer{Tokens: []Token{{Kind: Eof}}}` y `DumpTokens`, `""`. T05.01, T05.02 y `empty_file_is_eof` pasan; los demás subtests de `TestLexer` fallan sin panic: `unexpected_char_E0104` usa `t.Fatalf` antes de leer `tb.Tokens[1]`.
+5. **Añade dos stubs** para que compile: `Lex` devuelve `TokenBuffer{Tokens: []Token{{Kind: Eof}}}` y `DumpTokens`, `""`. Pasan las tres primeras tarjetas; las demás fallan sin panic si compruebas la longitud con `t.Fatalf` antes de indexar.
 
 #### El código
 
@@ -232,40 +227,23 @@ FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
 
 {{file ch05-s1 internal/syntax/gen/main.go}}
 
+`gen` usa el `FlagSet` global de `flag` (`flag.String`, `flag.Parse`), que ante un flag malo sale con 2. Aquí sirve, porque nadie lo ejecuta en proceso.
+
+En la ayuda de `-o`, las comillas invertidas nombran el argumento: `-h` imprime `-o file`.
+
 {{file ch05-s1 internal/syntax/token.go}}
 
-`Token` no guarda texto y ocupa 24 bytes (`unsafe.Sizeof`): `Payload` apunta a las tablas de `TokenBuffer`, la idea del capítulo 4.
+`Token` no guarda texto y ocupa 24 bytes: `Payload` apunta a las tablas de `TokenBuffer`, la idea del capítulo 4.
 
-El `token_kind.go` generado declara sus nombres con `[...]string{KwFn: "KwFn", …}`, un literal de array con claves: el compilador cuenta el tamaño, y cambiar el orden de la lista no desplaza la tabla.
+`token_kind.go` declara sus nombres con `[...]string{KwFn: "KwFn", …}`, un literal de array con claves: el compilador cuenta el tamaño, y reordenar la lista no desplaza la tabla.
 
 {{file ch05-s1 internal/syntax/lexer.go}}
 
-- **`Lex`** ejecuta primero `CheckSource` (capítulo 3): un fichero rechazado da solo `Eof`, y todo buffer acaba en `Eof`, así que ningún pase posterior comprueba el final.
-- **`switch c := lx.src[lx.pos]; {`** es un `switch` con sentencia inicial: `c` se ve en todos los `case`, y sin expresión, cada `case` es una condición.
+- **`switch c := lx.src[lx.pos]; {`** lleva sentencia inicial: `c` se ve en todos los `case`, y sin expresión, cada `case` es una condición.
 - **`punctuation`** es el maximal munch. `return two('.', DotDot, Dot)` devuelve los tres resultados del closure `two`.
-- **`DumpTokens`** pide a `sm.LineCol` cada posición, y `LineCol` recuenta la línea cada vez: en una línea larga, el coste es cuadrático hasta la sesión 4.
-
-:::more Los flags de `gen`, comentarios anidados, `ident` y `bufio.Scanner`
-**El generador.**
-
-- `gen` usa el `FlagSet` global de `flag` (`flag.String`, `flag.Parse`), que ante un flag malo sale con 2: aquí sirve, porque nadie lo ejecuta en proceso. En el texto de ayuda de `-o`, ``this `file` instead of stdout``, la palabra entre comillas invertidas es el nombre del argumento: `-h` imprime `-o file`.
-- `parse` corta la lista con `strings.Cut` (capítulo 3) y rechaza nombres repetidos, palabras clave sin texto o con el de otra (`keywords` tendría una clave repetida y no compilaría) y más de 256 clases, que no cabrían en un `uint8`.
-- `generate` escribe en un `bytes.Buffer` con `fmt.Fprintf(&b, …)` y pasa el resultado por `format.Source`, que no comprueba tipos, solo la sintaxis: sobre `package p\nfunc {` devuelve `2:6: expected 'IDENT', found '{'`.
-- Si añades `KwLoop` a la lista y no regeneras, T05.01 falla con ``token_kind.go differs from the output of `go run ./gen`: run `go generate ./internal/syntax` ``.
-- La cabecera tiene que casar entera con `^// Code generated .* DO NOT EDIT\.$`, la convención de `go help generate`.
-
-**El lexer y sus tests.**
-
-- En `punctuation`, quita el `case '>'` del `=` y T05.04 falla.
-- `at(i)` devuelve el byte `i` posiciones más allá, o 0 pasado el final; un 0 real no llega, porque `CheckSource` lo rechaza.
-- `//` se para antes del `\n`, que anota el `case` del salto. `/* */` cuenta niveles: sin el `depth++`, el primer `*/` lo cierra todo, y `nested_block_comment` y `unterminated_block_comment_E0103` fallan.
-- Un `&` solo no es un token: su `case` no devuelve nada y `punctuation` acaba en `return 0, 0, false`.
-- `ident` decide la clase por el primer carácter y busca con `keywords[string(text)]`, una conversión que no reserva memoria porque el compilador ve que solo sirve para buscar (capítulo 4, ejercicio 3).
-- `DumpTokens` cita los textos con `strconv.Quote`, como `%q`, y escribe los `Float` con `strconv.FormatFloat(v, 'g', -1, 64)`, la forma más corta que vuelve a leerse igual.
-- Con `t.Errorf` en lugar de `t.Fatalf`, el índice de `unexpected_char_E0104` haría panic y cortaría el binario.
-
-**Lo justo de `bufio.Scanner`.** El generador usa `os.ReadFile` y `strings.Split`; lo habitual para leer por líneas es `sc := bufio.NewScanner(r)`, `for sc.Scan() { line := sc.Text() }` y `sc.Err()` al final. El `Scanner` quita el `\r` de un CRLF, y una línea de 64 KiB o más (`bufio.MaxScanTokenSize`) detiene el bucle con `bufio.Scanner: token too long`.
-:::
+- **`ident`** busca con `keywords[string(text)]`, una conversión que no reserva memoria (capítulo 4, ejercicio 3).
+- **`visible`** escribe como `<U+XXXX>`, en los mensajes, lo que `unicode.IsPrint(r)` rechaza.
+- **`DumpTokens`** cita los textos con `strconv.Quote` y escribe los `Float` con `strconv.FormatFloat(v, 'g', -1, 64)`, la forma más corta que vuelve a leerse igual. Hasta la sesión 4 es cuadrático en una línea larga: `LineCol` la recuenta en cada token.
 
 {{reftest T05.04}}
 
@@ -273,14 +251,14 @@ El `token_kind.go` generado declara sus nombres con `[...]string{KwFn: "KwFn", �
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch05-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch05-s1` (mensaje: `ch05-s1: tokens, go generate and the lexer skeleton`); compárate con `ref/ch05-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch05-s1`; compárate con `ref/ch05-s1`.
 
 ### Sesión 2: números (≈ 2 h)
 
 #### Los tests, en rojo
 
 1. **Escribe T05.14–T05.26.**
-2. **Míralos fallar.** Compilan, y los subtests de `TestNumbers` fallan sin panic: hoy cada dígito es un E0104 (`got 19 diagnostics, want none`).
+2. **Míralos fallar.** Compilan, y fallan sin panic: hoy cada dígito es un E0104.
 
 #### El código
 
@@ -288,27 +266,9 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s1` (mensaje: `ch05-s1:
 
 {{file ch05-s2 internal/syntax/numbers.go}}
 
-- **`digitRun`** recibe la clase de dígito como un valor de tipo función, `isDigit func(byte) bool`, y sirve a las tres bases. En sus resultados, `_` deja el primero sin nombre, y `trailing` nombra el segundo.
-- **El punto y la `e`.** Un `.` es parte del número solo si lo sigue un dígito (si no, `1..2` empezaría por un `Float`), y una `e`, solo si la siguen dígitos, con signo opcional.
-- **`emitInt`** hace `panic` para marcar un invariante: el lexer ya comprobó los dígitos, así que el único error posible es el de rango.
-- **E0105 y E0109 (desbordamiento).** Sin el `v = 0`, T05.17 recibe el máximo de `ParseInt`.
-
-:::more Números: casos raros (`0X1`, `0b102`, `12abc`) y `ParseInt` y `ParseFloat` en los límites
-Los prefijos van en minúscula, así que `0X1` es `Int(0)` y el nombre `X1`. Un dígito que la base no tiene termina el literal (`0b102` son `Int(2)` e `Int(2)`), y `12abc` es `Int(12)` y `LowerIdent(abc)`, sin diagnóstico: esos pares son del parser. Y `0x_FF` vale 255. T05.14 fija esos casos; T05.20, `0b2`, `0xg`, ``0x` `` y `0x@`, con E0107 sobre el prefijo (los dos últimos, más un E0104).
-
-Sin la condición del punto, `1..2` da `kinds [Float Dot Int Eof], want [Int DotDot Int Eof]` y `1.abs`, un `Float` seguido de un nombre. Si `radixInt` llamara siempre con base 10, `0b1010` valdría 1010, y `0xFF` llegaría al `panic` de `emitInt`: `unreachable: strconv.ParseInt: parsing "FF": invalid syntax`.
-
-**`ParseInt` y `ParseFloat` en los límites.** Además de `Err`, `NumError` lleva `Func` (`"ParseInt"`) y `Num` (el texto). Una base o un tamaño inválidos dan otras causas. Con signo, `ParseInt` da el extremo de su signo y `ParseFloat`, ±Inf; los literales del lexer no llevan signo. En Go 1.27:
-
-| Llamada | Resultado |
-|---|---|
-| `ParseInt("9223372036854775808", 10, 64)` | `9223372036854775807` y `strconv.ParseInt: parsing "9223372036854775808": value out of range` |
-| `ParseInt("", 16, 64)` | `0` y `invalid syntax` |
-| `ParseInt("1_000", 10, 64)` | `0` y `invalid syntax` (con base 0, `1000`) |
-| `ParseFloat("1e999", 64)` | `+Inf` y `value out of range` |
-| `ParseFloat("1e-999", 64)` | `0` y `nil` |
-| `ParseFloat("1_000.5", 64)` | `1000.5` y `nil`; con `1__0.5`, `invalid syntax` |
-:::
+- **`digitRun`** recibe la clase de dígito como valor de tipo función, `isDigit func(byte) bool`, y sirve a las tres bases. En sus resultados, `_` deja el primero sin nombre.
+- **El punto y la `e`.** Un `.` es del número solo si lo sigue un dígito (si no, `1..2` empezaría por un `Float`); una `e`, solo si la siguen dígitos, con signo opcional.
+- **`emitInt`** marca un invariante con `panic`: con los dígitos ya comprobados, solo cabe el error de rango.
 
 {{reftest T05.17}}
 
@@ -316,7 +276,7 @@ Sin la condición del punto, `1..2` da `kinds [Float Dot Int Eof], want [Int Dot
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch05-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch05-s2` (mensaje: `ch05-s2: number literals`); compárate con `ref/ch05-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch05-s2`; compárate con `ref/ch05-s2`.
 
 ### Sesión 3: caracteres, strings e interpolación (≈ 2 h)
 
@@ -327,7 +287,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s2` (mensaje: `ch05-s2:
    - en T05.32, las cuatro que acaban en `x` tras el salto;
    - en T05.36, `a\n  "abc\nx` y `a\n"abc`;
    - en T05.41, las seis cuyo último token antes del salto cierra una expresión, y `a\n"${\nx`.
-3. **Míralos fallar.** Los subtests de `TestStrings` fallan sin panic: hoy una comilla es E0104.
+3. **Míralos fallar.** Fallan sin panic: hoy una comilla es E0104.
 
 #### El código
 
@@ -335,11 +295,8 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s2` (mensaje: `ch05-s2:
 
 {{file ch05-s3 internal/syntax/strings.go}}
 
-- **Escapes.** Uno inválido da E0106, aporta U+FFFD y consume la barra y el carácter siguiente con todos sus bytes: con `lx.pos += 2`, `"\é"` partiría la `é`. En `\u{…}`, de 1 a 6 cifras, `v<<4 | rune(hexValue(c))` no se desborda: seis cifras son 24 bits.
-- **Una barra al final de la línea** no es un escape: `escape` la salta y quien llama da E0110 o E0108.
-- **`${`** emite `StringHead` o `StringMid`, apila el centinela y un `modeCode`, y `Lex` sigue con tokens normales.
-- **La `}`.** `endInterpolation` solo actúa con el centinela en la cima. `trackBraces` apila las llaves normales: sin él, la primera `}` de `"${ {} }"` cerraría la interpolación.
-- **`unterminated`** sustituye los `StringHead` y `StringMid` sin final por un único `Error`, **en el sitio del primer token** del string más externo, con los tokens de las expresiones detrás. Con el `Error` al final, los spans retrocederían. Como `append(toks[:outer.first], Token{…})` reutiliza el array, antes copia lo que conserva en `kept`.
+- **Escapes.** Uno inválido aporta U+FFFD. `utf8.AppendRune(b, r)` añade la codificación de un escalar a un `[]byte`.
+- **`unterminated`** sustituye los `StringHead` y `StringMid` sin final por un único `Error`, **en el sitio del primer token**: al final, los spans retrocederían. Como `append(toks[:outer.first], Token{…})` reutiliza el array, antes copia lo que conserva en `kept`.
 
 {{reftest T05.38}}
 
@@ -347,17 +304,21 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s2` (mensaje: `ch05-s2:
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch05-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch05-s3` (mensaje: `ch05-s3: chars, strings and interpolation`); compárate con `ref/ch05-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch05-s3`; compárate con `ref/ch05-s3`.
 
 ### Sesión 4: la regla de línea, `ki emit tokens`, `--update` y el primer fuzz (≈ 2 h)
 
 #### Los tests, en rojo
 
-1. **Devuelve a T05.07, T05.32, T05.36 y T05.41 sus `Newline`.** En T05.07, cuatro tokens y `NewlineBefore` en `false, false, true, false`; las otras tres, como en este diff:
+1. **Devuelve a T05.07, T05.32, T05.36 y T05.41 sus `Newline`.** T05.07 pasa a cuatro tokens y `NewlineBefore` en `false, false, true, false`; las otras, como en este diff:
 
 {{diff ch05-s3..ch05-s4 internal/syntax/strings_test.go}}
 
-2. **Escribe T05.42–T05.67.** T05.65 (`TestBracketStack`) va en `line_rule_internal_test.go`, con `package syntax`, porque `bracketStack` no se exporta. La interfaz nueva:
+2. **Escribe T05.42–T05.67.** Dos llevan un paquete propio:
+   - T05.65, en `line_rule_internal_test.go` con `package syntax`, porque `bracketStack` no se exporta, y su propio `TestXxx`.
+   - T05.67, en `gen/main_test.go` con `package main`.
+
+   La interfaz nueva:
 
 ```go
 // package driver
@@ -393,36 +354,24 @@ func (s *bracketStack) enter()               // an interpolation starts
 func (s *bracketStack) leave()               // it ends: close the brackets opened inside it
 ```
 
-3. **Míralos fallar.** Hay cuatro rojos: `internal/kitest` e `internal/syntax` no compilan, fallan cinco subtests de `TestCLI` y el golden `ch05/line_rule.ki` sale con 2 en lugar de 0.
-
-:::more Qué falla sobre `ch05-s3`, paquete por paquete
-- **`internal/kitest`** no compila: `unknown field Update in struct literal of type kitest.Runner`.
-- **`internal/syntax`** tampoco mientras exista `line_rule_internal_test.go` (`undefined: bracketStack`). Sin ese fichero compila, y fallan `line_comment_skipped`, `dump_tokens`, los tres subtests de `TestStrings` que acabas de cambiar y los de `TestLineRule` que esperan algún `Newline` (todos menos `no_newline_after_operator`).
-- **`internal/driver`.** Fallan cinco subtests de `TestCLI`: los de `emit`, porque el comando no existe (`unknown target: got 2 "" "usage: ki <command> [args]\ncommands: --version, version, check, test\n"`), y los que esperan `emit` en la lista de comandos o `--update` en `ki test`.
-- **`tests`.** El golden `ch05/line_rule.ki` sale con 2 en lugar de 0.
-- **Ya pasan** `FuzzLex`, que verás fallar al final de la sesión, y `TestGen` (T05.67, en `gen/main_test.go` con `package main`: prueba el `parse` del generador).
-:::
+3. **Míralos fallar.** `internal/kitest` e `internal/syntax` no compilan, fallan cinco subtests de la CLI y el golden `ch05/line_rule.ki` sale con 2 en lugar de 0. Ya pasa `gen`.
 
 #### La regla de línea
 
 {{file ch05-s4 internal/syntax/line_rule.go}}
 
-- **Una pasada al final.** Al llegar al `Eof`, `insertSeparators` pone un `Newline` donde se cumplen las tres condiciones.
-- **`bracketStack`** guarda los delimitadores abiertos y un contador por clase. Un cierre sin pareja (contador a 0) no hace nada; uno con pareja saca lo de encima con `for s.pop() != want {}`, un bucle de cuerpo vacío: el trabajo lo hace la condición.
-- **Coste lineal.** Cada delimitador entra y sale una vez como mucho.
-- **`enter` y `leave`.** `StringHead` abre un nivel y `StringTail` lo cierra. Sin `leave`, `"${ f(a }"` dejaría el `(` abierto y apagaría los saltos de todo el resto del fichero.
+- **Una pasada al final.** `insertSeparators` recorre los tokens con su propia pila, que sí lleva `(` y `[`, y pone cada `Newline`.
+- **`bracketStack`** guarda los delimitadores abiertos y un contador por tipo. `*s.count(open)++` incrementa el contador a través del puntero que devuelve `count`.
+- **Un cierre** sin pareja (contador a 0) no hace nada. Con pareja, saca lo de encima con `for s.pop() != want {}`, un bucle de cuerpo vacío. Ningún delimitador entra ni sale dos veces: coste lineal.
+- **`enter` y `leave`.** `StringHead` abre un nivel y `StringTail` lo cierra: sin `leave`, `"${ f(a }"` dejaría el `(` abierto y apagaría los saltos del resto del fichero.
 
 {{diff ch05-s3..ch05-s4 internal/syntax/lexer.go}}
 
-`DumpTokens` pasa a ser lineal: si entre dos tokens no hay `\n` (`bytes.IndexByte`), suma a la columna los code points que los separan (`utf8.RuneCount`).
+`DumpTokens` pasa a ser lineal: sin `\n` entre dos tokens, suma a la columna los code points que los separan (`utf8.RuneCount`).
+
+Su test se salta la fila larga si falló una corta (`if t.Failed() { return }`): un volcado lento agotaría el tiempo y escondería los mensajes.
 
 {{reftest T05.52}}
-
-:::more `*s.count(open)++`, `newlineAfter` y el `DumpTokens` lineal
-**Regla de línea.** `endsExpression` y `continuesLine` son las dos listas de la regla. `Error` no está en `endsExpression`: añádelo y T05.52 falla. `count` devuelve un puntero al contador, y `*s.count(open)++` lo incrementa a través de él. Si cada cierre buscara su pareja por toda la pila, `go test -timeout 60s` cortaría T05.65, que no mide tiempos. `leave` saca con `pop`, que descuenta: si recortara la pila sin más, T05.65 vería mal los contadores. Un string que no termina no tiene `StringTail`: lo cierra el primer salto de línea tras su `Error`. `newlineAfter` da al `Newline` el span del primer terminador tras el token anterior: el `\n`, o el `\r\n` entero.
-
-**`DumpTokens`.** Solo el primer token de cada línea pregunta a `LineCol`. T05.64 usa dos millones de strings `"ñ"` en una línea, y esa fila solo corre si las cortas pasaron (`if t.Failed() { return }`), para que un `DumpTokens` erróneo y lento no esconda sus mensajes tras el tiempo máximo.
-:::
 
 #### `ki emit tokens` y `ki check`
 
@@ -434,6 +383,10 @@ func (s *bracketStack) leave()               // it ends: close the brackets open
 
 `ki check` llama ahora a `Lex`, que ya ejecuta `CheckSource`: llamar a las dos daría cada E0101 dos veces.
 
+`NewSession` crea el `Interner` con `base.NewInterner()`: su valor cero no sirve, `Intern` haría panic con un puntero nulo.
+
+Un golden comprueba el comando entero:
+
 {{file ch05-s4 tests/golden/ch05/line_rule.ki}}
 
 #### `ki test --update`
@@ -444,8 +397,14 @@ func (s *bracketStack) leave()               // it ends: close the brackets open
 
 {{diff ch05-s3..ch05-s4 internal/kitest/runner.go}}
 
-- `updateFile` solo reescribe `expect-stdout` y `expect-stderr`: si ajustara el `expect-exit`, un panic nuevo se aprobaría con solo ejecutar `--update`.
-- `runHere` solo reescribe si `exit >= 0`, porque una ejecución que no llegó a salir (-1) no tiene salida que guardar. Tras reescribir, ejecuta otra vez: las líneas añadidas mueven el código.
+- Solo toca `expect-stdout` y `expect-stderr`: si ajustara el `expect-exit`, `--update` aprobaría un panic nuevo.
+- Solo reescribe si `exit >= 0`: una ejecución que no llegó a salir (-1) no tiene salida que guardar.
+
+:::more Cómo reescribe `--update` un fichero
+`rewriteExpectations` corta el fichero con `bytes.SplitAfter`, que deja cada `\n` pegado a su línea. No edita en el sitio: anota cada cambio como un `edit` (dónde, cuántas líneas quita, cuáles pone). Los ordena con `slices.SortStableFunc` (estable, para que stdout siga delante de stderr si van al mismo sitio) y copia el fichero intercalándolos. Lo demás pasa tal cual, con su BOM y sus CRLF.
+
+`var errText *string` es un puntero que puede ser `nil`: con anotaciones, stderr no se escribe.
+:::
 
 #### El primer fuzz
 
@@ -453,26 +412,16 @@ func (s *bracketStack) leave()               // it ends: close the brackets open
 
 1. **Ejecútalo una vez:** `go test ./internal/syntax -run='^$' -fuzz=FuzzLex -fuzztime=10s` termina en `PASS` y no escribe nada en `testdata/`.
 2. **Rómpelo.** En `lineEndAt`, cambia `i+1 < len(lx.src)` por `<=`.
-3. **Ejecútalo otra vez.** En segundos, el motor encuentra una entrada que hace panic (una comilla sin cerrar y un `\r` como último byte), la guarda en `testdata/fuzz/FuzzLex/` e imprime `go test -run=FuzzLex/<nombre>`.
+3. **Ejecútalo otra vez.** En segundos, encuentra una entrada que hace panic, la guarda en `testdata/fuzz/FuzzLex/` e imprime `go test -run=FuzzLex/<nombre>`.
 4. **Deshaz el cambio y borra el fichero.**
-
-:::more Destinos de `ki emit`, cómo edita `--update` y las semillas de `FuzzLex`
-**`ki emit`.** El destino va primero y sus flags después, así que `ki emit --diagnostics=short tokens` es un destino desconocido; en cambio, `-h`, `-help` y `--help` en su lugar piden ayuda, como `ki emit tokens -h`: `printUsage` escribe la línea de uso por stdout y sale con 0 (T05.61). `fileArgs` sale de `runCheck` para servir a los dos. `NewSession` crea el `Interner` con `base.NewInterner()` porque el valor cero no sirve: `var in base.Interner; in.Intern(…)` hace panic con un puntero nulo.
-
-**`--update`.** `rewriteExpectations` corta el fichero con `bytes.SplitAfter`, que deja cada `\n` pegado a su línea. No edita en el sitio: anota cada cambio como un `edit` (dónde, cuántas líneas quita, cuáles pone), los ordena con `slices.SortStableFunc` (estable, para que stdout siga delante de stderr si van al mismo sitio) y copia el fichero intercalándolos; lo demás pasa tal cual, con su BOM y sus CRLF.
-
-`var errText *string` es un puntero que puede ser `nil`: con anotaciones, stderr no se escribe. En `runHere`, `run` es un closure que vacía los dos buffers y ejecuta el fichero. Quita la condición `exit >= 0` y T05.66 lo ve: con un programa que no existe, el `expect-stderr` del fichero pasa a ser `ki test: cannot run /nonexistent/ki: …`.
-
-**`FuzzLex`.** El `<=` de `lineEndAt` también lo caza T05.28, pero el fuzzer llega sin que nadie le diga dónde mirar. `a\r\nb`, `f(a\n)` y `{\na\n}` llevan a `go test` a la regla de línea, y las tres últimas semillas, strings sin cerrar con tokens en su interpolación, obligan a `unterminated` a moverlos. La quinta propiedad pide a `DumpTokens` una línea por token que empiece por la posición línea:columna de `LineCol` y el tipo; como un `LineCol` por token es cuadrático en una línea larga, solo se comprueba hasta 16 KiB.
-:::
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch05-s4` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch05-s4` (mensaje: `ch05-s4: the line rule, ki emit tokens, --update and the first fuzz target`); compárate con `ref/ch05-s4`.
+Al terminar: tus tests en verde, commit y etiqueta `ch05-s4`; compárate con `ref/ch05-s4`.
 
 ## Ejecútalo
 
-Desde la raíz de tu repo, con la sesión 4 terminada y `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el programa del objetivo:
+Desde la raíz de tu repo, con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el programa del objetivo:
 
 ```console
 $ build/bin/ki emit tokens fib.ki
@@ -502,7 +451,7 @@ $ build/bin/ki emit tokens fib.ki
 6:1 Eof
 ```
 
-No hay `Newline` tras `LBrace`, que no cierra una expresión, ni delante del `Eof`. Con dos errores, el volcado sale por stdout, los diagnósticos por stderr y el código es 1:
+No hay `Newline` tras `LBrace`, que no cierra una expresión. Con errores, el volcado sale por stdout, los diagnósticos por stderr y el código es 1:
 
 ```console
 $ cat bad.ki
@@ -534,9 +483,14 @@ $ echo $?
 1
 ```
 
-Y `--update` sobre un golden desfasado, `up/a.ki`, con `// test: T00.01`, `// run: emit tokens`, `// expect-stdout: 1:1 Eof` y el código `let a = 1`:
+Y `--update` sobre un golden desfasado:
 
 ```console
+$ cat up/a.ki
+// test: T00.01
+// run: emit tokens
+// expect-stdout: 1:1 Eof
+let a = 1
 $ build/bin/ki test --update up
 FAIL up/a.ki
 - 4:1 KwLet
@@ -547,12 +501,12 @@ PASS up/a.ki
 ki test: 1 passed, 0 failed
 ```
 
-La primera pasada escribe cinco líneas de volcado, que mueven el código de la línea 4 a la 9, y por eso falla; la segunda lo deja estable.
+La primera pasada añade cinco líneas, que mueven el código de la línea 4 a la 9; el mismo comando repite la ejecución y falla. La segunda lo deja estable.
 
 ## Ejercicios
 
 :::exercise
-**1. `ki emit tokens --stats`.** Añade un flag que, en lugar del volcado, imprima cuántos tokens hay de cada tipo, una línea `<Kind> <count>` por tipo, ordenadas por nombre. Con su test.
+**1. `ki emit tokens --stats`.** Añade un flag que, en lugar del volcado, imprima una línea `<Kind> <count>` por tipo de token, ordenadas por nombre. Con su test.
 :::
 
 :::solution
@@ -605,7 +559,7 @@ func tokenStats(tb *syntax.TokenBuffer) string {
 }
 ```
 
-`fs.BoolVar`, como `fs.String` pero booleano, escribe en `stats`. Un `[256]int` indexado por la clase hace de mapa sin orden aleatorio. La línea de uso pasa a ser `ki emit tokens [--stats] [--diagnostics=human|short|json] FILE`, y hay que cambiarla también en la constante `usage` de `emit_unknown_target`. El test, en `TestCLI`:
+`fs.BoolVar`, como `fs.String` pero booleano, escribe en `stats`. Un `[256]int` indexado por el tipo hace de mapa sin orden aleatorio. La línea de uso pasa a ser `ki emit tokens [--stats] [--diagnostics=human|short|json] FILE`, también en la constante `usage` del test de `emit` con un destino desconocido. El test, en `TestCLI`:
 
 ```go
 t.Run("emit_tokens_stats", func(t *testing.T) {
@@ -622,7 +576,7 @@ t.Run("emit_tokens_stats", func(t *testing.T) {
 })
 ```
 
-Sin el `SortFunc` (y sin el import de `slices`, que se queda sin uso), las líneas salen en el orden de las constantes y el test falla: `LParen 1\nRParen 1\nLowerIdent 3\nNewline 1\nEof 1\n`.
+Sin el `SortFunc` (y sin el import de `slices`, que se queda sin uso), las líneas salen en el orden de las constantes y el test falla.
 :::
 
 :::exercise
@@ -630,7 +584,9 @@ Sin el `SortFunc` (y sin el import de `slices`, que se queda sin uso), las líne
 :::
 
 :::solution
-`-` y `+` también son prefijos: `-b` es una expresión completa. Si continuaran la línea, `let x = a⏎-b` sería una resta, y el significado de un bloque dependería de dónde se parte una línea. En Ki son dos sentencias (T05.47); para partir una suma, el operador va al final: `a +⏎b` no recibe `Newline` (T05.44). `|>` no puede empezar una expresión, así que una línea que empieza por él solo puede continuar la anterior: `xs⏎  |> sum` es una sentencia (T05.45). Igual con `.`, `&&`, `||` y `else`; no con `|` solo, que empieza un brazo de patrón.
+`-` y `+` también son prefijos: `-b` es una expresión completa. Si continuaran la línea, `let x = a⏎-b` sería una resta, y el significado de un bloque dependería de dónde se parte una línea. En Ki son dos sentencias; para partir una suma, el operador va al final: `a +⏎b` no recibe `Newline`.
+
+`|>` no puede empezar una expresión, así que una línea que empieza por él solo puede continuar la anterior: `xs⏎  |> sum` es una sentencia. Igual con `.`, `&&`, `||` y `else`; no con `|` solo, que empieza un brazo de patrón.
 :::
 
 :::exercise
@@ -672,11 +628,11 @@ func FuzzDumpIsStable(f *testing.F) {
 }
 ```
 
-Con el lexer de la sesión 4 pasa, también diez segundos con `-fuzz`. Lo que vigila es que el resultado dependa solo del texto: un estado que sobreviva entre dos llamadas a `Lex`, o un volcado que imprima números de símbolo en lugar de nombres. Este último mutante, `(%d)` con `tok.Payload` en `DumpTokens`, falla en las tres semillas.
+Lo que vigila es que el resultado dependa solo del texto: un estado que sobreviva entre dos llamadas a `Lex`, o un volcado que imprima números de símbolo en lugar de nombres. Este último mutante, `(%d)` con `tok.Payload` en `DumpTokens`, falla en las tres semillas.
 :::
 
 :::exercise
-**4. Un mega de Ki.** Mide `Lex` con un fichero de 1 MB (`b.Loop`, `-benchmem`) y explica las reservas que quedan con el perfil de memoria: `-memprofile` y `go tool pprof -sample_index=alloc_space`, como el de CPU del capítulo 4.
+**4. Un mega de Ki.** Mide `Lex` con un fichero de 1 MB (`b.Loop`, `-benchmem`) y explica las reservas que quedan con el perfil de memoria: `-memprofile` y `go tool pprof -sample_index=alloc_space`.
 :::
 
 :::solution
@@ -705,7 +661,11 @@ func BenchmarkLex(b *testing.B) {
 }
 ```
 
-`b.SetBytes` añade la columna MB/s. En esta máquina, unos 20 ms por operación, 65,8 MB y 28 655 reservas. Con `-memprofile mem.out` y `go tool pprof -sample_index=alloc_space -top`, dos tercios de los bytes son el `append` de `emit`, que hace crecer `Tokens` copiándolo varias veces, y algo más de una cuarta parte, `insertSeparators`, que reserva `out` con `len(toks)` y crece porque cada `Newline` es un token de más. Las reservas salen, según `alloc_objects` (con `-lines`), de tres líneas: la conversión `string(text)`, que copia cada trozo de string, y dos `append` que parten de un slice vacío, el `digitRun(nil, …)` de un hexadecimal y el del escape `\n`.
+`b.SetBytes` añade la columna MB/s. Salen unos 20 ms por operación, 65,8 MB y 28 655 reservas.
+
+Con `-memprofile mem.out` y `go tool pprof -sample_index=alloc_space -top`, dos tercios de los bytes son el `append` de `emit`, que hace crecer `Tokens` copiándolo varias veces. Algo más de una cuarta parte es `insertSeparators`, que reserva `out` con `len(toks)` y crece porque cada `Newline` es un token de más.
+
+Las reservas salen, según `alloc_objects` (con `-lines`), de tres líneas: la conversión `string(text)`, que copia cada trozo de string, y dos `append` que parten de un slice vacío, el `digitRun(nil, …)` de un hexadecimal y el del escape `\n`.
 :::
 
 :::exercise
@@ -761,13 +721,13 @@ t.Run("int_octal", func(t *testing.T) {
 })
 ```
 
-Veintiún sietes son 63 bits a uno, el mayor `Int`; un 1 y 21 ceros, 2⁶³. `code` es `uint16` porque `diag.E` lo pide. `0o8` da E0107 sobre `0o` y después `Int(8)`, como `0b2` en T05.20. Sin el `case`, la primera fila da `Ints [0]`; con `c <= '8'`, `0o8` llega al `panic` de `emitInt`. `0O17` sigue siendo `Int(0)` y `UpperIdent(O17)`.
+Veintiún sietes son 63 bits a uno, el mayor `Int`; un 1 y 21 ceros, 2⁶³. `code` es `uint16` porque `diag.E` lo pide. `0o8` da E0107 sobre `0o` y después `Int(8)`, como `0b2`. Con `c <= '8'`, `0o8` llega al `panic` de `emitInt`.
 :::
 
 ## Preguntas de repaso
 
 :::review
-¿Por qué un literal que desborda deja un token `Int` con valor 0, y no el valor que devuelve `ParseInt` ni ningún token?
+¿Por qué un literal que desborda deja un token `Int` con valor 0, y no el valor de `ParseInt` ni ningún token?
 :::
 
 :::answer
@@ -775,11 +735,11 @@ Sin token, el parser daría un segundo error por la misma equivocación. Con el 
 :::
 
 :::review
-¿Por qué `token_kind.go` se versiona en el repositorio y un test lo compara con la salida del generador?
+¿Por qué `token_kind.go` se versiona y un test lo compara con la salida del generador?
 :::
 
 :::answer
-Porque `go generate` no corre solo: sin versionar, el paquete no compilaría hasta generarlo. Y si alguien cambia la lista sin regenerar, una palabra clave nueva se lee como un nombre sin que nada avise; el test lo convierte en un fallo con su remedio.
+Porque `go generate` no corre solo: sin versionar, el paquete no compilaría hasta generarlo. Y si alguien cambia la lista sin regenerar, una palabra clave nueva se lee como un nombre sin que nada avise; el test lo convierte en un fallo que pide regenerar.
 :::
 
 :::review
@@ -799,38 +759,38 @@ Manda el delimitador abierto más interno: dentro de `(` un salto es un espacio,
 :::
 
 :::review
-¿Por qué el `Error` de un string sin cerrar va en el sitio de su primer token y no al final de lo que el lexer ya había emitido?
+¿Por qué el `Error` de un string sin cerrar va en el sitio de su primer token y no al final?
 :::
 
 :::answer
-Porque así los `Lo` no decrecen, que es lo que piden los diagnósticos ordenados por posición y `FuzzLex`. Al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después.
+Porque así los `Lo` no decrecen, que es lo que piden los diagnósticos ordenados por posición y el fuzz target. Al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después.
 :::
 
 :::review
-¿Qué gana un fuzz target frente a una tabla de casos, si los dos comprueban el mismo lexer?
+¿Qué gana un fuzz target frente a una tabla de casos?
 :::
 
 :::answer
-La tabla prueba las entradas que alguien pensó, con su resultado exacto. El fuzz target prueba propiedades con entradas que genera él, guiado por la cobertura, sin que nadie le diga dónde mirar: con `<=` en `lineEndAt` encontró por sí mismo un `\r` como último byte del fichero, dentro de un string sin cerrar. Y lo que encuentra se queda en `testdata/fuzz/` como semilla, que `go test` ejecuta siempre.
+La tabla prueba las entradas que alguien pensó, con su resultado exacto. El fuzz target prueba propiedades con entradas que genera él, guiado por la cobertura: con `<=` en `lineEndAt` encontró por sí mismo un `\r` como último byte del fichero, dentro de un string sin cerrar. Y lo que encuentra se queda en `testdata/fuzz/` como semilla, que `go test` ejecuta siempre.
 :::
 
 ## Resumen
 
-- El lexer trabaja con bytes y solo decodifica donde importa el carácter entero. Maximal munch: cada token es el más largo posible.
-- `errors.Is(err, strconv.ErrRange)` detecta un desbordamiento; el valor que lo acompaña no se guarda.
-- `go generate` solo corre cuando se pide; lo generado se versiona y un test lo vigila.
+- El lexer trabaja con bytes y solo decodifica donde importa el carácter entero. Cada token es el más largo posible.
+- `errors.Is(err, strconv.ErrRange)` detecta un desbordamiento; su valor no se guarda.
+- `go generate` solo corre a mano; lo generado se versiona y un test lo vigila.
 - Una pila de modos y un centinela parten los strings con interpolación.
-- La regla de línea mira el delimitador más interno, el token anterior y la línea siguiente; Go, solo el final de la línea.
+- La regla de línea mira el delimitador más interno, el token anterior y la línea siguiente.
 - Un token `Error` nunca cierra una expresión, y un literal roto deja un token en su sitio.
-- Un fuzz target corre sus semillas con `go test` y busca entradas con `-fuzz`; lo que falla va a `testdata/fuzz/`.
+- Un fuzz target corre semillas con `go test` y busca entradas con `-fuzz`.
 - `ki test --update` reescribe solo las salidas esperadas.
 
 ## Go en el trabajo
 
-**Funciones de estado.** En «Lexical Scanning in Go» (2011), Rob Pike presentó el lexer de `text/template`: cada estado es una función que devuelve el siguiente, `type stateFn func(*lexer) stateFn`, con los tokens por un canal desde una goroutine.
+**Funciones de estado.** En «Lexical Scanning in Go» (2011), Rob Pike presentó el lexer de `text/template`: cada estado es una función que devuelve el siguiente (`type stateFn func(*lexer) stateFn`), y los tokens van por un canal.
 
-Hoy, su `nextItem` ejecuta los estados en un bucle, sin goroutines ni canales. El lexer de Ki es un bucle con un `switch`: la interpolación anidada necesita una pila de modos de todas formas.
+Hoy ese lexer ejecuta los estados en un bucle, sin goroutines ni canales. El de Ki es un bucle con un `switch`: la interpolación anidada pide una pila de modos de todas formas.
 
-**Dos scanners en la biblioteca.** `go/scanner` es el del propio Go; `text/scanner` es genérico, y su campo `Mode` elige qué reconoce con bits como `ScanIdents` o `ScanInts` (por omisión, `GoTokens`).
+La biblioteca trae dos scanners: `go/scanner`, el del propio Go, y `text/scanner`, genérico.
 
-**`go generate` en repositorios reales.** `$GOROOT/src` de Go 1.27 tiene 111 ficheros con una directiva. Según «Generating code» (Rob Pike, blog de Go, 2014), `go generate` es para el autor del paquete, no para sus clientes, y lo generado «must be checked into the source code repository».
+**`go generate` en repositorios reales.** Más de cien ficheros de `$GOROOT/src` lo usan. Según «Generating code» (Rob Pike, blog de Go, 2014), es para el autor del paquete, no para sus clientes. Para llegarles, lo generado «must be checked into the source code repository».
