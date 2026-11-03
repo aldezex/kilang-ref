@@ -31,17 +31,21 @@ fn main() =
   print(x)
 ```
 
-Ya no hay `if` ni `+` ni tipos, y Core Lint ha aceptado el resultado. El capítulo 10 ejecutará este Core para cerrar el hito M1.
+Ya no hay `if` ni `+` ni tipos. El capítulo 10 ejecutará este Core para cerrar el hito M1.
 
-Y un fallo de un pase deja de ser un panic suelto: es un informe con código de salida 70, un ICE (*internal compiler error*), que no es un diagnóstico ni lleva código `E…`.
+Un fallo de un pase deja de ser un panic suelto: es un ICE (*internal compiler error*), un informe con código 70.
 
 ## Teoría
 
 ### Por qué una IR central
 
-Ki tendrá tres backends (intérprete, VM y nativo). Si cada uno leyera el árbol de sintaxis, cada uno decidiría qué significa un `&&`, y acabarían en desacuerdo. Por eso hay un lenguaje pequeño en medio: **Core es la única referencia semántica**, y lo que Core dice que hace un programa es lo que hace.
+Ki tendrá tres backends: intérprete, VM y nativo. Si cada uno leyera el árbol de sintaxis, cada uno decidiría qué significa un `&&`, y acabarían en desacuerdo.
 
-Core no tiene azúcar sintáctico ni tipos, y es **estricto**: evalúa los argumentos antes de la llamada. A la Parte I le bastan nueve clases de nodo: literales (`LitInt`, `LitBool`, `LitUnit`), referencias (`VarRef`, `FunRef`), llamadas (`Call`, `PrimCall`, a una primitiva como `add_int`), `Let` (con su `Init` y su `Body`) y `Match`.
+Por eso hay un lenguaje pequeño en medio. **Core es la única referencia semántica**: lo que Core dice que hace un programa es lo que hace.
+
+No tiene azúcar ni tipos, y es **estricto**: evalúa los argumentos antes de la llamada.
+
+A la Parte I le bastan nueve clases de nodo: literales, referencias (`VarRef`, `FunRef`), llamadas (`Call`, y `PrimCall` a una primitiva como `add_int`), `Let` (con su `Init` y su `Body`) y `Match`.
 
 **La etapa S0.** Core se transforma por etapas, de S0 a S5, todas subconjuntos o extensiones de la misma IR, y cada pase baja de una a la siguiente. Este capítulo solo tiene S0.
 
@@ -57,64 +61,62 @@ Core no tiene azúcar sintáctico ni tipos, y es **estricto**: evalúa los argum
 | `a + b`, `-a` | `add_int(a, b)`, `neg_int(a)` |
 | `a == b` | `eq_int(a, b)` o `eq_bool(a, b)` |
 
-En la salida de `ki emit core`, cada brazo va en su línea, sin `;`.
-
 - **`&&` y `||` son `match`** porque Core es estricto: un `and_bool(a, b)` evaluaría siempre `b`.
-- **`==` se decide aquí** por el tipo del operando izquierdo: es el último pase que conoce los tipos.
-- **Solo corre sobre programas sin errores.** Ante un nodo de error hace panic: si llega uno, el fallo es del compilador.
+- **`==` se decide aquí,** por el tipo del operando izquierdo: es el último pase que conoce los tipos.
+- **Solo corre sobre programas sin errores.** Ante un nodo de error hace panic: el fallo es del compilador.
 
-**Binders únicos y slots.** Un *binder* es lo que introduce una variable: un parámetro o un `let`. Cada uno es una `Var` propia, aunque se llame igual que otra, para que un id baste para saber de qué variable se habla.
+**Binders y slots.** Un *binder* introduce una variable: un parámetro o un `let`. Cada uno es una `Var` propia, aunque se llame igual que otra: un id basta para saber de cuál se habla.
 
 Su `Slot` es su índice en el marco, la memoria de los parámetros y los `let` de una llamada, que usará la máquina del capítulo 10. `FrameSize` cuenta los slots, y nada los reutiliza.
 
-**Las anotaciones `rep`.** Cada `Var` lleva un `Rep`: cómo se representa su valor en ejecución, hoy siempre `RepVal`. El capítulo 56 añade `RepI64` y `RepF64` para no empaquetar números en código de un solo tipo; la elaboración es quien puede rellenarlo, porque aún ve los tipos. Por eso el campo existe ya.
+**Las anotaciones `rep`.** `Rep` dice cómo se representa en ejecución el valor de una `Var`; hoy, siempre `RepVal`. Existe ya porque el capítulo 56 añade `RepI64` y `RepF64`, para no empaquetar números en código de un solo tipo. Solo la elaboración puede rellenarlo: aún ve los tipos.
 
 ### Los invariantes y Lint
 
-Como Core no tiene tipos, nada impide escribir un Core sin sentido, y un pase con un bug lo escribirá. **Core Lint** comprueba lo que los pases prometen y los siguientes dan por hecho:
+Core no tiene tipos, así que un pase con un bug escribirá un Core sin sentido. **Core Lint** comprueba lo que los pases prometen y los siguientes dan por hecho:
 
-- cada `VarRef` está en ámbito: un parámetro, o el `Let` cuyo cuerpo la contiene (el `Init` queda fuera: un `Init` que lee la `Var` de su propio `Let` es una violación; en Ki, `let x = x` son dos `Var`);
+- cada `VarRef` está en ámbito: un parámetro, o el `Let` cuyo cuerpo la contiene. Un `Init` que lee la `Var` de su `Let` es una violación (en Ki, `let x = x` son dos `Var`);
 - una llamada a una `FunRef` lleva tantos argumentos como parámetros, y una primitiva, los de su `Arity`;
 - un `Match` tiene los brazos `true` y `false`, o un `_`;
 - una función tiene cuerpo o nombre de extern, no las dos cosas ni ninguna;
 - cada slot cabe en su marco.
 
-Una violación no es un error del programa, sino del compilador: se convierte en un ICE. El diseño también pide binders únicos; este `Lint` no lo comprueba aún, y es el ejercicio 1.
+Una violación es un error del compilador, no del programa: se convierte en un ICE. Los binders únicos aún no se comprueban: son el ejercicio 1.
 
 ### Builder e interfaces pequeñas
 
-`Expr` es un struct plano: `Kind` dice qué campos significan algo, y los demás valen cero. Es el mismo diseño de nodos en un `IdVec`, sin punteros, que el árbol de sintaxis (capítulos 4 y 6). Rellenarlo a mano invita a olvidar un campo, así que hay una **API builder**:
+`Expr` es un struct plano, en un `IdVec` como el árbol de sintaxis. `Kind` dice qué campos significan algo, y los demás valen cero.
 
-- **Un método por clase de nodo.** Crea el nodo, lo guarda y devuelve su id.
-- **De abajo arriba.** Los hijos existen, con su id, antes que el padre.
-- **Copia las listas al pool.** Quien llama puede reutilizar su slice.
-- **No valida.** Construye lo que le piden: sin esto, los tests no podrían fabricar Core inválido para `Lint`.
+Rellenarlo a mano invita a olvidar un campo, así que hay una **API builder**:
+
+- **Un método por clase de nodo:** lo crea, lo guarda y devuelve su id.
+- **De abajo arriba:** los hijos existen antes que el padre.
+- **Copia las listas al pool:** quien llama puede reutilizar su slice.
+- **No valida:** si no, los tests no podrían fabricar Core inválido.
 
 :::from Rust
 Sería un `enum` con datos, y leer `Init` de un `LitInt` no compilaría. En Go es una convención, que protegen el builder y `default: panic("unreachable")` en cada `switch`.
 :::
 
-**Interfaces pequeñas.** `Builder` es un struct y no una interfaz: tiene una sola implementación, y una interfaz la declara quien la consume. Cuantos menos métodos tiene, más tipos la cumplen sin saberlo. Las que este capítulo implementa tienen uno: `*ICE` es un `error` por su `Error()`, y `Prim` es un `fmt.Stringer` por su `String()`, que es lo que usa el `%s` de `Lint`.
+**Interfaces pequeñas.** `Builder` es un struct y no una interfaz: tiene una sola implementación, y una interfaz la declara quien la consume.
+
+Cuantos menos métodos, más tipos la cumplen sin saberlo. `*ICE` es un `error` por su `Error()`, y `Prim`, un `fmt.Stringer` por su `String()`.
 
 ### Recorridos: `iter.Seq` y una pila propia
 
-El capítulo 4 escribió `All`, un `iter.Seq2`; `Program.Subexprs` da un `iter.Seq[ExprID]` con la raíz y todo lo que hay debajo, en preorden (cada expresión antes que sus hijos). Lo que en otros lenguajes sería un generador aquí es una función que recibe `yield`.
+El recorrido más simple de Core es `Program.Subexprs`. Da un `iter.Seq[ExprID]`, como el `iter.Seq2` del capítulo 4: la raíz y todo lo que hay debajo, cada expresión antes que sus hijos (preorden). En Python sería un generador; aquí es una función que recibe `yield`.
 
-**No puede ser recursivo.** Un bloque de 100 000 sentencias es una cadena de 100 000 `Let`, y el parser solo acota el anidamiento de las expresiones (capítulo 6). Con un marco de Go por `Let`, ese bloque cabría en el 1 GB de pila por defecto; uno bastante mayor daría un `fatal error`, que `recover` no ve.
+**No puede ser recursivo.** Un bloque de 100 000 sentencias es una cadena de 100 000 `Let`, y el parser solo acota el anidamiento de las expresiones (capítulo 6). Con un marco de Go por `Let`, ese bloque cabe en el 1 GB de pila por defecto; uno bastante mayor da un `fatal error`, que `recover` no ve.
 
-Por eso los tests bajan el límite a 1 MiB: con 1 GB, esa recursión no se notaría.
+Los tests bajan el límite a 1 MiB: con 1 GB, esa recursión no se notaría.
 
-**La pila es un slice.** Se saca un id, se entrega y se apilan sus hijos en orden inverso, para que el primero salga antes. Si `yield` devuelve `false`, se acaba.
+**La pila es un slice.** Se saca un id, se entrega y se apilan sus hijos al revés, para que el primero salga antes. Si `yield` devuelve `false`, se acaba: seguir entregando da el panic del capítulo 4.
 
-`Lint` necesita más: el ámbito cambia entre los hijos de un `Let`. Su pila guarda pasos (visitar, ligar, desligar) y un `Let` apila, de arriba abajo, `Init`, ligar, `Body` y desligar. `Print`, el impresor de Core, usa la misma idea con tareas: una expresión, un texto o un salto de línea.
-
-:::from Python
-Un generador recursivo con `yield from` no se libra: con 100 000 niveles da `RecursionError`.
-:::
+`Lint` necesita más, porque el ámbito cambia entre los hijos de un `Let`: apila, de arriba abajo, `Init`, ligar, `Body` y desligar.
 
 ### `defer`, `panic` y `recover`: la frontera del pase
 
-Un panic de Go sin recuperar sale con 2 (capítulo 2), el mismo código que un uso incorrecto de la CLI, y el pase solo se deduce leyendo la pila. La **frontera del pase** lo convierte en un informe con código propio.
+Un panic de Go sin recuperar sale con 2 (capítulo 2), y el pase solo se deduce leyendo la pila. La **frontera del pase** lo convierte en un informe con código propio.
 
 **`defer`** tiene dos reglas nuevas: las llamadas diferidas corren en orden inverso (LIFO), y sus argumentos se evalúan en la línea del `defer`. Un closure, en cambio, lee la variable al correr:
 
@@ -125,18 +127,18 @@ defer func() { fmt.Println("closure", x) }() // prints first: closure 2
 x = 2
 ```
 
-Así limitan la pila los tests: `SetMaxStack` devuelve el límite anterior, y el `defer` lo restaura al salir.
+:::from Rust
+`Drop` también corre en orden inverso, pero al salir del bloque; `defer`, al salir de la función.
+:::
+
+Así limitan la pila los tests: `SetMaxStack` devuelve el límite anterior, y `defer` lo restaura.
 
 ```go
 old := debug.SetMaxStack(1 << 20)
 defer debug.SetMaxStack(old)
 ```
 
-:::from Rust
-`Drop` también corre en orden inverso, pero al salir del bloque y sobre valores; `defer` corre al salir de la función, con una llamada que escribes tú.
-:::
-
-**El patrón `guard`** junta `defer` con `recover`, que solo funciona llamado directamente por la función diferida (capítulo 2), y con un resultado con nombre que esa función puede escribir (capítulo 3):
+**El patrón `guard`** junta `defer` con `recover`, que solo funciona llamado directamente por la función diferida (capítulo 2). También usa un resultado con nombre que esa función puede escribir (capítulo 3):
 
 ```go
 func guard(pass string, f func()) (ice *ICE) {
@@ -150,43 +152,37 @@ func guard(pass string, f func()) (ice *ICE) {
 }
 ```
 
-`runtime/debug.Stack()` devuelve la pila de la goroutine como `[]byte`. Va dentro de la diferida porque esa función corre antes de que el panic deshaga nada, y la pila aún muestra quién lo hizo; al volver de `guard`, ya no.
-
-:::from Rust
-`catch_unwind` ya devuelve el panic como un `Err`; en Go, `guard` lo escribes tú.
-:::
+`runtime/debug.Stack()` devuelve la pila de la goroutine como `[]byte`. Va dentro de la diferida porque esta corre antes de que el panic deshaga nada: al volver de `guard`, la pila ya no muestra quién lo hizo.
 
 **Tres piezas:**
 
 1. `guard` convierte el panic en un valor con el nombre del pase.
 2. `runPass` ejecuta el pase bajo `guard` y, si hay ICE, hace panic con el `*ICE`: ningún pase debe correr sobre lo que otro dejó a medias.
-3. `catchICE`, diferida en `Main`, reconoce el `*ICE` (`r.(*ICE)`, capítulo 3), escribe el informe y pone el código a 70. Cualquier otro panic lo relanza: no viene de un pase.
+3. `catchICE`, diferida en `Main`, reconoce el `*ICE` (`r.(*ICE)`, capítulo 3), escribe el informe y pone el código a 70. Si es otro panic, lo relanza: no viene de un pase.
 
-**¿Por qué 70?** Es `EX_SOFTWARE` en `sysexits.h`, «internal software error». Así, un script distingue un programa mal escrito (1), un comando mal escrito (2) y un pase roto (70). El panic de un programa Ki es otra cosa, y sale con 101 en el capítulo 10.
+**¿Por qué 70?** Es `EX_SOFTWARE`, el error interno de `sysexits.h`: un script distingue un programa mal escrito (1), un comando mal escrito (2) y un pase roto (70).
 
-**El gancho.** Sin un bug a mano no se puede probar la frontera, así que con `KI_DEBUG_PANIC_IN=<pase>`, ese pase hace panic al empezar. Lo lee `Main` y no `NewSession`: una `Session` de test no depende del entorno.
+**El gancho.** Para probar la frontera sin un bug a mano, con `KI_DEBUG_PANIC_IN=<pase>` ese pase hace panic al empezar. Lo lee `Main` y no `NewSession`: una `Session` de test no depende del entorno.
 
-:::more Lo que la frontera no cubre: `fatal error`, los diagnósticos y los impresores
-- Un `fatal error` no es un panic. Con `debug.SetMaxStack(1 << 20)` y una recursión infinita, un `defer` con `recover` no llega a correr: `runtime: goroutine stack exceeds 1048576-byte limit`, `fatal error: stack overflow`, código 2.
-- Cuando salta un ICE, los diagnósticos que ya estaban en el sink no se escriben. T09.09 lo fija: con el gancho en `resolve`, un fichero con un error de sintaxis da el informe y ningún `error[`.
-- `core.Print`, `syntax.DumpTokens`, `syntax.PrintModule` y `ReportAll` no son pases: corren fuera de `runPass`, y un panic ahí saldría con 2.
-- `recover` da el valor tal cual, también uno del runtime: `guard` guarda `runtime error: index out of range [3] with length 0` como cualquier otro (T09.08).
+:::more Lo que la frontera no cubre
+- **Un `fatal error`** no es un panic: el `defer` con `recover` no llega a correr, y el código es 2.
+- **Los diagnósticos pendientes.** Cuando salta un ICE, los que ya estaban en el sink no se escriben: con el gancho en `resolve`, un fichero con un error de sintaxis da el informe y ningún `error[`.
+- **Lo que no es un pase.** `core.Print`, `syntax.DumpTokens`, `syntax.PrintModule` y `ReportAll` corren fuera de `runPass`, y un panic ahí saldría con 2.
 :::
 
 ## Tests primero
 
 {{cards}}
 
-Úsalas como siempre: escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`. Describen el final del capítulo: T09.09 y T09.10 ganan filas en la sesión 3, y hasta entonces se escriben como en `git show ref/ch09-s1:book/tests/ch09.tests`.
+Úsalas como siempre: escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega su referencia.
 
-:::more Los ayudantes de test, sesión por sesión
-- **Sesión 1, `internal/core/core_test.go`** (`package core_test`). `span` crea un span en el fichero 1, para que un span olvidado, que sería del fichero 0, se note; `newBuilder` da un `Builder` sobre un `Program` vacío.
-- **Sesión 1, `internal/driver/ice_test.go`: el entorno.** Es `package driver`, porque prueba `guard` y `runPass`. Su `TestMain` borra `KI_DEBUG_PANIC_IN`, para que un shell que la exporte no rompa los tests que pasan por `Main`; `tests/main_test.go` hace lo mismo, y `ci/ci-local.sh` la borra para los goldens que corre con el binario. `t.Setenv` pone una variable de entorno y la restaura al acabar el test.
-- **Sesión 1, `ice_test.go`: los ayudantes.** `explode` hace panic; es una función con nombre, y su nombre sale en la pila aunque el compilador sustituya la llamada por su cuerpo. `writeKi` escribe un fichero temporal. `checkICE` exige código 70, stdout vacío y el mensaje seguido de la pila. `raised` y `newSession`, closures de T09.11, devuelven el valor de un panic y crean una `Session` con el gancho pedido. `runCLI` ya existía.
-- **Sesión 2, `internal/testsupport/compile.go`.** `Compile` pasa una fuente por el front end (lexer, parser, resolución y tipos), falla el test si hay errores, y elabora.
-- **Sesión 2, `internal/core/elaborate_test.go`.** `elabFun` busca una función por nombre; `elabText` da el texto de un span; `elabVar`, el nombre y el slot de una `Var`; `elabShape` escribe una expresión en una línea, sin spans, y `elabWant` compara esa línea; `elabCompileCapped` compila con la pila limitada a 1 MiB; `elabRaised` devuelve el valor de un panic. El `why` de T09.29 cita ya `ki emit core`, que llega en la sesión 3, porque la tabla sale de la última etiqueta; su test no cambia.
-- **Sesión 3, `internal/core/lint_test.go`.** `lintProg` (con `newLintProg`, `variable`, `push`, `fn` y `extern`) monta programas a mano, con variables `v<id>` y funciones `f<id>`; `lintFun` y `lintVar` escriben esos nombres en una violación; `lintCheck` compara la lista entera de violaciones; `lintMatch` crea un `Match` con los patrones pedidos; `lintFirstDiff` da el primer byte distinto de dos textos. `slices.Collect`, en T09.41, convierte un `iter.Seq` en un slice.
-- **Sesión 3, otros.** `withStackCap`, en `elaborate_test.go`, ejecuta una función con la pila limitada; `printSource`, en `print_test.go`, compila e imprime; `raised` y `newSession` suben a nivel de fichero en `ice_test.go`.
+:::more Los ayudantes de los tests
+Los tests de referencia y las soluciones los usan sin definirlos; el código está en `ref/ch09-s3`.
+
+- **`core_test.go`.** `span` crea un span en el fichero 1, para que un span olvidado, que sería del fichero 0, se note. `newBuilder` da un `Builder` sobre un `Program` vacío.
+- **`ice_test.go`,** en `package driver` porque prueba `guard` y `runPass`. Su `TestMain` borra `KI_DEBUG_PANIC_IN`. `explode` hace panic; tiene nombre, y sale en la pila aunque el compilador sustituya la llamada por su cuerpo. `writeKi` escribe un fichero temporal, `raised` devuelve el valor de un panic y `newSession` crea una `Session` con el gancho pedido.
+- **`elaborate_test.go`.** `elabFun` busca una función por nombre, `elabText` da el texto de un span y `elabWant` compara una expresión escrita en una línea, sin spans.
+- **`lint_test.go`.** `lintProg` monta programas a mano, con variables `v<id>` y funciones `f<id>`. `lintCheck` compara la lista entera de violaciones.
 :::
 
 ## Implementación
@@ -195,7 +191,7 @@ func guard(pass string, f func()) (ice *ICE) {
 
 #### Los tests, en rojo
 
-1. **Escribe T09.01–T09.13.** T09.13 va en `internal/base/list_range_test.go`, porque el pool de listas pasa a `base`. La interfaz, completa:
+1. **Escribe T09.01–T09.13;** los de `internal/core`, en `package core_test`. T09.09 y T09.10 ganan filas en la sesión 3; hasta entonces se escriben como en `git show ref/ch09-s1:book/tests/ch09.tests`. La interfaz, completa:
 
 ```go
 package core
@@ -263,9 +259,9 @@ FAIL	github.com/aldezex/kilang/internal/base [build failed]
 FAIL
 ```
 
-No hay stubs que valgan aquí: un `Builder` vacío haría que `p.Exprs.Get` cortara el binario de test con un panic.
+Aquí no valen stubs: con un `Builder` vacío, `p.Exprs.Get` corta el binario de test con un panic.
 
-3. **Escribe `core.go`, `builder.go`, `base.Slice`, `base.AppendRange`, `ice.go` y `tests/main_test.go`, y cambia `Main`, `Session` y `ci/ci-local.sh`.** Deja sin tocar `pipeline.go` y `emit.go`. Queda un solo rojo, `debug_hook_exits_70`: `ki check with the hook in check: exit code 0, want 70`, porque ningún pase pasa aún por `runPass`. `debug_hook_names_one_pass` ya está en verde, porque un gancho sin conectar tampoco hace nada.
+3. **Escribe `core.go`, `builder.go`, `base.Slice`, `base.AppendRange`, `ice.go` y `tests/main_test.go`, y cambia `Main`, `Session` y `ci/ci-local.sh`.** Deja sin tocar `pipeline.go` y `emit.go`. Queda un solo rojo, el test que exige 70 con el gancho: ningún pase pasa aún por `runPass`.
 
 #### El código
 
@@ -273,7 +269,7 @@ No hay stubs que valgan aquí: un `Builder` vacío haría que `p.Exprs.Get` cort
 
 {{file ch09-s1 internal/core/builder.go}}
 
-`Args` y `ArmsOf` leen un `ListRange` como el árbol de sintaxis. Core es el segundo árbol con `ListRange`, así que `slice` y `appendRange` salen de `syntax` y pasan a `base`, para no copiarlos. No cambia lo que hacen:
+Core es el segundo árbol con `ListRange`, así que `slice` y `appendRange` pasan de `syntax` a `base`:
 
 {{diff ch08-s4..ch09-s1 internal/base/idvec.go}}
 
@@ -287,16 +283,16 @@ En `parser.go`, `parser_expr.go` y `parser_stmt.go`, cada `appendRange(` pasa a 
 
 {{diff ch08-s4..ch09-s1 internal/driver/session.go}}
 
-- **`Main`** gana un resultado con nombre para que `defer s.catchICE(&code)` lo escriba. `&code`, un puntero evaluado en esa línea, apunta al resultado que `Main` devolverá.
+- **`Main`** gana un resultado con nombre para que `defer s.catchICE(&code)` lo escriba a través del puntero.
 - **`catchICE`** es ella misma la función diferida, y por eso su `recover` funciona.
 
-Para que un shell que exporte `KI_DEBUG_PANIC_IN` no rompa los goldens:
+Los tests del gancho ponen `KI_DEBUG_PANIC_IN` con `t.Setenv`, que la restaura al acabar. Un shell que la exporte rompería los goldens, así que sus runners la borran:
 
 {{file ch09-s1 tests/main_test.go}}
 
 {{diff ch08-s4..ch09-s1 ci/ci-local.sh}}
 
-Ahora conecta los pases. `runPass` recibe un `func()` sin resultado, así que cada pase escribe el suyo en una variable capturada. `s.lex` existe porque `parseFiles` y `ki emit tokens` comparten ese paso:
+Ahora conecta los pases. `runPass` recibe un `func()` sin resultado, así que cada pase escribe el suyo en una variable capturada:
 
 {{diff ch08-s4..ch09-s1 internal/driver/pipeline.go}}
 
@@ -314,7 +310,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch09-s1` (mensaje: `ch09-s1:
 
 #### Los tests, en rojo
 
-1. **Escribe T09.14–T09.29** en `internal/core/elaborate_test.go`. La interfaz:
+1. **Escribe T09.14–T09.29.** La interfaz:
 
 ```go
 package core
@@ -332,7 +328,7 @@ func Compile(t *testing.T, source string) *Compiled
 ```
 
 2. **Míralos fallar.** No compilan: `undefined: testsupport.Compiled`.
-3. **Añade `Compile` y `Lower`, y un stub:** `Elaborate` devuelve `&Program{}`. Fallan los 16 subtests, ninguno con panic; el primero, con `the Program has no function called "pick"`.
+3. **Añade `Compile`, `Lower` y un stub.** Con `Elaborate` devolviendo `&Program{}`, fallan los 16 subtests, ninguno con panic.
 
 {{diff ch09-s1..ch09-s2 internal/testsupport/compile.go}}
 
@@ -342,22 +338,16 @@ func Compile(t *testing.T, source string) *Compiled
 
 {{file ch09-s2 internal/core/elaborate.go}}
 
-`Elaborate` tiene que distinguir las funciones del preludio de las del fichero para rellenar `UserModule`, y por eso `preludeModule` se exporta:
+`Elaborate` necesita `preludeModule` para rellenar `UserModule`, y por eso se exporta:
 
 {{diff ch09-s1..ch09-s2 internal/sema/resolve.go}}
 
 {{diff ch09-s1..ch09-s2 internal/sema/suggest.go}}
 
-- **`FunID(d)` es la `Fun` de la `DefID` `d`.** Se elabora en orden de `Def`, así que una llamada a una función definida más abajo ya tiene su id.
-- **Slots.** El `let` toma su slot antes que los bloques de su `Init`: los slots siguen el orden en que el programa nombra las variables.
-- **`block` usa bucles.** El primero, hacia delante, reparte slots y elabora los `Init`; el segundo, hacia atrás, construye la cadena, porque el `Body` de cada `Let` debe existir antes. Con `block` recursivo, T09.24 acaba en `fatal error: stack overflow`, por la pila de 1 MiB.
-
-:::more Más de `elaborate.go`: `expr`, los spans y `equalityPrim`
-- **`expr` sí es recursivo.** El parser acota la profundidad de una expresión (`MaxNesting`, `MaxChain`), así que un árbol del parser es seguro; uno hecho a mano, no.
-- **`shortCircuit`** es el `match` de la tabla; su literal lleva el span de toda la expresión.
-- **El `PrimCall` lleva el span del operador,** que es donde el capítulo 10 informará de un desbordamiento. Con `x.Span`, T09.20 da `add_int: the span is "a  +   b" at 2:11, want "+" at 2:14`.
-- **`equalityPrim`.** Una variable de tipo sin ligar da la primitiva de `Int`: en ejecución no existe un valor de tipo desconocido, y el capítulo 13 quita la regla.
-:::
+- **`block` usa bucles.** Uno, hacia delante, reparte slots y elabora los `Init`. Otro, hacia atrás, construye la cadena: el `Body` de cada `Let` debe existir antes. Recursivo, desbordaría la pila de 1 MiB.
+- **`expr` sí es recursivo,** porque el parser acota la profundidad de una expresión. Un árbol del parser es seguro; uno hecho a mano, no.
+- **El `PrimCall` lleva el span del operador:** ahí informará el capítulo 10 de un desbordamiento.
+- **`equalityPrim`** da la primitiva de `Int` a una variable de tipo sin ligar: en ejecución no existe un valor de tipo desconocido. El capítulo 13 quita la regla.
 
 {{reftest T09.15}}
 
@@ -371,7 +361,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch09-s2` (mensaje: `ch09-s2:
 
 #### Los tests, en rojo
 
-1. **Escribe T09.30–T09.51 y amplía T09.09 y T09.10.** Los dos goldens van en `tests/golden/ch09/`, y `TestCLI` cambia su línea de uso. `withStackCap` sale de `elabCompileCapped`, porque ahora limita también a `Lint`, `Print` y `Subexprs`:
+1. **Escribe T09.30–T09.51 y amplía T09.09, T09.10 y la línea de uso de `cli_test.go`.** El límite de 1 MiB de la sesión 2 pasa a `withStackCap`, porque ahora limita también a `Lint`, `Print` y `Subexprs`:
 
 {{diff ch09-s2..ch09-s3 internal/core/elaborate_test.go}}
 
@@ -389,29 +379,27 @@ func (s *Session) lint(p *core.Program)
 // usage: ki emit tokens|ast|core [--diagnostics=human|short|json] FILE
 ```
 
-2. **Míralos fallar.** `internal/core` e `internal/driver` no compilan (`undefined: core.Lint`, `undefined: lintOrPanic`), y los goldens salen con 2: ``ki emit: unknown target `core` ``.
-3. **Añade cinco stubs:** `Subexprs` que no entrega nada, `Lint` que devuelve `nil`, `Print` que devuelve `""`, y `lintOrPanic` y `lint` vacías. Nada hace panic. Fallan 8 subtests de `TestLint`, 2 de `TestSubexprs`, los 5 de `TestPrint`, 3 de `TestCLI`, 2 de `TestICE` y los dos goldens.
-4. **Los tres `accepts_*` pasan ya,** porque un `Lint` vacío lo acepta todo: por eso existen los `rejects_*`.
+2. **Míralos fallar.** `internal/core` e `internal/driver` no compilan, y los goldens salen con 2.
+3. **Añade stubs vacíos** de `Subexprs` (un iterador vacío, no `nil`), `Lint`, `Print`, `lintOrPanic` y `lint`. Fallan 20 subtests y los dos goldens, sin panic. Los tres casos de aceptación ya pasan: un `Lint` vacío lo acepta todo, y por eso existen los de rechazo.
 
 #### El código
 
 {{file ch09-s3 internal/core/lint.go}}
 
-- **`appendChildren`** junta en un sitio los hijos de cada nodo y su orden. Lo usan `Subexprs` y `walk`, salvo el `Let`, que `walk` apila a mano. `kids[:0]` reutiliza el array: un solo buffer para todo el recorrido.
-- **`Subexprs`** devuelve un closure de tipo `func(yield func(ExprID) bool)`. Sin el `if !yield(id)`, el `break` de T09.42 acaba en el panic del capítulo 4.
-- **`walk`** apila los pasos de un `Let` al revés de como salen. Si `lintBind` saliera antes que el `Init`, T09.33 fallaría.
-- **`scope` cuenta, por `Var`, los binders que abarcan la expresión:** un conjunto sacaría de ámbito una `Var` con dos al acabar el `Let` interior (T09.32). `delete(m, k)` quita una entrada de un mapa, aquí al llegar a 0.
-- **`Lint` recibe el `Interner`** porque su texto es el mensaje del informe, y quien lo lee tiene el fichero, no los ids.
+- **`kids[:0]`** reutiliza el array de `appendChildren`: un solo buffer por recorrido.
+- **`scope` cuenta los binders abiertos de cada `Var`:** un conjunto sacaría de ámbito una `Var` con dos binders al acabar el `Let` interior. `delete(m, k)` quita una entrada de un mapa.
+- **`Lint` recibe el `Interner`** porque su texto es el mensaje del informe, y quien lo lee no tiene los ids.
+- **En los tests,** `slices.Collect` convierte un `iter.Seq` en un slice.
 
 {{file ch09-s3 internal/core/print.go}}
 
-:::more El impresor: tareas, sangría y nombres
-- **Una pila de tareas.** `node` escribe el principio de un nodo y apila el resto; `push` pone `pr.seq` al revés para que la primera salga antes.
-- **Sangría.** Lo que empieza en mitad de una línea sigue en ella, y sus otras líneas llevan dos espacios más, salvo el `}`. Un `Let` de una cadena (`chain`) mantiene la sangría.
-- **Nombres.** `x`, `x_1`, `x_2`…, y `_`, `_1`…, saltando un número que ya sea el nombre de otra variable: dos variables de una función nunca se imprimen igual.
-- **Literales.** `strconv.FormatInt` es el inverso de `ParseInt` (capítulo 5): de `int64` a texto, en la base que le pidas. `strconv.FormatBool` da `true` o `false`, y `strconv.FormatUint`, en los tests, es `FormatInt` para un `uint64`.
-- **Es para leer, no para parsear.** Un `Let` como callee no tiene delimitador: `print({ let g = f; g }(1))` se imprime `print(let g = f;` y, debajo, `g(1))`, que parece un `Let` cuyo cuerpo es la llamada.
+`Print` también recorre con una pila propia. Escribe los literales con `strconv.FormatInt`, el inverso de `ParseInt` (capítulo 5), y `strconv.FormatBool`.
+
+:::more `Print` es para leer, no para parsear
+Un `Let` como callee no tiene delimitador: `print({ let g = f; g }(1))` se imprime `print(let g = f;` y, debajo, `g(1))`, que parece un `Let` cuyo cuerpo es la llamada.
 :::
+
+Ahora conecta `ki emit core`:
 
 {{diff ch09-s2..ch09-s3 internal/driver/pipeline.go}}
 
@@ -419,9 +407,8 @@ func (s *Session) lint(p *core.Program)
 
 {{diff ch09-s2..ch09-s3 internal/driver/commands.go}}
 
-- **`lintOrPanic`** une las violaciones con `\n` y hace panic: el pase `lint` lo convierte en un ICE.
-- **`emitCore` para antes de `Lower` si hay errores.** Un error del programa da su diagnóstico y código 1, no un ICE. Tampoco necesita `main`.
-- **`Lower` no llama a `lint`.** Cada comando que baja un programa debe llamarlo justo después, y lo vigila una fila de `debug_hook_exits_70`; `ki run` necesitará la suya.
+- **`emitCore` para antes de `Lower` si hay errores:** un error del programa da su diagnóstico y código 1.
+- **`Lower` no llama a `lint`.** Debe llamarlo cada comando que baja un programa.
 
 Los dos goldens:
 
@@ -441,7 +428,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch09-s3` (mensaje: `ch09-s3:
 
 ## Ejecútalo
 
-Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da lo de arriba. Un programa con todo el azúcar:
+Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da lo de arriba. Un programa con más azúcar:
 
 ```console
 $ cat blocks.ki
@@ -469,7 +456,7 @@ fn main() =
   print(neg_int(x))
 ```
 
-Un error del programa no es un ICE, y con él no hay Core:
+Un error del programa no es un ICE:
 
 ```console
 $ cat bad.ki
@@ -501,7 +488,7 @@ Debajo va la pila entera, con tus rutas. Stdout queda vacío.
 ## Ejercicios
 
 :::exercise
-**1. Binders únicos.** Un `Init` que lee la `Var` de su `Let` ya es una violación (T09.33). `Lint` tolera una `Var` ligada por dos binders. Detéctalo con la violación ``variable `x` is bound more than once``, y pruébalo con un test que construya Core inválido a mano.
+**1. Binders únicos.** `Lint` tolera una `Var` ligada por dos binders. Detéctalo con la violación ``variable `x` is bound more than once``, y pruébalo con un test que construya Core inválido a mano.
 :::
 
 :::solution
@@ -551,9 +538,9 @@ t.Run("rejects_a_variable_bound_twice", func(t *testing.T) {
 })
 ```
 
-Sin la comprobación, el primer caso da `nested: Lint returned [], want […]`. Si la llamada falta solo en `Params`, fallan `parameter and Let` y `two functions`. `nested` lee `v` tras el `Let` interior porque ahí se separa el contador de un conjunto: con un `scope` booleano, `Lint` añade un ``unbound variable `v0` `` falso.
+Sin la comprobación, el primer caso da `nested: Lint returned [], want […]`. `nested` lee `v` tras el `Let` interior porque ahí se separa el contador de un conjunto: con un `scope` booleano, `Lint` añade un ``unbound variable `v0` `` falso.
 
-Con la comprobación, T09.32 se pone en rojo a propósito: su fila `a variable bound by two nested Lets` es el programa de `nested`, y ahora es una violación (``Lint returned ["fun f1: variable `v1` is bound more than once"], want []``). Quítala, porque `nested` ya la cubre, y T09.32 se queda en nueve casos. Cambia también los comentarios de `Lint` y de `Var` (`core.go`), que dicen que esto no se comprueba. Los demás tests del capítulo siguen en verde: ningún otro de los que pasan por `Lint` liga dos veces una variable.
+La comprobación pone en rojo un test a propósito: su fila `a variable bound by two nested Lets` es el programa de `nested`, y ahora es una violación. Quítala, porque `nested` ya la cubre; ese test se queda en nueve casos. Cambia también los comentarios de `Lint` y de `Var` (`core.go`), que dicen que esto no se comprueba. Los demás tests del capítulo siguen en verde.
 :::
 
 :::exercise
@@ -602,7 +589,7 @@ func printAll(p *Program, in *base.Interner, ids bool) string {
 	// … as Print did
 ```
 
-Y al final de `name`, tras `pr.used[s] = true`, para que los sufijos no se mezclen con los nombres en uso:
+Al final de `name`, tras `pr.used[s] = true`, para que los sufijos no se mezclen con los nombres en uso:
 
 ```go
 	if pr.ids {
@@ -610,7 +597,7 @@ Y al final de `name`, tras `pr.used[s] = true`, para que los sufijos no se mezcl
 	}
 ```
 
-La línea de uso de `commands.go`, común a los tres destinos aunque `--ids` solo valga en `core`, pasa a `ki emit tokens|ast|core [--ids] [--diagnostics=human|short|json] FILE`, también en sus cuatro apariciones en `cli_test.go` (las dos constantes y los dos literales de `emit_ast`). El test, en `TestCLI`:
+La línea de uso de `commands.go`, común a los tres destinos aunque `--ids` solo valga en `core`, pasa a `ki emit tokens|ast|core [--ids] [--diagnostics=human|short|json] FILE`. Cámbiala también en `cli_test.go`, donde aparece cuatro veces. El test, en `TestCLI`:
 
 ```go
 t.Run("emit_core_ids", func(t *testing.T) {
@@ -738,7 +725,7 @@ Si entregas al sacar la expresión por primera vez, sale el preorden: `post-orde
 :::
 
 :::exercise
-**4. `guard` y los errores del runtime.** `guard` ya recoge cualquier panic, también los del runtime. Prueba con un test que una división por cero en Go dentro de un pase acaba en un ICE con código 70. Añade después a `ICE` un método `Runtime() bool` que diga si el panic lo lanzó el runtime (`runtime.Error`, una interfaz que cumplen los valores de esos panics) o el código del compilador.
+**4. `guard` y los errores del runtime.** `guard` recoge también los panics del runtime. Prueba con un test que una división por cero en Go dentro de un pase acaba en un ICE con código 70. Añade a `ICE` un método `Runtime() bool` que diga si el panic lo lanzó el runtime (`runtime.Error`, una interfaz que cumplen esos valores) o el compilador.
 :::
 
 :::solution
@@ -784,13 +771,13 @@ t.Run("captures_runtime_error", func(t *testing.T) {
 })
 ```
 
-`1 / 0` con constantes no llega a ejecutarse: `invalid operation: division by zero`. Si `guard` guardara `Value: fmt.Sprint(r)`, se perdería el tipo, y el test daría `Runtime() = false for "runtime error: integer divide by zero", want true`: por eso `ICE` guarda el valor tal cual.
+Si `guard` guardara `Value: fmt.Sprint(r)`, se perdería el tipo, y el test daría `Runtime() = false for "runtime error: integer divide by zero", want true`: por eso `ICE` guarda el valor tal cual.
 :::
 
 ## Preguntas de repaso
 
 :::review
-¿Por qué `a && b` se elabora a un `match` y no a una primitiva `and_bool(a, b)`?
+¿Por qué `a && b` se elabora a un `match` y no a `and_bool(a, b)`?
 :::
 
 :::answer
@@ -798,11 +785,11 @@ Porque Core es estricto: evalúa los argumentos antes de la llamada, y `and_bool
 :::
 
 :::review
-¿Por qué `Subexprs` y `Lint` usan una pila propia, si la pila de Go llega a 1 GB?
+¿Por qué `Subexprs` y `Lint` usan una pila propia, si la de Go llega a 1 GB?
 :::
 
 :::answer
-Porque la longitud de una cadena de `Let` la decide el programa: nada la acota, a diferencia del anidamiento de una expresión. Pasado el límite, Go no hace panic, sino un `fatal error` que `recover` no ve, así que ni siquiera habría informe de ICE. Por eso los tests limitan la pila a 1 MiB: con el límite por defecto, una recursión sobre 100 000 sentencias cabría y no se vería.
+Porque la longitud de una cadena de `Let` la decide el programa, y nada la acota. Pasado el límite, Go no hace panic, sino un `fatal error` que `recover` no ve: ni siquiera habría informe de ICE. Por eso los tests limitan la pila a 1 MiB: con el límite por defecto, una recursión sobre 100 000 sentencias cabría y no se vería.
 :::
 
 :::review
@@ -810,7 +797,7 @@ Porque la longitud de una cadena de `Let` la decide el programa: nada la acota, 
 :::
 
 :::answer
-Porque si `f` hace panic, lo que hay después de `f()` no se ejecuta; y fuera de `guard`, la pila ya no contiene la función que falló. La función diferida corre antes de que el panic deshaga nada, así que la pila aún muestra su origen, que es lo que necesita quien lee el informe.
+Porque si `f` hace panic, lo que hay después de `f()` no se ejecuta, y fuera de `guard` la pila ya no contiene la función que falló. La diferida corre antes de que el panic deshaga nada, así que la pila aún muestra su origen, que es lo que necesita quien lee el informe.
 :::
 
 :::review
@@ -838,7 +825,7 @@ Porque un diagnóstico le dice a quien programa en Ki que corrija su fichero, y 
 :::
 
 :::review
-¿Por qué un `Let` apila en `walk` cuatro pasos, y no sus dos hijos como cualquier otro nodo?
+¿Por qué un `Let` apila en `walk` cuatro pasos, y no sus dos hijos?
 :::
 
 :::answer
@@ -855,85 +842,23 @@ Justo por eso: en esa línea `code` aún vale 0, y un `catchICE(code int)` recib
 
 ## Resumen
 
-- Core es la única referencia semántica: pequeño, estricto, sin tipos y sin azúcar.
-- La elaboración da Core S0: `if`, `&&` y `||` a `match`, bloques a cadenas de `Let`, operadores a primitivas.
+- Core es la única referencia semántica: estricto, sin tipos y sin azúcar.
+- La elaboración baja `if`, `&&` y `||` a `match`, los bloques a cadenas de `Let` y los operadores a primitivas.
 - Cada binder es una `Var` con su slot y su `Rep`.
-- El builder crea los nodos de abajo arriba y no valida; `Lint` comprueba los invariantes.
-- `iter.Seq` produce con `yield`; una cadena de `Let` de cualquier longitud pide una pila explícita.
-- `defer` es LIFO, y sus argumentos se evalúan en su línea; un closure lee la variable al correr.
-- `debug.Stack()` dentro de la diferida conserva el origen del panic.
-- `guard`, `runPass` y `catchICE` convierten un panic de un pase en un informe con código 70.
-- Un `fatal error` no pasa por `recover`.
+- El builder crea de abajo arriba y no valida; `Lint` comprueba los invariantes.
+- Una cadena de `Let` pide una pila explícita; un `fatal error` no pasa por `recover`.
+- `defer` es LIFO y evalúa sus argumentos en su línea.
+- `guard`, `runPass` y `catchICE` convierten el panic de un pase en un informe con código 70.
 - Una violación de `Lint` es un ICE; un error del programa nunca llega a `Lower`.
 
 ## Go en el trabajo
 
-**`defer` para liberar recursos.** `defer f.Close()` o `defer mu.Unlock()`, junto a lo que abren o bloquean, cubren todos los caminos de salida.
+**`defer` para liberar recursos.** `defer f.Close()` o `defer mu.Unlock()` cubren todos los caminos de salida.
 
-En un bucle, no: las llamadas corren al final de la función, no de la vuelta, así que los ficheros se quedan abiertos. Y el compilador solo usa su forma barata, los *open-coded defers*, en funciones sin `defer` en bucles: en un bucle, cada `defer` cuesta más de diez veces una llamada. La salida es llevar el cuerpo a una función.
+En un bucle, no: corren al final de la función, no de la vuelta, y los ficheros se quedan abiertos. Ahí la función entera pierde su forma barata, los *open-coded defers*: cada `defer` cuesta más de diez veces una llamada. La salida es llevar el cuerpo a una función.
 
-**`recover` en servidores.** `net/http` recupera el panic de un handler, registra la pila y corta esa petición: una rota no tumba las demás. Ki tiene un programa en un proceso, así que recupera para informar y termina. `recover` solo ve los panics de su goroutine, y uno sin recuperar en cualquier otra tumba el proceso.
+**`recover` en servidores.** `net/http` recupera el panic de un handler, registra la pila y corta esa petición: una rota no tumba las demás. Ki tiene un programa en un proceso, así que recupera para informar y termina.
 
-**Las IR en compiladores reales.** GHC baja Haskell a Core y lo comprueba con `-dcore-lint`; Swift tiene SIL, sobre el que emite diagnósticos propios del lenguaje; MLIR es una infraestructura de IR extensible con dialectos. El compilador de Go tiene `checkFunc`, que comprueba su IR si lo activas.
+`recover` solo ve los panics de su goroutine, y uno sin recuperar en cualquier otra tumba el proceso.
 
-:::more Las fuentes y la medida
-**`defer`.** `src/runtime/panic.go` en Go 1.27: los *open-coded defers* se usan «for functions in which no defer statements occur in loops». En esta máquina, `Lock`, `n++` y `Unlock` en un `func() { … }()` costaron unos 3,5 ns sin `defer` y 4 con él; mil `defer` en un bucle, unos 13 µs, frente a 1 µs por las mismas mil llamadas sin él. `//go:noinline` impide que el compilador sustituya la llamada por su cuerpo, que aquí está vacío, y no quede nada que medir. El bloque va en un `_test.go` que importe `sync` y `testing`, y se ejecuta con `go test -bench . -run '^$'`:
-
-```go
-//go:noinline
-func work() {}
-
-func BenchmarkCall(b *testing.B) {
-	for b.Loop() {
-		for range 1000 {
-			work()
-		}
-	}
-}
-
-func BenchmarkDefer(b *testing.B) {
-	for b.Loop() {
-		func() {
-			for range 1000 {
-				defer work()
-			}
-		}()
-	}
-}
-
-var (
-	mu sync.Mutex
-	n  int
-)
-
-func BenchmarkLock(b *testing.B) {
-	for b.Loop() {
-		func() {
-			mu.Lock()
-			n++
-			mu.Unlock()
-		}()
-	}
-}
-
-func BenchmarkLockDefer(b *testing.B) {
-	for b.Loop() {
-		func() {
-			mu.Lock()
-			defer mu.Unlock()
-			n++
-		}()
-	}
-}
-```
-
-**`net/http`.** La documentación de `Handler`: «If ServeHTTP panics, the server (the caller of ServeHTTP) assumes that the effect of the panic was isolated to the active request. It recovers the panic, logs a stack trace to the server error log, and either closes the network connection or sends an HTTP/2 RST_STREAM». El código es el `defer` de `(*conn).serve`, en `server.go`, que escribe `http: panic serving …`; el valor `http.ErrAbortHandler` corta sin registrar.
-
-**GHC.** Su guía de usuario, sobre `-dcore-lint`: «Turn on heavyweight intra-pass sanity-checking within GHC, at Core level. (It checks GHC's sanity, not yours.)». Es la distinción entre un ICE y un diagnóstico.
-
-**Swift.** `docs/SIL/SIL.md`: «SIL is an SSA-form IR with high-level semantic information designed to implement the Swift programming language». En SSA (*static single assignment*), cada variable se asigna una sola vez.
-
-**MLIR.** Su *LangRef*: «MLIR (Multi-Level IR) is a compiler intermediate representation»; «Dialects are the mechanism by which to engage with and extend the MLIR ecosystem».
-
-**Go.** `src/cmd/compile/internal/ssa/check.go`: «checkFunc checks invariants of f», y `compile.go` lo llama tras cada pase cuando `checkEnabled` está activo.
-:::
+**Las IR en compiladores reales.** GHC baja Haskell a Core y lo comprueba con `-dcore-lint`: «It checks GHC's sanity, not yours», la distinción entre un ICE y un diagnóstico. Swift tiene SIL; MLIR es una infraestructura de IR extensible con dialectos.
