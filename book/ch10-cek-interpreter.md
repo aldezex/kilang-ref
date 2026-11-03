@@ -149,7 +149,7 @@ La recursión de Ki vive en un slice, en el heap de Go, así que el límite es n
 
 Empujar un `retFrame` con la pila en el límite termina en `panic: stack overflow at <posición>`, con 103. Una llamada de cola no empuja, así que pasa.
 
-La pila de Go es lo contrario: al pasar de 1 GB da `fatal error: stack overflow`, ningún `recover` lo detiene y sale con 2.
+La pila de Go es lo contrario. Su límite es 1 GB y, como se duplica, muere con 512 MiB: `fatal error: stack overflow`. Ningún `recover` lo detiene y sale con 2.
 
 ### `kirt/out`: un solo escritor
 
@@ -176,9 +176,9 @@ Cada regla corre sobre el repositorio y sobre árboles pequeños con el error qu
 
 ### Goroutines, lo justo
 
-El test del escritor las necesita; la Parte IV las enseña. `go f()`, los canales y `select` vienen del capítulo 8. Para esperar a varias, un `sync.WaitGroup`: `wg.Add(1)` avisa antes de lanzar, `defer wg.Done()` descuenta y `wg.Wait()` espera.
+El test del escritor las necesita; la Parte IV las enseña. `go f()`, los canales y `select` vienen del capítulo 8. Para esperar a varias, un `sync.WaitGroup`, en la forma larga de `wg.Go` (capítulo 1): `wg.Add(1)` avisa antes de lanzar, `defer wg.Done()` descuenta y `wg.Wait()` espera.
 
-Sin el `Mutex`, dos goroutines tocarían el mismo `bufio.Writer` a la vez, y `go test -race` imprime `WARNING: DATA RACE`.
+Sin el `Mutex`, dos goroutines tocarían el mismo `bufio.Writer` a la vez, y `go test -race` lo detecta.
 
 ### El proceso ayudante
 
@@ -194,7 +194,7 @@ cmd.Env = append(os.Environ(), "KI_TEST_HELPER=panic")
 
 ### Delve
 
-`dlv` depura el binario real; lo probarás en la sesión 4. `dlv exec` arranca `ki`; tras `--` van sus argumentos. `break` para en una función, `continue` sigue hasta otra parada o el final, `print` evalúa una expresión y `clearall` borra las paradas.
+`dlv` depura el binario real. `dlv exec` arranca `ki`; tras `--` van sus argumentos. `break` para en una función, `continue` sigue hasta otra parada o el final, `print` evalúa una expresión y `clearall` borra las paradas.
 
 ### M1: `fib.ki`, etapa por etapa
 
@@ -214,7 +214,7 @@ Cada capítulo ha construido una fila, sobre `tests/golden/ch10/fib.ki` (`fn` es
 
 {{cards}}
 
-Por cada tarjeta: escribe el test, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`.
+Por cada tarjeta: escribe el test, míralo fallar, implementa lo justo para el verde, y solo entonces despliega su referencia.
 
 Los ayudantes de test nuevos van al principio de su fichero de `ref/ch10-sK`; `runCLI` y `writeKi` vienen de los capítulos 1 y 9.
 
@@ -383,13 +383,15 @@ func (s *Session) execute(p *core.Program) int
 
 {{file ch10-s4 internal/core/coretest/extern.go}}
 
-3. **Míralos fallar.** `kirt/out`, `internal/driver` y `cmd/ki` no compilan, y el golden de `fib` falla. Un panic de Go corta el binario de `internal/interp` (`print` aún no corre: `interp: the program calls function 0, which has no body`). `kirt` e `internal/toolchain` ya pasan: las reglas se cumplen, y los hechos de Go no dependen de ti.
+3. **Míralos fallar.** `kirt/out`, `internal/driver` y `cmd/ki` no compilan, y el golden de `fib` falla. Un panic de Go corta el binario de `internal/interp` (`print` aún no corre). `kirt` e `internal/toolchain` ya pasan: las reglas se cumplen, y los hechos de Go no dependen de ti.
 
-Dos de los golden:
+Tres de los golden:
 
 {{file ch10-s4 tests/golden/ch10/fib.ki}}
 
 {{file ch10-s4 tests/golden/ch10/print_then_panic.ki}}
+
+{{file ch10-s4 tests/golden/ch10/division.ki}}
 
 #### El escritor
 
@@ -422,6 +424,10 @@ Compila, exige `main` y ejecuta la máquina como un pase más.
 {{file ch10-s4 internal/driver/run.go}}
 
 {{diff ch10-s3..ch10-s4 internal/driver/commands.go}}
+
+`pipeline.go` solo cambia un comentario:
+
+{{diff ch10-s3..ch10-s4 internal/driver/pipeline.go}}
 
 {{file ch10-s4 cmd/ki/main.go}}
 
