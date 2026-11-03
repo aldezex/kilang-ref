@@ -141,7 +141,7 @@ Un `Module`, el árbol de un fichero, guarda cuatro `IdVec` (items, sentencias, 
 - **El id 0 es un id,** no «nada»: un hijo opcional lleva una marca al lado, `Ret` y `HasRet`.
 - **Vistas recortadas.** `ExprList` devuelve `pool[First:end:end]` (capítulo 2): un `append` de quien la recibe realoja, y no pisa la lista siguiente.
 
-¿Por qué ids y no punteros en un lenguaje con GC?
+¿Por qué ids y no punteros en un lenguaje con recolector?
 
 | Razón | Qué gana |
 |---|---|

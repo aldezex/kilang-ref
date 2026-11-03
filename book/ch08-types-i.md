@@ -672,7 +672,7 @@ func BenchmarkFun(b *testing.B) {
 
 Una medida, con `go test ./internal/sema -run '^$' -bench BenchmarkFun -benchmem`: con hash-consing, unos 4,3 ms, 1,09 MB y 1 011 nodos por cada 10⁵ llamadas; sin él, unos 8 ms, 28,6 MB y 100 011 nodos.
 
-Las asignaciones casi empatan (101 041 frente a 100 038): con hash-consing, casi todas son la clave, el `string` que `encodeIDs` construye en cada llamada, también cuando la función ya existe.
+Las reservas casi empatan (101 041 frente a 100 038): con hash-consing, casi todas son la clave, el `string` que `encodeIDs` construye en cada llamada, también cuando la función ya existe.
 :::
 
 ## Preguntas de repaso

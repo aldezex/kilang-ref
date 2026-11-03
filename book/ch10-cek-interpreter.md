@@ -701,7 +701,7 @@ Compruébalo con `GODEBUG=gctrace=1 build/bin/ki run count.ki`, que escribe en s
 :::
 
 :::solution
-La llamada está en cola: el `matchFrame` ya salió de la pila, así que lo que hay arriba es un `retFrame`. `enter` lo reutiliza y sustituye el entorno; el viejo queda sin referencias y el GC lo recoge. Con `--stats`, del ejercicio 1: `steps: 220000020, max depth: 4`.
+La llamada está en cola: el `matchFrame` ya salió de la pila, así que lo que hay arriba es un `retFrame`. `enter` lo reutiliza y sustituye el entorno; el viejo queda sin referencias y el recolector lo libera. Con `--stats`, del ejercicio 1: `steps: 220000020, max depth: 4`.
 
 Son unas 1000 recolecciones en unos 4 s, casi todas iguales:
 

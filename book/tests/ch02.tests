@@ -315,7 +315,7 @@ case:    una codificación demasiado larga (overlong) de `/`
 input:   "\xC0\xAF"
 expect:  `FirstInvalidUTF8` devuelve `(0, true)`
 why:     UTF-8 exige la forma más corta de cada carácter; aceptar la forma larga de `/` permitiría colar
-         caracteres con una escritura que ningún otro programa reconoce
+         caracteres con una escritura que ningún programa conforme reconoce
 ref:     TestFirstInvalidUTF8/overlong_rejected
 
 [T02.31] base.utf8_surrogate_rejected                      level: core
@@ -332,8 +332,8 @@ kind:    unit (go test)      file: internal/base/utf8_test.go
 case:    una secuencia de cuatro bytes que codifica un valor mayor que U+10FFFF
 input:   "\xF4\x90\x80\x80"
 expect:  `FirstInvalidUTF8` devuelve `(0, true)`
-why:     U+10FFFF es el último carácter de Unicode; un comprobador que aceptara cualquier secuencia de cuatro
-         bytes bien formada dejaría pasar valores que no son caracteres
+why:     U+10FFFF es el último code point de Unicode; un comprobador que aceptara cualquier secuencia de
+         cuatro bytes bien formada dejaría pasar valores que no son caracteres
 ref:     TestFirstInvalidUTF8/above_max_rejected
 
 [T02.33] base.empty_lines_have_empty_text                  level: core

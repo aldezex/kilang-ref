@@ -23,7 +23,7 @@ En el capítulo 3, `ki check` dibujará con él su primer error, camino del hito
 
 Cada token (capítulo 5) recuerda dónde está como un **offset de byte**: cortar su texto es indexar. Una persona quiere leer `main.ki:3:9`. Tres decisiones:
 
-- **Spans semiabiertos.** Un `Span` es un trozo de fichero, `[Lo, Hi)`: la longitud es `Hi - Lo` y el span vacío, el del fin de fichero, es `Lo == Hi`. Con `Hi` inclusivo, el vacío no se podría escribir.
+- **Spans semiabiertos.** Un `Span` es un trozo de fichero, `[Lo, Hi)`: la longitud es `Hi - Lo` y el span vacío, el del fin de fichero, es `Lo == Hi`. Con `Hi` inclusivo, el vacío exigiría `Hi = Lo - 1`, que en el offset 0 da la vuelta.
 - **Tabla de líneas perezosa.** Guarda dónde empieza cada línea y se construye en la primera consulta: un fichero sin errores nunca la paga.
 - **Columnas en code points** (caracteres Unicode). En `é=1`, el `=` está en el byte 2 pero es el segundo carácter.
 
@@ -137,7 +137,7 @@ Ese `r` es un `rune`, un alias de `int32`. `'x'` es una constante *rune* sin tip
 
 ### `panic` y `recover`
 
-La regla del libro: la entrada del usuario, también un programa mal escrito, da un `error`. Un bug del compilador, como pedir la línea 0, da un `panic(v)`.
+La regla del libro: la entrada del usuario, también un programa mal escrito, nunca da un panic. Un bug del compilador, como pedir la línea 0, da un `panic(v)`.
 
 `panic` corta la función y sube por las que la llamaron, ejecutando sus llamadas diferidas. Si nadie lo detiene, el programa imprime el valor y la pila, y sale con código 2.
 
@@ -282,7 +282,7 @@ Deshaz el cambio y compara:
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch02-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch02-s1` (mensaje: `ch02-s1: source files and spans`); compárate con `ref/ch02-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch02-s1`; compárate con `ref/ch02-s1`.
 
 ### Sesión 2: la tabla de líneas y `LineCol` (≈ 2,5 h)
 
@@ -333,7 +333,7 @@ Un ayudante de un `_test.go` se usa desde los demás del paquete.
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch02-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch02-s2` (mensaje: `ch02-s2: line table and LineCol`); compárate con `ref/ch02-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch02-s2`; compárate con `ref/ch02-s2`.
 
 ### Sesión 3: CRLF, code points, `LineText` y `Load` (≈ 2,5 h)
 
@@ -374,8 +374,8 @@ FAIL
 
 :::more Los ficheros de los tests de `Load`
 - **Reales.** `filepath.Join(t.TempDir(), name)` da una ruta en el directorio temporal del test y `os.WriteFile(path, data, 0o644)` lo escribe. `0o644` es un literal octal: los permisos.
-- **4 GiB sin escribirlos.** `os.Truncate(path, 1<<32)` alarga un fichero vacío sin escribir datos, y el sistema de ficheros lo guarda *disperso*. `os.Chmod(path, 0)` le quita los permisos. Como `root` los ignora y Windows ignora `chmod 0`, el test se salta con `t.Skip` si `os.Geteuid()` es 0 o en Windows.
-- **Falsos.** `stat` y `readFile` son variables para que un test ponga un fichero falso delante de `Load`. `fakeFileInfo` implementa la interfaz `fs.FileInfo` (seis métodos, de `Name` a `Sys`) con el modo y el tamaño que elige el test. `useFakeOS` cambia `stat` y `readFile` y los restaura con `t.Cleanup`, que corre al acabar el test.
+- **4 GiB sin escribirlos.** `os.Truncate(path, 1<<32)` alarga un fichero vacío sin escribir datos, y el sistema de ficheros lo guarda *disperso*. `os.Chmod(path, 0)` le quita los permisos. Como `root` los ignora y en Windows `chmod 0` no impide leer, el test se salta con `t.Skip` si `os.Geteuid()` es 0 o en Windows.
+- **Falsos.** `stat` y `readFile` son variables para que un test ponga un fichero falso delante de `Load`. `fakeFileInfo` implementa la interfaz `fs.FileInfo` (seis métodos) con el modo y el tamaño que elige el test. `useFakeOS` cambia `stat` y `readFile` y los restaura con `t.Cleanup`, que corre al acabar el test.
 :::
 
 #### El código
@@ -422,7 +422,7 @@ Con la columna, verde. Los bytes inválidos ya pasaban: uno ocupa una columna.
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch02-s3` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch02-s3` (mensaje: `ch02-s3: CRLF, code points, LineText and Load`); compárate con `ref/ch02-s3`.
+Al terminar: tus tests en verde, commit y etiqueta `ch02-s3`; compárate con `ref/ch02-s3`.
 
 ## Ejecútalo
 
@@ -552,7 +552,7 @@ func main() {
 
 Con `[]file`, el `append` no cabe en la capacidad 1: reserva un array de dos y **copia** el `a.ki`. `f` sigue apuntando al `a.ki` del array viejo, que el recolector mantiene vivo porque `f` lo alcanza. La tabla se escribe ahí y `files[0]` no la ve, sin crash ni aviso.
 
-Con `[]*file`, el `append` copia el puntero, y `ptrs[0]` y `p` siguen siendo el mismo `file`. Es el caso de `SourceManager`: la tabla se escribe en la primera consulta, quizá con otros ficheros ya añadidos.
+Con `[]*file`, el `append` copia el puntero, y `ptrs[0]` y `p` siguen siendo el mismo `file`. `SourceManager` lo elige por eso: guardar un `*file` no tiene riesgo. Con `[]file`, la regla es no conservar ninguno tras un `Add`; el capítulo 4 va por ahí.
 :::
 
 :::exercise
@@ -628,7 +628,7 @@ BenchmarkLineCol/linear-16        	     518	   2432998 ns/op	       0 B/op	     
 
 - **Con la tabla hecha,** 18 ns: unos 20 pasos de búsqueda binaria, sin reservar memoria.
 - **La lineal,** 2,4 ms: recorre 10 MB cada vez.
-- **La primera consulta,** 7,4 ms y 21 MB en 39 asignaciones: la tabla crece por pasos hasta un millón de `uint32` (4 MB), y cada paso deja atrás un array.
+- **La primera consulta,** 7,4 ms y 21 MB en 39 reservas: la tabla crece por pasos hasta un millón de `uint32` (4 MB), y cada paso deja atrás un array.
 
 Se amortiza en unas pocas consultas, y un fichero sin errores no la paga.
 :::
@@ -718,7 +718,7 @@ La tercera dice que `FirstInvalidUTF8`, el bucle caliente, no retiene `b`.
 :::
 
 :::answer
-Porque el recorte permite no copiar sin riesgo: con `cap == len`, un `append` del llamador realoja y nunca escribe en el array del fichero. Y un corte más allá del final hace panic en lugar de devolver bytes sobrantes del buffer. Copiar costaría una asignación por llamada; recortar, nada.
+Porque el recorte permite no copiar sin riesgo: con `cap == len`, un `append` del llamador realoja y nunca escribe en el array del fichero. Y un corte más allá del final hace panic en lugar de devolver bytes sobrantes del buffer. Copiar costaría una reserva por llamada; recortar, nada.
 :::
 
 :::review
@@ -726,7 +726,7 @@ Porque el recorte permite no copiar sin riesgo: con `cap == len`, un `append` de
 :::
 
 :::answer
-Porque se escribe en los `file` después de crearlos (`hadBOM`, la tabla de líneas). Con `[]file`, un puntero a un elemento queda en el array viejo tras un `append` que realoja, y lo escrito se pierde sin ruido, porque el recolector mantiene vivo ese array. Con punteros, los `file` no se mueven.
+Porque así guardar un `*file` no tiene riesgo. Con `[]file`, un puntero a un elemento queda en el array viejo tras un `append` que realoja, y lo escrito se pierde sin ruido, porque el recolector mantiene vivo ese array. Con punteros, los `file` no se mueven. No es obligatorio: basta con no conservar un `*file` tras un `Add`, y el capítulo 4 va por ahí.
 :::
 
 :::review
@@ -769,7 +769,7 @@ Porque no rechaza nada. El borrow checker prueba que no hay aliasing peligroso n
 - `append` reutiliza o realoja: de ahí el aliasing y las referencias obsoletas. `a[i:j:k]` limita la capacidad.
 - `string` es inmutable y no garantiza UTF-8; las conversiones con `[]byte` copian.
 - `%w` envuelve, `errors.Is` busca un valor y `errors.As`, un tipo.
-- La entrada del usuario da un `error`; un fallo del compilador, un panic.
+- La entrada del usuario nunca da un panic; un fallo del compilador, sí.
 - El recolector evita los punteros colgantes, no el aliasing ni las vistas que retienen arrays.
 - `SourceManager`: spans semiabiertos, tabla de líneas perezosa, columnas en code points.
 
@@ -777,7 +777,7 @@ Porque no rechaza nada. El borrow checker prueba que no hay aliasing peligroso n
 
 **Aliasing, en una entrevista.** Preguntan qué imprime el ejemplo de la teoría. Se evita con `slices.Clip(base)` o `append(slices.Clone(base), …)`.
 
-**Vistas en una API pública.** Quien devuelve un slice decide qué puede hacer quien lo recibe: `bytes.Split` limita la capacidad de los trozos, y `bytes.Buffer.Bytes` documenta el aliasing como contrato.
+**Vistas en una API pública.** Quien devuelve un slice decide qué puede hacer quien lo recibe: `bytes.Split` limita la capacidad de todos los trozos menos el último, y `bytes.Buffer.Bytes` documenta el aliasing como contrato.
 
 **`string([]byte)`.** Cada conversión copia, salvo si el compilador demuestra que no hace falta: una búsqueda como `keywords[string(text)]` no paga.
 
