@@ -118,8 +118,6 @@ Se cuentan **tokens que no son `Newline`**: contar esa marca de la regla de lín
 
 Un token `Error` del lexer ya tiene su diagnóstico: el parser no añade otro.
 
-Sin estas piezas, `fn f() { let =⏎let = }` da seis diagnósticos; con ellas, uno.
-
 :::more Los errores de más que quedan
 La promesa es no dar cascadas. Un segundo error de la sentencia sale si el parser llega a él a 3 tokens o más del primero: `g(,) + h(,)` da dos. `f(1 2) + g(,)` da uno: tras el `)` que falta, el salto se come `g(,)`.
 
@@ -136,7 +134,7 @@ Es barata, no consume nada, y no es *backtracking*: se decide antes de leer. Lle
 
 Un `Module`, el árbol de un fichero, guarda cuatro `IdVec` (items, sentencias, expresiones y tipos) y cuatro pools. Un nodo nombra a otro por su id, y una lista de hijos es un `ListRange` (capítulo 4). Lo nuevo:
 
-- **Contigüidad.** Añadidos según se leen, los argumentos de `g` en `f(g(1), 2)` se intercalarían con los de `f`. Por eso cada lista se junta en un slice local y `appendRange` la añade de una vez.
+- **Contigüidad.** Añadidos según se leen, los argumentos de `g` en `f(1, g(2), 3)` se intercalarían con los de `f`. Por eso cada lista se junta en un slice local y `appendRange` la añade de una vez.
 - **`*[]T`.** `appendRange` recibe un puntero al slice porque `append` devuelve una cabecera nueva y el `Module` debe quedarse con ella.
 - **El id 0 es un id,** no «nada»: un hijo opcional lleva una marca al lado, `Ret` y `HasRet`.
 - **Vistas recortadas.** `ExprList` devuelve `pool[First:end:end]` (capítulo 2): un `append` de quien la recibe realoja, y no pisa la lista siguiente.
@@ -175,14 +173,14 @@ n = 2
 ```
 
 :::from Rust
-No compila en Rust: el closure toma prestada `n`. En Go, el recolector la mantiene viva.
+En Rust no compila: no se puede asignar a `n` mientras el closure la tiene prestada. En Go la variable es compartida y, si el closure sobrevive a la función, el recolector la mantiene viva.
 :::
 
 Los tests lo usan: sus ayudantes capturan `t` y `src` sin recibirlos.
 
 ### El impresor y las S-expresiones
 
-`PrintModule` acumula el texto en un `strings.Builder` (capítulo 3) y devuelve un `string`; `ki emit` lo escribe en un `io.Writer`. Las S-expresiones no son ambiguas, y un golden las compara con `diff`.
+`PrintModule` acumula el texto en un `strings.Builder` (capítulo 3) y devuelve un `string`; `ki emit` lo escribe en un `io.Writer`. Las S-expresiones no son ambiguas, y un golden las compara línea a línea.
 
 ### Fuzzing del parser
 
@@ -263,6 +261,10 @@ Sin un `{` en la línea de la firma, `pub fn print(x: Int)` no tiene cuerpo: es 
 
 {{file ch06-s1 internal/syntax/ast_printer.go}}
 
+Y un comentario:
+
+{{diff ch05-s4..ch06-s1 internal/syntax/source_check.go}}
+
 {{reftest T06.14}}
 
 {{reftest T06.16}}
@@ -307,6 +309,8 @@ Fallan sin panic todos los subtests de expresiones:
 #### El código
 
 {{file ch06-s2 internal/syntax/parser_expr.go}}
+
+El diff añade el campo `chain`: quita antes el tuyo.
 
 {{diff ch06-s1..ch06-s2 internal/syntax/parser.go}}
 
@@ -364,6 +368,8 @@ Fallan todos los de sentencias y el de entrada mal formada.
 
 {{diff ch06-s2..ch06-s3 internal/syntax/lexer.go}}
 
+{{diff ch06-s2..ch06-s3 internal/syntax/ast_printer.go}}
+
 - **`block`** decide por lo que sigue a la expresión. Un `;` la hace sentencia; un `Newline`, también, salvo que detrás venga el `}`: entonces es la cola, el valor del bloque. Sin ese `&& p.at(RBrace)`, `{ f()⏎ g() }` da `(block (call g))`: `f()` se toma como cola y `g()` la pisa.
 - **`found`** cita el token con `tb.text`: por eso `Lex` guarda el fichero en el buffer.
 
@@ -411,6 +417,8 @@ Lo demás de estos diffs ya lo tienes: la referencia tenía esas tarjetas en otr
 
 {{diff ch06-s3..ch06-s4 internal/syntax/parser_stmt.go}}
 
+{{diff ch06-s3..ch06-s4 internal/syntax/ast_printer.go}}
+
 - **El separador.** Tras una sentencia, `block` lo pide solo en la misma línea (`!p.tok().NewlineBefore`): tras un `(` sin cerrar no hay `Newline` hasta el `}`, y basta el salto de línea del fichero.
 - **Abandono.** E0204 abandona la expresión, igual que E0205, y una condición abandonada arrastra al `if` y a lo que lo contiene: lo que esperaban ya se saltó.
 - **Anidamiento.** `enter` y `leave` rodean cada paréntesis, argumento, prefijo, condición, rama y bloque.
@@ -426,9 +434,7 @@ Lo demás de estos diffs ya lo tienes: la referencia tenía esas tarjetas en otr
 
 {{diff ch06-s3..ch06-s4 internal/driver/check.go}}
 
-`finishEmit` da el volcado por stdout, los diagnósticos por stderr y al final el código de salida: se ve el árbol entero de un fichero con errores. `ki check` pasa ahora por el parser.
-
-Dos de los golden:
+`finishEmit` da el volcado por stdout, los diagnósticos por stderr y al final el código de salida: se ve el árbol entero de un fichero con errores.
 
 {{file ch06-s4 tests/errors/ch06/three_errors.ki}}
 
@@ -578,7 +584,7 @@ func (p *parser) andChain(start base.Span, ops []base.Span) string {
 
 Los operandos son el texto entre operadores, no los spans de los nodos, que dejan fuera los paréntesis de un grupo. Una cadena con otro error dentro no lleva fix-it.
 
-Ningún renderizador muestra aún los fix-its, pero los tests comparan el diagnóstico entero. Un ayudante `withFix(d, sp, text)` pone el esperado; el caso `a < b < c` pide `a < b && b < c` sobre `[0, 9)`; la tabla de formas de la cadena gana los campos `chain` (el texto que se reemplaza) y `fix` y una fila, `(a) < (b + 1)  <  c`, que conserva paréntesis y quita espacios. Sin el sink aparte, los casos de un E0203 con un E0205 detrás fallan por el orden.
+Ningún renderizador muestra aún los fix-its, pero los tests comparan el diagnóstico entero. Un ayudante `withFix(d, sp, text)` pone el esperado; el caso `a < b < c` pide `a < b && b < c` sobre `[0, 9)`; la tabla de formas de la cadena gana los campos `chain` (el texto que se reemplaza) y `fix` y una fila, `(a) < (b + 1)  <  c`, que conserva paréntesis y quita espacios. El capítulo 7 será más estricto: esta fila copia `(b + 1)`, que se evaluaría dos veces, y allí E0203 solo edita si el operando central es un token. Sin el sink aparte, los casos de un E0203 con un E0205 detrás fallan por el orden.
 :::
 
 :::exercise
@@ -783,4 +789,4 @@ for i := 0; i < 3; i++ {
 }
 ```
 
-Con `go 1.21` en el `go.mod`, da `3 3 3`: los closures capturan la única variable. Con `go 1.22`, `0 1 2`. Es el `var` frente al `let` de un `for` en JavaScript.
+Con `go 1.21` en el `go.mod`, da `3 3 3`: los closures capturan la única variable. Con `go 1.22`, `0 1 2`.
