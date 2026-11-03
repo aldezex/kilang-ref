@@ -17,7 +17,7 @@ fn main() {
     |> show
   print("fib = ${n}\n")
 }
-$ ki emit tokens fib.ki
+$ build/bin/ki emit tokens fib.ki
 …
 2:17 RParen
 3:5 Pipe
@@ -127,7 +127,7 @@ Solo las llaves entran, porque solo la `}` tiene que decidir: en `${ ( }`, cierr
 
 ### La regla de línea y la de Go
 
-Ki no pide `;`. El lexer anota cada salto en el token siguiente (`NewlineBefore`) e inserta un `Newline` donde acaba una sentencia. El parser nunca mira líneas.
+Ki no pide `;`. El lexer anota cada salto en el token siguiente (`NewlineBefore`) e inserta un `Newline` donde acaba una sentencia.
 
 El `\r\n` es un solo salto, y su `Newline` ocupa los dos bytes. Un `\r` suelto es un espacio.
 
@@ -139,7 +139,7 @@ Un salto acaba una sentencia si:
 
 Nunca hay `Newline` ante el `Eof`.
 
-Go inserta `;` mirando solo el final de la línea; Ki mira también los delimitadores y la línea siguiente, y acepta lo que Go rechaza (`⏎`: salto de línea):
+Go inserta `;` mirando solo el final de la línea; Ki mira también los delimitadores y la línea siguiente, y no corta donde Go corta (`⏎`: salto de línea):
 
 - una línea que empieza por `.`;
 - `}` y `else` en dos líneas;
@@ -155,7 +155,7 @@ Recuperarse es seguir lexando tras un error sin inventar nada:
 
 - Un carácter inesperado da un `Error` (E0104), y el lexer sigue.
 - Un literal no admite saltos de línea: una comilla olvidada estropea una línea, no el fichero.
-- Un literal roto deja un token en su sitio (`Int` con 0, `Char` con `utf8.RuneError`, `Error` en un string sin cerrar), para que el parser no añada otro error.
+- Un literal roto deja un token en su sitio (`Int` con 0, `Char` con `utf8.RuneError`, `Error` en un string sin cerrar), para que el parser, cuando lo lea, no añada otro error.
 
 **Un token `Error` nunca cierra una expresión.** Tras un error no se sabe qué quería decir la línea, y un `Newline` tras un `$` suelto daría al parser un segundo error.
 
@@ -229,8 +229,6 @@ FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
 
 `gen` usa el `FlagSet` global de `flag` (`flag.String`, `flag.Parse`), que ante un flag malo sale con 2. Aquí sirve, porque nadie lo ejecuta en proceso.
 
-En la ayuda de `-o`, las comillas invertidas nombran el argumento: `-h` imprime `-o file`.
-
 {{file ch05-s1 internal/syntax/token.go}}
 
 `Token` no guarda texto y ocupa 24 bytes: `Payload` apunta a las tablas de `TokenBuffer`, la idea del capítulo 4.
@@ -244,6 +242,10 @@ En la ayuda de `-o`, las comillas invertidas nombran el argumento: `-h` imprime 
 - **`ident`** busca con `keywords[string(text)]`, una conversión que no reserva memoria (capítulo 4, ejercicio 3).
 - **`visible`** escribe como `<U+XXXX>`, en los mensajes, lo que `unicode.IsPrint(r)` rechaza.
 - **`DumpTokens`** cita los textos con `strconv.Quote` y escribe los `Float` con `strconv.FormatFloat(v, 'g', -1, 64)`, la forma más corta que vuelve a leerse igual. Hasta la sesión 4 es cuadrático en una línea larga: `LineCol` la recuenta en cada token.
+
+`source_check.go` cambia un comentario:
+
+{{diff ch04-s2..ch05-s1 internal/syntax/source_check.go}}
 
 {{reftest T05.04}}
 
@@ -354,7 +356,8 @@ func (s *bracketStack) enter()               // an interpolation starts
 func (s *bracketStack) leave()               // it ends: close the brackets opened inside it
 ```
 
-3. **Míralos fallar.** `internal/kitest` e `internal/syntax` no compilan, fallan cinco subtests de la CLI y el golden `ch05/line_rule.ki` sale con 2 en lugar de 0. Ya pasa `gen`.
+3. **Actualiza tres tests de la CLI,** por el comando y el flag nuevos: T01.04 acaba en `emit`; T03.56 lleva `[--update]` en su línea de uso; T03.66 suma un caso `--update`, que arregla `fail.ki` y sale con 0.
+4. **Míralos fallar.** `internal/kitest` e `internal/syntax` no compilan, fallan cinco subtests de la CLI y el golden `ch05/line_rule.ki` sale con 2 en lugar de 0. Ya pasa `gen`.
 
 #### La regla de línea
 
@@ -369,8 +372,6 @@ func (s *bracketStack) leave()               // it ends: close the brackets open
 
 `DumpTokens` pasa a ser lineal: sin `\n` entre dos tokens, suma a la columna los code points que los separan (`utf8.RuneCount`).
 
-Su test se salta la fila larga si falló una corta (`if t.Failed() { return }`): un volcado lento agotaría el tiempo y escondería los mensajes.
-
 {{reftest T05.52}}
 
 #### `ki emit tokens` y `ki check`
@@ -382,6 +383,8 @@ Su test se salta la fila larga si falló una corta (`if t.Failed() { return }`):
 {{diff ch05-s3..ch05-s4 internal/driver/check.go}}
 
 `ki check` llama ahora a `Lex`, que ya ejecuta `CheckSource`: llamar a las dos daría cada E0101 dos veces.
+
+{{diff ch05-s3..ch05-s4 internal/driver/session.go}}
 
 `NewSession` crea el `Interner` con `base.NewInterner()`: su valor cero no sirve, `Intern` haría panic con un puntero nulo.
 
@@ -399,6 +402,8 @@ Un golden comprueba el comando entero:
 
 - Solo toca `expect-stdout` y `expect-stderr`: si ajustara el `expect-exit`, `--update` aprobaría un panic nuevo.
 - Solo reescribe si `exit >= 0`: una ejecución que no llegó a salir (-1) no tiene salida que guardar.
+
+{{diff ch05-s3..ch05-s4 internal/driver/test.go}}
 
 :::more Cómo reescribe `--update` un fichero
 `rewriteExpectations` corta el fichero con `bytes.SplitAfter`, que deja cada `\n` pegado a su línea. No edita en el sitio: anota cada cambio como un `edit` (dónde, cuántas líneas quita, cuáles pone). Los ordena con `slices.SortStableFunc` (estable, para que stdout siga delante de stderr si van al mismo sitio) y copia el fichero intercalándolos. Lo demás pasa tal cual, con su BOM y sus CRLF.
@@ -584,9 +589,11 @@ Sin el `SortFunc` (y sin el import de `slices`, que se queda sin uso), las líne
 :::
 
 :::solution
-`-` y `+` también son prefijos: `-b` es una expresión completa. Si continuaran la línea, `let x = a⏎-b` sería una resta, y el significado de un bloque dependería de dónde se parte una línea. En Ki son dos sentencias; para partir una suma, el operador va al final: `a +⏎b` no recibe `Newline`.
+`-` también es prefijo: `-b` es una expresión completa. Si continuara la línea, `let x = a⏎-b` sería una resta, y el significado de un bloque dependería de dónde se parte una línea. En Ki son dos sentencias.
 
-`|>` no puede empezar una expresión, así que una línea que empieza por él solo puede continuar la anterior: `xs⏎  |> sum` es una sentencia. Igual con `.`, `&&`, `||` y `else`; no con `|` solo, que empieza un brazo de patrón.
+`+` no es prefijo, pero sigue la misma regla, porque no está en la lista: el parser del capítulo 6 da E0201 con `a⏎+b`, en lugar de una suma silenciosa. Para partir una suma, el operador va al final: `a +⏎b` no recibe `Newline`.
+
+`|>` no puede empezar una expresión, así que una línea que empieza por él solo puede continuar la anterior: `xs⏎  |> sum` es una sentencia. Igual con `.`, `&&`, `||` y `else`; no con `|` solo, que no está en la lista: `a⏎| b` recibe `Newline`.
 :::
 
 :::exercise
@@ -763,7 +770,7 @@ Manda el delimitador abierto más interno: dentro de `(` un salto es un espacio,
 :::
 
 :::answer
-Porque así los `Lo` no decrecen, que es lo que piden los diagnósticos ordenados por posición y el fuzz target. Al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después.
+Porque así los `Lo` no decrecen, como pide el fuzz target: al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después. Y el parser lee el `Error` donde estaba el string, antes que el código de dentro: al final, ese código le daría errores de más.
 :::
 
 :::review
