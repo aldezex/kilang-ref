@@ -66,7 +66,7 @@ v7.0.0
 
 El paso «Check the Go version» compara la versión instalada con el literal `go1.27.3`, el mismo número que la línea `toolchain` del `go.mod`. En cada cambio de versión de Go, ese literal de `ci.yml` cambia en el mismo commit que el `go.mod`. `TestCIWorkflow/go_version_matches_toolchain` lo fija: lee la línea `toolchain` del `go.mod` y exige que el paso lleve exactamente ese número.
 
-El workflow declara `permissions: contents: read` (el token solo lee el repositorio) y, en el job, `timeout-minutes: 15`; y pasa `-o Acquire::Retries=3` a los dos `apt-get`, porque `apt` no reintenta una descarga fallida si no se le pide. Las acciones siguen fijadas por su versión mayor, como arriba.
+El workflow declara `permissions: contents: read` (el token solo lee el repositorio) y, en el job, `timeout-minutes: 15`. No pasa `-o Acquire::Retries` a los `apt-get`: `apt` 3.2.0, el de Ubuntu 26.04, ya reintenta por defecto. `apt-helper download-file` contra un servidor que acepta y nunca responde, con `Acquire::http::Timeout=2`, abre 8 conexiones sin la opción, 8 con `Acquire::Retries=3` y 2 con `Acquire::Retries=0`. El `ci.yml` de las etiquetas de la Parte I aún la lleva, con un comentario que dice lo contrario; el capítulo 1 lo avisa con una fe de erratas. Las acciones siguen fijadas por su versión mayor, como arriba.
 
 ## Delve
 

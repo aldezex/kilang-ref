@@ -34,12 +34,9 @@ jobs:
       # The bare image has no git, no certificates and no C compiler.
       # actions/checkout needs git to clone the repository with its history,
       # and git needs ca-certificates to talk https; go test -race needs cgo,
-      # so gcc and libc6-dev; actions/setup-go unpacks Go with tar. apt gives
-      # up on a failed download unless it is told to retry, so both apt-get
-      # commands try each download up to three times: a mirror that fails once
-      # should not turn the run red.
+      # so gcc and libc6-dev; actions/setup-go unpacks Go with tar.
       - name: Install system packages
-        run: apt-get update -o Acquire::Retries=3 && apt-get install -y -o Acquire::Retries=3 --no-install-recommends git ca-certificates gcc libc6-dev tar
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates gcc libc6-dev tar
       - name: Check out the repository
         uses: actions/checkout@v7
         with:

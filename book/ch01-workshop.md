@@ -66,7 +66,7 @@ A cambio, `local` deja de imponer la línea `toolchain`: la vigilan `ci-local.sh
 
 Un paquete `main` con una función `main` es un ejecutable; cualquier otro, una biblioteca. `cmd/ki/` es el de `ki`, y el compilador vive bajo `internal/`.
 
-La primera letra decide la visibilidad: otro paquete ve `driver.Version`, *exportado* (`pub`, sin más grados), pero no `goVersion`.
+La primera letra decide la visibilidad: otro paquete ve `driver.Version`, *exportado* (`pub`), pero no `goVersion`.
 
 `internal/` hace de `pub(crate)`, por directorios: lo que cuelga de él solo lo importa el árbol que lo contiene. Así `internal/driver` no es una API pública que luego no puedas cambiar.
 
@@ -134,7 +134,7 @@ Cada `FlagSet` usa `flag.ContinueOnError` y `SetOutput(io.Discard)`: `flag` no t
 
 `debug.ReadBuildInfo()` devuelve lo que `go build` graba en cada binario, y de ahí sale la versión de Go.
 
-La de `ki` no puede salir de ahí: en Go 1.27 es `"(devel)"` fuera de git y, dentro, una pseudo-versión que cambia con cada commit.
+La de `ki` no puede salir de ahí: en Go 1.27 es `"(devel)"` fuera de git y, dentro, sin etiqueta semver (`ch01-s1` no lo es), una pseudo-versión que cambia con cada commit.
 
 ### TDD rojo-verde y tests golden
 
@@ -142,7 +142,7 @@ La de `ki` no puede salir de ahí: en Go 1.27 es `"(devel)"` fuera de git y, den
 - **Verde.** El código mínimo que lo hace pasar.
 - **Refactor.** Limpias con los tests como red.
 
-Un test fuerte compara valores exactos y mira los bordes. Pregúntate qué implementación equivocada dejaría pasar cada test; si es «cualquiera», no sirve.
+Un test fuerte compara valores exactos y mira los bordes. Pregúntate qué implementación equivocada, un *mutante*, deja pasar; si es «cualquiera», no sirve.
 
 Un *test golden* compara la salida de un programa con la esperada, guardada en un fichero; en Ki, en la cabecera de cada programa (capítulo 3).
 
@@ -255,7 +255,7 @@ FAIL
 
 #### `ci/ci-local.sh`
 
-El script que decide el verde de una sesión: formato, `vet`, build, tests con y sin `-race`, compilación cruzada.
+El script que decide el verde de una sesión.
 
 {{file ch01-s1 ci/ci-local.sh}}
 
@@ -323,8 +323,6 @@ Go no tiene constructores: por convención, `NewX` construye un `X`; aquí, un p
 
 `usage()` saca la línea `commands:` de la tabla, así que nunca se desfasa. `make([]string, n)` crea un slice de `n` cadenas vacías.
 
-Ya pasa:
-
 {{reftest T01.05}}
 
 {{reftest T01.06}}
@@ -365,9 +363,9 @@ git tag -a ch01-s2 -m "ch01-s2: commands with flag, table tests and toolchain fa
 
 #### Los tests del workflow
 
-Un workflow no se prueba en local, pero sí lo que dice: estos tests leen `ci.yml` como texto, porque la biblioteca estándar no trae parser de YAML.
+Un workflow no se prueba en local: estos tests leen `ci.yml` como texto, porque la biblioteca estándar no trae parser de YAML.
 
-1. **Generaliza el ayudante de la sesión 2,** con los tests en verde como red:
+1. **Generaliza el ayudante de la sesión 2:**
 
 {{diff ch01-s2..ch01-s3 internal/toolchain/toolchain_test.go}}
 
@@ -416,6 +414,10 @@ FAIL
 1. **Añade el workflow.**
 
 {{file ch01-s3 .github/workflows/ci.yml}}
+
+:::note
+**Fe de erratas.** El comentario de `apt` se equivoca: ya reintenta tres veces por defecto, y `Acquire::Retries=3` no cambia nada.
+:::
 
 :::more Las decisiones de `ci.yml`
 **El contenedor.** `ubuntu:26.04`, la Ubuntu de tu WSL, no se mueve como `ubuntu-latest`.
@@ -729,7 +731,7 @@ Con `ExitOnError`, `Parse` llamaría a `os.Exit(2)` dentro de `Main` y mataría 
 :::
 
 :::answer
-Para atrapar la deriva cuando es barata: `syscall.Kill` compila en tu máquina y falla en Windows, y sin la comprobación el fallo aparecería en el capítulo 66, bajo sesenta capítulos de código.
+Para atrapar la deriva cuando es barata: `syscall.Kill` compila en tu máquina y falla en Windows, y sin la comprobación el fallo aparecería entonces, bajo sesenta capítulos de código.
 :::
 
 :::review

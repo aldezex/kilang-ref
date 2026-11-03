@@ -136,10 +136,10 @@ case:    un programa que imprime `debug.ReadBuildInfo().Main.Version`, en un mó
          flags y ejecutado
 expect:  `go build` sale con 0 y el programa imprime exactamente "(devel)\n"
 why:     por eso `ki --version` lleva su propia constante `Version`: fuera de un repositorio git, como
-         aquí, un `go build` normal da `(devel)`; dentro de uno, como el repositorio en el que escribes
-         `ki`, da una pseudo-versión como `v0.0.0-20261024213547-ad33e4c9f4d2`, que cambia con cada
-         commit y lleva `+dirty` si hay cambios sin commit. Ninguna de las dos es un número de versión
-         estable que `ki --version` pueda mostrar
+         aquí, un `go build` normal da `(devel)`; dentro de uno sin etiquetas semver, como el repositorio
+         en el que escribes `ki`, da una pseudo-versión como `v0.0.0-20261024213547-ad33e4c9f4d2`, que
+         cambia con cada commit y lleva `+dirty` si hay cambios sin commit. Ninguna de las dos es un
+         número de versión estable que `ki --version` pueda mostrar
 ref:     TestToolchainFacts/plain_build_has_devel_version
 
 [T01.14] toolchain.race_requires_cgo                       level: core

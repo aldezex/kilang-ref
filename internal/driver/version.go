@@ -7,8 +7,9 @@ import (
 
 // Version is the version of ki. It travels in the binary because
 // debug.ReadBuildInfo has no stable number to offer: it reports "(devel)" for a
-// go build without VCS information, and a pseudo-version that changes with
-// every commit for a module at the root of a git repository.
+// go build without VCS information, and, for a module at the root of a git
+// repository, a pseudo-version that changes with every commit unless the commit
+// has a semver tag, which Ki's chNN-sK tags are not.
 const Version = "0.0.1"
 
 // goVersion returns the version of Go that built this binary, such as
