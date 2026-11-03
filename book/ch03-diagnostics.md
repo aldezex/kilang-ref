@@ -8,7 +8,7 @@ milestone: `ki check` muestra un diagnóstico con caret
 
 ## Objetivo
 
-Al terminar, `ki check` señala con un caret lo que está mal en un fichero:
+Al terminar, `ki check` señala con un caret qué falla en un fichero:
 
 ```console
 $ build/bin/ki check tests/errors/ch03/invalid_utf8_render.ki; echo $?
@@ -20,21 +20,25 @@ error[E0101]: invalid UTF-8 byte 0xFF
 1
 ```
 
-`ki test` ejecuta los programas de prueba y compara lo que imprimen con lo que esperan sus cabeceras. Sin lexer, el único error posible es un fichero que no es texto válido, pero los diagnósticos y el runner ya son los definitivos, camino del hito M1 (capítulo 10).
+`ki test`, el *runner* de Ki, ejecuta los programas de prueba y compara su salida con lo que piden sus cabeceras.
+
+Sin lexer, el único error posible es un fichero que no es texto, pero diagnósticos y runner ya son los definitivos.
 
 :::note
-**Fe de erratas (2026-10-28).** Los mensajes de los errores de este capítulo mejoran en el capítulo 7 («El listón: errores al nivel de rustc»), que los explica.
+**Fe de erratas.** Estos mensajes de error mejoran en el capítulo 7.
 :::
 
 ## Teoría
 
-### Un error de tu programa es un dato
+### Un error es un dato
 
-Un error del programa se muestra de tres formas: con caret para una persona, como `fichero:línea:columna: mensaje` para un editor y en JSON para el runner. Por eso es un **valor**: cada pase (una etapa del compilador) entrega un `diag.Diagnostic` a un `diag.Sink`, que los reúne, y otra pieza decide cómo se muestra.
+Un error del programa se muestra con caret para una persona, como `fichero:línea:columna: mensaje` para un editor y en JSON para el runner.
 
-El `error` de Go queda para lo que falla fuera del programa (un fichero ilegible), y `panic`, para un fallo del compilador.
+Por eso es un **valor**: cada pase (una etapa del compilador) entrega un `diag.Diagnostic` a un `diag.Sink`, que los reúne, y otra pieza decide cómo se muestra.
 
-Gravedad (error, warning o nota) y formato son tipos suma, un `enum` en Rust. Go no los tiene: `iota` para valores, interfaces selladas para tipos, y `(T, error)` en lugar de `Result`.
+El `error` de Go queda para lo que falla fuera del programa, y `panic`, para un fallo del compilador.
+
+Gravedad (error, warning, nota) y formato son tipos suma (`enum` en Rust), que Go no tiene. Usa `iota` para valores, interfaces selladas para tipos y `(T, error)` en lugar de `Result`.
 
 ### Tipos definidos, `iota` y `String()`
 
@@ -48,31 +52,32 @@ const (
 )
 ```
 
-En un bloque `const`, `iota` vale 0 y aumenta en uno con cada línea; una línea sin expresión repite la anterior. `Severity` es un tipo propio (capítulo 2): asignarle una constante de `type DiagFormat uint8` no compila.
+En un bloque `const`, `iota` vale 0 y aumenta en uno con cada línea; una línea sin expresión repite la anterior. `Severity` es un tipo definido (capítulo 2).
 
-Go **no** garantiza que el conjunto esté cerrado: `Severity(7)` compila, y un `switch` que no cubre un caso no avisa. Por eso `String()` termina con `return fmt.Sprintf("Severity(%d)", uint8(s))`: un valor que solo puede salir de un fallo se ve como tal.
-
-:::from Rust
-`iota` da los valores de un `enum` sin datos, sin su garantía: en Rust no existe un `Severity` fuera de sus variantes, y `match` las exige todas.
-:::
+Go **no** cierra el conjunto: `Severity(7)` compila, y un `switch` incompleto no avisa. Por eso `String()` termina escribiendo `Severity(7)`: un valor que solo puede salir de un fallo se ve como tal.
 
 ### `fmt`: verbos, `Stringer` y `Formatter`
 
-`fmt` usa la interfaz `fmt.Stringer`, `String() string`, con los verbos de texto (`%v`, `%s`, `%q`, `%x`), no con los numéricos: `%d` de `Warning` da `1`. `Code` guarda una letra y un número, y su `String()` usa `"%c%04d"` (un carácter y cuatro cifras rellenas con ceros): `%v` de `E(101)` da `E0101`.
+`fmt` llama a `String() string`, la interfaz `fmt.Stringer`, con los verbos de texto (`%v`, `%s`) y no con los numéricos: `%d` de `Warning` da `1`. El `Code` de un error usa `"%c%04d"`, un carácter y cuatro cifras con ceros: `E0101`.
 
-`%#v` escribe la sintaxis de Go, sin `String()`. Un tipo que cumple `fmt.Formatter` decide la salida de **todos** los verbos salvo `%T` y `%p`.
+Si `String()` no basta, `fmt.Formatter` decide la salida de **todos** los verbos salvo `%T` y `%p`.
 
-:::from Rust
-`%v` con `String()` es `{}` con `Display`, y `%#v` se parece a `{:?}` con `#[derive(Debug)]`.
-:::
+Otros verbos:
+
+| Verbo | Qué escribe |
+| --- | --- |
+| `%02X` | hexadecimal con dos cifras, en mayúsculas (`FF`) |
+| `%x` | hexadecimal en minúsculas, sin relleno (`1f`) |
+| `%#v` | la sintaxis de Go, sin `String()` |
+| `%+v` | los nombres de los campos, solo en un struct sin `String()` |
 
 ### Interfaces y satisfacción implícita
 
-Un tipo cumple una interfaz si tiene sus métodos, sin declararlo (capítulo 1, `io.Writer`). El compilador lo comprueba donde asignas el valor, y dice qué falta: `U does not implement io.Writer (missing method Write)`.
+Un tipo cumple una interfaz si tiene sus métodos, sin declararlo (capítulo 1). El compilador lo comprueba donde asignas el valor.
 
 Un valor de interfaz guarda el tipo concreto y el valor. La **aserción de tipo** pregunta por el tipo: si no es, `w.(T)` hace panic y `v, ok := w.(T)` da `ok == false`.
 
-`T` puede ser una interfaz sin nombre, escrita en el sitio. Así pregunta el runner si su salida sabe vaciarse (`os.Stdout` no):
+`T` puede ser una interfaz sin nombre. Así pregunta el runner si su salida sabe vaciarse:
 
 ```go
 if f, ok := out.(interface{ Flush() error }); ok {
@@ -80,10 +85,10 @@ if f, ok := out.(interface{ Flush() error }); ok {
 }
 ```
 
-El **type switch**, `switch v := x.(type) { case A: … }`, hace varias aserciones a la vez, y en cada `case` `v` tiene ese tipo.
+El **type switch**, `switch v := x.(type) { case A: … }`, hace varias aserciones, y en cada `case` `v` tiene ese tipo.
 
 :::from Rust
-Una interfaz es un trait sin `impl Trait for T`. Su valor es un `dyn Trait`, y `w.(T)` hace de `downcast_ref::<T>()` sobre un `dyn Any`.
+Una interfaz es un trait sin `impl Trait for T`, y `w.(T)` hace de `downcast_ref::<T>()`.
 :::
 
 ### La interfaz sellada
@@ -116,32 +121,16 @@ func Area(s Shape) float64 {
 }
 ```
 
-Fuera de `shape`, `isShape` no se puede nombrar: un `Tri` de otro paquete con ese método da `Tri does not implement shape.Shape (unexported method isShape)`. El receptor de `func (Circle) isShape() {}` no tiene nombre porque no se usa. `%T` escribe el tipo concreto.
+Fuera de `shape`, `isShape` no se puede nombrar, así que nadie fuera la implementa.
 
-El sello tiene una grieta: un struct de otro paquete que **incrusta** la interfaz, `type Sneaky struct{ shape.Shape }`, la cumple. Incrustar es declarar un campo sin nombre, cuyo tipo le da nombre y cuyos métodos se **promocionan** al struct.
+El receptor de `func (Circle) isShape() {}` no tiene nombre porque no se usa. `%T` escribe el tipo concreto.
 
-Además, el type switch no es exhaustivo: si añades `Tri` a `shape` y olvidas su `case`, compila. Por las dos razones, todo type switch sobre una interfaz sellada del libro termina en `default: panic("unreachable")`.
+**El sello tiene una grieta.** Un struct de otro paquete que **incrusta** la interfaz, `type Sneaky struct{ shape.Shape }`, la cumple. Incrustar es declarar un campo con el nombre de su tipo, cuyos métodos se **promocionan** al struct.
+
+**Y el type switch no es exhaustivo:** si añades `Tri` y olvidas su `case`, compila. Por eso todo type switch sobre una interfaz sellada del libro termina en `default: panic("unreachable")`.
 
 :::from Rust
-En Rust, un `match` sin `Tri` da `error[E0004]`; en Go lo descubre el `default` al ejecutarse.
-:::
-
-:::more Qué imprime cada cosa, y el sello visto desde Rust, TS y Python
-**Verbos.** Sobre `Code`, `%d` da `{69 101}`. `%+v` añade los nombres de los campos solo a un struct sin `String()`: sobre `Code` da `E0101`. `%#v` tiene su propia interfaz, `GoStringer`: sobre `Code` da `diag.Code{Letter:0x45, Number:0x65}`, y para `Warning`, `0x1`. `%02X` y `%x` escriben hexadecimal, con dos cifras en mayúsculas (`FF`) o en minúsculas sin relleno (`1f`).
-
-**`Formatter`.** Es `Format(f fmt.State, verb rune)`. Decide también `%#v`, y el `String()` del tipo deja de usarse.
-
-**Tipos definidos.** Con `const FormatShort DiagFormat = 1`, `var s Severity = FormatShort` da `cannot use FormatShort (constant 1 of uint8 type DiagFormat) as Severity value in variable declaration`.
-
-**Interfaces.** Si el método es de `*T` y pasas un `T`, el mensaje acaba en `(method Write has pointer receiver)`. Un `*os.File` no tiene `Flush`, así que con `os.Stdout` el `ok` del runner es falso.
-
-**El sello.** Con el campo incrustado a `nil`, llamar a un método promocionado hace panic. `Area(outside.Sneaky{})` hace panic con `unreachable: outside.Sneaky`, en lugar de inventar un área.
-
-**En otros lenguajes.**
-
-- Rust, `#[derive(Debug)]`: `Code { letter: 69, number: 101 }`. Rust, `match` sin `Tri`: ``error[E0004]: non-exhaustive patterns: `&Shape::Tri` not covered``. El renderizador de Ki imita la forma de ese error: flecha `-->`, barra y caret.
-- TS: una unión discriminada con `const never: never = s` en el `default` sí falla al compilar si añades una variante (`Type '{ kind: "tri"; }' is not assignable to type 'never'`). Go no tiene equivalente.
-- Python: `Severity(7)`, con `enum.auto()`, da `ValueError: 7 is not a valid Severity`; en Go es un valor más.
+Un `match` sin `Tri` da `error[E0004]`; en Go lo descubre el `default` al ejecutarse.
 :::
 
 ### La trampa del nil tipado
@@ -158,31 +147,23 @@ func find(bad bool) error {
 }
 ```
 
-`find(false) == nil` es `false`, aunque `fmt.Println` imprima `<nil>`: el `error` lleva el tipo `*MyErr` y un puntero nulo. Cuando no hay error, devuelve el literal `nil`, nunca una variable de un tipo concreto.
+`find(false) == nil` es `false`, aunque `fmt.Println` imprima `<nil>`. Cuando no hay error, devuelve el literal `nil`, nunca una variable de un tipo concreto.
 
-:::from Rust
-`Option<Box<dyn Error>>` no tiene esta trampa: un `Box` nunca es nulo.
-:::
+### `errors.Join` y `errors.As`
 
-### `errors.Join` y lo que ya sabes
+`errors.Join` reúne varios errores y descarta los `nil`; `errors.Is` encuentra cada uno.
 
-`errors.Join` reúne varios errores y descarta los `nil`, y `errors.Is` encuentra cada uno.
-
-`errors.As` (capítulo 2) se usa al revés de envolver. `reason`, en el runner, quita el `*fs.PathError` de un error antes de mostrarlo: repite una ruta absoluta.
-
-:::from Python
-Recuerda a `ExceptionGroup`, pero el grupo es un valor más que se devuelve.
-:::
+`errors.As` (capítulo 2) desenvuelve: el runner saca así la causa de un `*fs.PathError`, porque esa capa repite una ruta absoluta. `errors.AsType`, su versión genérica, espera al capítulo 4.
 
 ### Sin `Option` ni `Result`
 
-Lo que falla devuelve `(T, error)`. Lo opcional se escribe de dos formas:
+Lo que falla devuelve `(T, error)`. Lo opcional, de dos formas:
 
 - **El valor cero**, si cero no es válido: `Runner.Root == ""` es «el directorio de trabajo».
-- **Un puntero**, si lo es: en la cabecera de un golden, `expect-exit: 0` y no decir nada son cosas distintas, así que `Spec.ExpectExit` es un `*int` y `nil` es «no lo dice».
+- **Un puntero**, si lo es: en la cabecera de un golden, `expect-exit: 0` y no decirlo son cosas distintas, así que `Spec.ExpectExit` es un `*int`.
 
 :::from Rust
-`*int` hace de `Option<i32>`, y desreferenciar un `nil` es un panic. `(T, error)` es un `Result` sin `?`, que nadie obliga a comprobar.
+`*int` hace de `Option<i32>`, pero desreferenciar un `nil` hace panic, y `(T, error)` es un `Result` sin `?`, que nadie obliga a comprobar.
 :::
 
 ### JSON con etiquetas de struct
@@ -198,65 +179,39 @@ type jsonDiagnostic struct {
 }
 ```
 
-Con `json.Marshal`, un slice `nil` sale `null`, pero uno vacío (`[]string{}`), `[]`; un puntero `nil`, `null`.
+`json.Marshal` escribe `null` para un slice o un puntero `nil`, y `[]` para un slice vacío.
 
-:::from Rust
-`#[serde(rename = …)]` lo lee la macro al compilar, y una errata no compila. Con `jsn:"severity"` en Go, la clave sale `"Severity"`, sin aviso.
-:::
+Una errata como `jsn:"severity"` no avisa: la clave sale `"Severity"`.
 
-### `strings.Builder`, `filepath.WalkDir` y el directorio de trabajo
+### `strings.Builder`, `WalkDir` y `Chdir`
 
-- **`strings.Builder`** acumula texto (`WriteString`, `WriteRune`) y lo da con `String()`; su valor cero sirve.
-- **`filepath.WalkDir(root, fn)`** llama a `fn(path, d, err)` por cada entrada del árbol, con `d` un `fs.DirEntry`. Su orden no es el de las rutas completas, y por eso el runner ordena.
-- **`os.Getwd` y `os.Chdir`** leen y cambian el directorio de trabajo, **del proceso entero**: el runner entra en su raíz, para mostrar rutas relativas, y tiene que volver.
-
-:::from Python
-En un test de Go, `t.Chdir` restaura el directorio al acabar, como `monkeypatch.chdir` de pytest.
-:::
-
-:::more Casos límite: el nil tipado, `errors.Join`, `strings.Builder`, `json` y `WalkDir`
-**El nil tipado.** La FAQ de Go lo explica en «Why is my nil error value not equal to nil?». Desreferenciar un puntero `nil` da el panic `invalid memory address or nil pointer dereference`.
-
-**`errors.Join`.** `errors.Join(fs.ErrNotExist, nil, fs.ErrPermission)` tiene el texto `"file does not exist\npermission denied"`, y `errors.Is` encuentra los dos también a través de otro `%w`. `errors.Join(nil, nil)` es `nil`: si acumulas en un bucle, da `nil` cuando no hubo ninguno. `fmt.Errorf` admite también varios `%w`. `errors.AsType`, la versión genérica de `errors.As`, espera al capítulo 4.
-
-**`strings.Builder`.** `WriteRune` escribe un code point en UTF-8.
-
-**`json.Marshal`.** Escapa `"` como `\"`, y `<`, `>` y `&` como `\u003c`, `\u003e` y `\u0026`.
-
-**`json.Unmarshal`.** Acepta una clave que solo difiera en mayúsculas (un campo `Line` sin etiqueta recibe `"line"`) e ignora las que no tienen campo.
-
-**Las etiquetas.** `go vet` solo rechaza una etiqueta mal formada (`json:severity`, sin comillas). En Rust, una errata como `renam` da `unknown serde field attribute`.
-
-**`WalkDir`.** `d.IsDir()` dice si la entrada es un directorio, y `err` no es `nil` si no se pudo leer. Visita cada directorio en orden léxico: `a/y.ki` antes que `a-b/x.ki`, pero como cadenas `a-b/x.ki` va primero (el `-` es 0x2D y la `/`, 0x2F).
-:::
+- **`strings.Builder`** acumula texto y lo da con `String()`.
+- **`filepath.WalkDir(root, fn)`** llama a `fn(path, d, err)` por cada entrada, con `d` un `fs.DirEntry`. Su orden no es el de las rutas completas (visita `a/y.ki` antes que `a-b/x.ki`): el runner ordena.
+- **`os.Getwd` y `os.Chdir`** leen y cambian el directorio de trabajo **del proceso entero**: el runner entra en su raíz, para mostrar rutas relativas, y tiene que volver.
 
 ### UTF-8 y los ficheros golden
 
-`utf8.Valid(b)` solo responde sí o no, y un diagnóstico necesita el **offset** del primer byte malo: por eso existe `FirstInvalidUTF8` (capítulo 2).
+`utf8.Valid(b)` solo responde sí o no; un diagnóstico necesita el **offset** del primer byte malo: por eso existe `FirstInvalidUTF8` (capítulo 2).
 
-Un test **golden** compara una salida larga con la guardada en `testdata/`, un directorio que el comando `go` ignora. Escribir esos ficheros a mano es lento, así que el test los genera con un flag propio:
+Un test **golden** compara una salida larga con la guardada en `testdata/`, que el comando `go` ignora. A mano es lento: el test la genera con un flag:
 
 ```go
 var update = flag.Bool("update", false, "rewrite golden files")
 ```
 
-`flag.Bool` registra el flag en el binario de test y devuelve un `*bool`. Va **después** del paquete, `go test ./internal/diag -update`, porque `go test` pide los paquetes antes de un flag que no conoce; con `./...`, falla en cada paquete sin el flag.
+`flag.Bool` registra el flag en el binario de test y devuelve un `*bool`. Va **después** del paquete (`go test ./internal/diag -update`), porque `go test` pide los paquetes antes de un flag que no conoce.
 
-`-update` escribe lo que el código produce *ahora*, bueno o malo: después lees cada fichero y revisas el diff.
-
-:::from TS
-Es el *snapshot testing* del runner de Node, pero el flag y el formato del fichero los decides tú.
-:::
+`-update` escribe lo que el código produce *ahora*, bueno o malo: después lees cada fichero.
 
 ### Compiladores: diagnósticos como datos
 
-- **Códigos estables.** Un código no se reutiliza nunca: es el que buscas en la documentación y comparan los tests. Su centena dice la etapa: `E01xx` el lexer (y la comprobación previa), `E02xx` el parser, `E03xx` los nombres, `E04xx` los tipos.
-- **Un límite.** El compilador se detiene tras 100 errores (`diag.MaxErrors`): lo demás suele ser cascada del primero.
-- **Una comprobación previa al léxico.** `syntax.CheckSource` rechaza el primer byte de UTF-8 inválido (E0101) o de control, salvo tabulador, `\n` y `\r` (E0102): el lexer del capítulo 5 recibe texto limpio.
-- **Un runner con cabecera.** Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar, con gramática estricta: una cabecera mal escrita e ignorada no comprobaría nada.
-- **Anotaciones.** Un error marcado en línea (`// ERROR(E0101) @9`) se compara por (código, línea, columna), no por su texto: reformular un mensaje no rompe cien golden.
+- **Códigos estables.** No se reutilizan nunca: los buscas en la documentación y los comparan los tests. Su centena dice la etapa.
+- **Un límite.** Tras 100 errores el compilador se detiene: lo demás suele ser cascada del primero.
+- **Una comprobación previa.** `syntax.CheckSource` rechaza el primer byte de UTF-8 inválido (E0101) o de control, salvo tabulador, `\n` y `\r` (E0102): el lexer del capítulo 5 recibe texto limpio.
+- **Una cabecera estricta.** Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Una mal escrita e ignorada no comprobaría nada.
+- **Anotaciones.** Un error esperado, marcado en línea (`// ERROR(E0101) @9`), se compara por (código, línea, columna), no por su texto: reformular un mensaje no rompe cien golden.
 
-**Dos clases de columna.** La posición cuenta code points (capítulo 2), lo que entiende un editor. El caret cuenta **columnas visuales**, para caer bajo el carácter en pantalla, con el tabulador hasta el siguiente múltiplo de 4. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
+**Dos clases de columna.** La posición cuenta code points, lo que entiende un editor. El caret cuenta **columnas visuales**, con el tabulador hasta el siguiente múltiplo de 4. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
 
 ```console
 $ printf 'fn main() {\n\tlet x = \xff\n}\n' > build/bad.ki
@@ -268,34 +223,13 @@ error[E0101]: invalid UTF-8 byte 0xFF
   |             ^ not valid UTF-8
 ```
 
-Lo invisible lleva un sustituto de ancho conocido:
-
-- un byte inválido, U+FFFD;
-- un control ASCII, su imagen de control (*control picture*) del bloque U+2400 (`␁`, `␍`, `␡`);
-- un control C1 o bidireccional, `<U+202E>`.
-
-Los bidireccionales reordenan el texto en pantalla (el ataque *Trojan Source*).
+Lo invisible lleva un sustituto de ancho conocido: un byte inválido, U+FFFD; un control ASCII, una *control picture* (`␁`); uno C1 (U+0080–U+009F) o bidireccional, `<U+202E>`. El bidireccional reordena el texto en pantalla (el ataque *Trojan Source*).
 
 ## Tests primero
 
 {{cards}}
 
-Úsalas como siempre: escribe el test de la tarjeta, míralo fallar, implementa lo justo para el verde, y solo entonces despliega la referencia con su `{{reftest}}`.
-
-:::more Los tests por dentro, sesión por sesión, y el contrato de `SortStableFunc`
-Están en cada fichero de test, en `ref/ch03-sK`.
-
-- **Sesión 1, los tests.** En `sink_test.go`, `^uint32(0)` (el complemento de cero, el mayor `uint32`) detiene el bucle `for off := uint32(2); off != ^uint32(0); off--` cuando `off--` da la vuelta por debajo de cero. Si `Report` cortara en `MaxErrors-1`, fallarían los tres subtests del máximo: T03.07 y T03.08 miran a los dos lados del borde.
-- **Sesión 1, el código.** Go acepta `;` explícitos entre declaraciones, y `gofmt` los pasa a líneas separadas: por eso la interfaz va compacta. `Code` tiene dos campos comparables, así que dos códigos se comparan con `==`. La función de `SortStableFunc` devuelve un negativo si `a` va antes, un positivo si va después y cero si son iguales. Con `SortStableFunc`, dos errores en el mismo offset salen siempre en el orden en que se informaron. El límite del *insertion sort* de `slices.SortFunc` es `maxInsertion = 12` (`slices/zsortanyfunc.go`, Go 1.27).
-- **Sesión 2, `render_test.go`.** T03.10, T03.11 y T03.24–T03.27 comparan con el texto del test; T03.12–T03.22, con `testdata/`. `checkGolden(t, name, got)`, con `*update`, crea `testdata/` si falta (`os.MkdirAll`) y escribe `testdata/<name>.golden`; sin él compara, y si el fichero falta, su error dice que corras `-update`. `spanOf(t, src, sub)` da el span de `sub` (`strings.Index`) y falla si no está.
-- **Sesión 2, los textos.** Los textos con controles usan escapes: `"\x01"` es un byte y `"\u2400"`, un code point. T03.23 cuenta los golden con `filepath.Glob` contra la constante `wantGoldens`, para que borrar uno no haga que se compruebe menos.
-- **Sesión 2, `testdata/` y `-update`.** `testdata/` no es un paquete ni entra en `./...`. El orden del flag es la regla de `go help testflag`, y `go test ./... -update` responde `flag provided but not defined: -update` en cada paquete sin el flag. En el runner de Node, `t.assert.snapshot(valor)` compara con un fichero `.snapshot`, y `node --test --test-update-snapshots` lo reescribe. Una cadena *raw* no admite `` ` ``: el JSON esperado de T03.25 concatena una normal, `` ` + "`z`" + ` ``.
-- **Sesión 3, `header_test.go`.** `ptr("6765\n")` da un `*string`. `reflect.DeepEqual(got, want)` compara dos `Spec` entrando en slices y punteros; `==` no sirve, porque un struct con slices no es comparable.
-- **Sesión 3, `runner_test.go`.** El `Exec` falso guarda sus llamadas en un slice recibido por puntero: `*calls = append(*calls, …)` cambia el slice de quien llama, `(*calls)[0]` lee el primero, y `new([]call)` crea uno vacío y da su dirección.
-- **Sesión 3, `cli_test.go`.** `runGoldensInProcess(t)` apunta `testExec` a `Main` y la devuelve a `nil` con `t.Cleanup`: T03.66, T03.67 y T03.75 la llaman. `goldenDir(t)` crea un directorio temporal con `pass.ki`, que pasa, y `fail.ki`, que falla.
-- **Sesión 3, en general.** `t.Skip` salta un test sin sentido en esa máquina (`runtime.GOOS == "windows"`), y `os.SameFile`, sobre los `FileInfo` de dos `os.Stat`, dice si dos rutas son el mismo directorio. `t.Chdir` no se puede usar en un test paralelo.
-- **Los paquetes de test.** Los de `diag` y `driver` están en su paquete; los de `syntax` y `kitest`, en `syntax_test` y `kitest_test`, externos porque solo usan lo exportado. La excepción es T03.72 (`TestWalkErrors`, `runner_internal_test.go`): llama a `unreadableDirectory`, sin exportar, y va en `package kitest`. `tests/golden_test.go` es el único fichero de su paquete: uno con solo ficheros `_test.go` es válido para `go test`.
-:::
+Escribe el test de cada tarjeta, míralo fallar, implementa lo justo y solo entonces despliega la referencia.
 
 ## Implementación
 
@@ -362,10 +296,7 @@ FAIL
 
 {{file ch03-s1 internal/diag/diagnostic.go}}
 
-- Los `With…` tienen receptor **por valor**: cambian una copia y la devuelven (`d = d.WithNote("…")`).
-- La copia es superficial (capítulo 2): `Notes` comparte el array, y si sobra capacidad, `append` escribiría en él. `slices.Clip` obliga a reservar uno nuevo.
-
-Quita el `slices.Clip` de `WithNote` y T03.03 ve el aliasing:
+Los `With…` tienen receptor **por valor**: cambian una copia y la devuelven. La copia es superficial (capítulo 2): `Notes` comparte el array, y si sobra capacidad, `append` escribiría en él. `slices.Clip` obliga a reservar uno nuevo. Quítalo de `WithNote`:
 
 ```text
 --- FAIL: TestDiagnostic (0.00s)
@@ -373,15 +304,13 @@ Quita el `slices.Clip` de `WithNote` y T03.03 ve el aliasing:
         diagnostic_test.go:95: Notes of two copies = ["old" "b"] and ["old" "b"], want [old a] and [old b]
 ```
 
-Deshaz el cambio.
+Deshazlo.
 
 {{file ch03-s1 internal/diag/sink.go}}
 
-- El valor cero del `Sink` es un sink vacío: no necesita constructor.
-- `Report` guarda los 100 primeros errores, descarta el 101 y marca `truncated`; desde ahí lo descarta todo, también los warnings.
-- `slices.SortStableFunc` conserva el orden de entrada de los iguales. Su función compara con `<` y `>`: restar dos `uint32` daría la vuelta.
+`slices.SortStableFunc` conserva el orden de los iguales. Su función devuelve negativo si `a` va antes, positivo si va después y cero si son iguales. Compara con `<` y `>`: restar dos `uint32` daría la vuelta.
 
-T03.06 ordena 90 diagnósticos porque, con pocos, una ordenación no estable es estable por casualidad: `slices.SortFunc` usa *insertion sort* hasta 12 elementos. Cambia `SortStableFunc` por `SortFunc`:
+Con pocos elementos, `slices.SortFunc` es estable por casualidad: usa *insertion sort* hasta 12, y el test ordena 90. Cambia `SortStableFunc` por `SortFunc`:
 
 ```text
 --- FAIL: TestSink (0.00s)
@@ -391,11 +320,13 @@ T03.06 ordena 90 diagnósticos porque, con pocos, una ordenación no estable es 
             want ["o0-00" "o0-01" "o0-02" "o0-03" "o0-04" "o0-05" …
 ```
 
-Deshaz el cambio y compara:
+Deshazlo y compara:
 
 {{reftest T03.03}}
 
 {{reftest T03.06}}
+
+`^uint32(0)`, el complemento de cero (el mayor `uint32`), detiene su bucle cuando `off--` da la vuelta.
 
 {{reftest T03.08}}
 
@@ -407,7 +338,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch03-s1` (mensaje: `ch03-s1:
 
 #### Los tests, en rojo
 
-1. **Escribe T03.10–T03.27** (`checkGolden` y `spanOf`, en el pliegue tras las tarjetas). Describen tres funciones, cuyo resultado termina en `\n`:
+1. **Escribe T03.10–T03.27.** T03.12–T03.22 comparan con `testdata/`; T03.23 cuenta esos ficheros con `filepath.Glob` contra la constante `wantGoldens`. Describen tres funciones, cuyo resultado termina en `\n`:
 
 ```go
 func RenderHuman(d Diagnostic, sm *base.SourceManager) string
@@ -415,7 +346,7 @@ func RenderShort(d Diagnostic, sm *base.SourceManager) string
 func RenderJSON(d Diagnostic, sm *base.SourceManager) string
 ```
 
-El formato humano:
+El formato humano, como el de rustc:
 
 ```text
 <severidad>[<código>]: <mensaje>     la cabecera
@@ -427,6 +358,11 @@ número | texto                       cada línea con etiquetas, sin espacios fi
 " "*g + " = note: …"                 las notas, y la ayuda con = help:
 corto y JSON                         los de T03.24 y T03.25
 ```
+
+Dos ayudantes:
+
+- **`checkGolden(t, name, got)`**, con `*update`, crea `testdata/` si falta (`os.MkdirAll`) y escribe `testdata/<name>.golden`. Sin él compara; si falta el golden, pide `-update`.
+- **`spanOf(t, src, sub)`** da el span de `sub` (`strings.Index`) y falla si no está.
 
 2. **Míralos fallar.** El primer rojo es `undefined: RenderHuman`. Con `render.go` escrito y sin golden, el segundo dice qué hacer:
 
@@ -441,23 +377,19 @@ corto y JSON                         los de T03.24 y T03.25
 
 {{file ch03-s2 internal/diag/render.go}}
 
-`RenderHuman` ordena las etiquetas por línea, las agrupa y pinta cada grupo.
+`RenderHuman` ordena las etiquetas por línea, las agrupa y pinta cada grupo; `strconv.Itoa` da cada número de línea como texto.
 
-**`displayLine`** es la pieza delicada. Devuelve el texto y `cols`: `cols[i]` es la columna visual donde empieza el byte `i`. Como los spans cuentan bytes, el caret de `[lo, hi)` empieza en `cols[lo]` y mide `cols[hi] - cols[lo]`.
+Una línea larga se muestra como una ventana alrededor de sus etiquetas: el tamaño de un diagnóstico no depende del fichero.
 
-:::more `RenderHuman`, `RenderJSON`, las líneas largas y `displayLine` por dentro
-**`RenderHuman`.**
+**`displayLine`** devuelve el texto y `cols`: `cols[i]` es la columna visual donde empieza el byte `i`. Como los spans cuentan bytes, el caret de `[lo, hi)` empieza en `cols[lo]` y mide `cols[hi] - cols[lo]`.
 
-- Ordena las etiquetas por línea y, en cada una, la primaria primero y las secundarias por columna. `type placed struct {…}` es un tipo declarado dentro de la función.
-- Aquí sí se restan líneas y offsets, pero convertidos antes a `int`, de 64 bits en tu máquina: la diferencia de dos `uint32` cabe y no da la vuelta.
-- Tras ordenar, `g` son las cifras de la línea de la última etiqueta (`strconv.Itoa`).
-- El bucle externo, `for i := 0; i < len(all); {`, no avanza `i` en su cabecera: `group` se queda con las etiquetas de la línea, e `i += len(group)` salta tras ellas. `prev` decide el `...`.
-- Un span que sigue en otras líneas (un `{` sin cerrar, T03.22) se corta al final de la primera con `min` y `max`, y una marca ocupa al menos una columna, para que se vea un span vacío.
-- **Líneas largas (T03.22).** Una línea de más de `maxShownBytes` (200 bytes) se muestra como una ventana alrededor de sus etiquetas, desde `contextBytes` (40) antes de la primera, con `cutMark` (`...`) donde se cortó: el tamaño de un diagnóstico no depende del del fichero. `lineWindow` calcula la ventana y mueve cada extremo como mucho tres bytes, hasta el inicio de un carácter, para no partirlo.
+Su `switch` separa primero un byte inválido de un U+FFFD escrito de verdad (capítulo 2). Un `case` con comas casa si casa cualquiera.
 
-**`displayLine`.** Recorre la línea con `utf8.DecodeRuneInString`, y `cols` tiene una entrada por **byte** más una. En el `switch`, el orden importa: el primer caso separa un byte inválido de un U+FFFD escrito de verdad (capítulo 2). Un tabulador mide `tabWidth - width%tabWidth`, y `0x2400 + r` es aritmética de code points, porque el bloque de imágenes sigue el orden de ASCII. Un `case` con varias expresiones separadas por comas casa si casa cualquiera. `strings.TrimRight` quita los espacios finales del texto, pero `cols` los sigue contando.
-
-**`RenderJSON`.** `Notes` empieza como `[]string{}`, así que sale `[]` aunque no haya notas. `Help` solo apunta a algo si hay ayuda.
+:::more Cómo ordena y agrupa `RenderHuman`
+- En cada línea, la primaria va primero y las secundarias, por columna.
+- `type placed struct {…}` se declara dentro de la función.
+- Al ordenar sí se restan líneas y offsets, convertidos antes a `int`, de 64 bits en tu máquina: la diferencia no da la vuelta.
+- El bucle externo no avanza `i` en su cabecera: `group` se queda con las etiquetas de la línea, e `i += len(group)` salta tras ellas.
 :::
 
 Cuando compile, genera los golden y **léelos** contra las tarjetas:
@@ -467,7 +399,7 @@ $ go test ./internal/diag -update
 ok  	github.com/aldezex/kilang/internal/diag	0.004s
 ```
 
-Cada golden protege lo que validaste. Cambia la condición del `...`, `line != prev+1`, por `line > prev+2`:
+Cambia `line != prev+1`, la condición del `...`, por `line > prev+2`:
 
 ```text
 --- FAIL: TestRenderHuman (0.00s)
@@ -488,7 +420,7 @@ Cada golden protege lo que validaste. Cambia la condición del `...`, `line != p
                |     ^ redefined here
 ```
 
-`two_lines_with_gap.golden` salta dos líneas y no lo distingue; con la 9 y la 11 se salta una. Deshaz el cambio y compara:
+El golden que salta dos líneas no lo distingue; el que salta una, sí. Deshazlo y compara:
 
 {{reftest T03.11}}
 
@@ -504,7 +436,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch03-s2` (mensaje: `ch03-s2:
 
 #### Los tests, en rojo
 
-1. **Escribe T03.28–T03.75.** Su interfaz (ayudantes, en el pliegue tras las tarjetas):
+1. **Escribe T03.28–T03.75** (ayudantes, en el pliegue tras el paso 4). Su interfaz:
 
 ```go
 // syntax
@@ -545,16 +477,25 @@ func unreadableDirectory(absRoot, p string, err error) string // unexported, for
 :::more La gramática exacta de la cabecera
 La cabecera son las líneas iniciales que empiezan por `//`; la primera que no, la cierra.
 
-- Una clave se escribe `// clave: valor`, con un espacio tras `//` y otro tras `:` (`// run:check` es un error). Hay seis, y cada una aparece una vez como mucho: `test` (el id de la tarjeta) y `run`, obligatorias; `args`, `expect-exit`, `expect-stdout` y `expect-stderr`, opcionales. Otra palabra seguida de `:` es texto libre.
-- `run` vale `check`, `run`, `emit tokens`, `emit ast` o `emit core`; `args` son flags separados por espacios, que van entre la orden y el fichero; `expect-exit`, un entero.
-- `expect-stdout` y `expect-stderr` dan la salida entera en una línea (`// expect-stdout: 6765` es `"6765\n"`) o, sin nada tras `:`, en un bloque: `// | texto` por línea y `// |` para una vacía.
-- Lo que no se dice tiene valor por omisión: stdout y stderr vacíos, y el código de salida 1 si alguna anotación es un error y 0 si no.
-- Una anotación, en cualquier línea fuera de un bloque, es `// ERROR(código) @COL` (en esa línea) o `@LINE:COL`, con un código de `E` o `W` y cuatro cifras.
+- **Claves.** `// clave: valor`, con un espacio tras `//` y otro tras `:`. Hay seis, cada una una vez como mucho: `test` (el id de la tarjeta) y `run`, obligatorias; `args`, `expect-exit`, `expect-stdout` y `expect-stderr`, opcionales. Otra palabra seguida de `:` es texto libre.
+- **Valores.** `run` vale `check`, `run`, `emit tokens`, `emit ast` o `emit core`; `args` son flags separados por espacios, entre la orden y el fichero; `expect-exit`, un entero.
+- **Salidas.** Enteras en una línea (`// expect-stdout: 6765` es `"6765\n"`) o, sin nada tras `:`, en un bloque: `// | texto` por línea y `// |` para una vacía.
+- **Por omisión.** Stdout y stderr vacíos; código de salida 1 si alguna anotación es un error y 0 si no.
+- **Anotaciones.** En cualquier línea fuera de un bloque: `// ERROR(código) @COL` (en esa línea) o `@LINE:COL`, con `E` o `W` y cuatro cifras.
 :::
 
-2. **Ponlos en su sitio:** `TestCheckSource` (`internal/syntax/source_check_test.go`), `TestParseHeader` y `TestRunner` (`internal/kitest/`), `TestWalkErrors` (`internal/kitest/runner_internal_test.go`), `TestReportAll` (`internal/driver/session_test.go`), subtests nuevos de `TestCLI`, y T03.57–T03.60, ficheros `.ki` con su cabecera (más abajo). Cambia también el `want` de T01.04 a `commands: --version, version, check, test`.
-3. **Copia tal cual `func ptr[T any](v T) *T { return &v }`** en `header_test.go`. Es **genérica** (capítulo 4): `ptr(101)` da un `*int`, para los campos opcionales de un `Spec`.
-4. **Míralos fallar.** Los paquetes nuevos ni compilan:
+2. **Ponlos en su sitio.** Van en `internal/syntax/source_check_test.go`, `internal/kitest/header_test.go` y `runner_test.go`, e `internal/driver/session_test.go` y `cli_test.go`. `runner_internal_test.go` va en `package kitest`, porque llama a `unreadableDirectory`; los demás de `syntax` y `kitest` son externos, porque solo usan lo exportado. T03.57–T03.60 son ficheros `.ki`.
+3. **Cambia el `want` de T01.04** a `commands: --version, version, check, test`.
+4. **Copia `func ptr[T any](v T) *T { return &v }`** en `header_test.go`. Es **genérica** (capítulo 4): `ptr(101)` da un `*int`. `reflect.DeepEqual(got, want)` compara dos `Spec` entrando en slices y punteros: un struct con slices no admite `==`.
+
+:::more Los ayudantes de la sesión 3
+- **El `Exec` falso** guarda sus llamadas en un slice recibido por puntero: `*calls = append(*calls, …)` cambia el slice de quien llama, y `new([]call)` crea uno vacío y da su dirección.
+- **`runGoldensInProcess(t)`** apunta `testExec` a `Main` y la devuelve a `nil` con `t.Cleanup`.
+- **`goldenDir(t)`** crea un directorio temporal con `pass.ki`, que pasa, y `fail.ki`, que falla.
+- **`sameDir(t, a, b)`** dice si dos rutas son el mismo directorio: `os.SameFile` sobre los `FileInfo` de dos `os.Stat`.
+:::
+
+5. **Míralos fallar.** Los paquetes nuevos ni compilan:
 
 ```console
 $ go test ./...
@@ -572,64 +513,75 @@ FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
 
 {{file ch03-s3 internal/syntax/source_check.go}}
 
-`CheckSource` busca el primer byte inválido y después los controles, solo **antes** de él: si el inválido va primero, gana.
+Los controles se buscan solo **antes** del primer byte inválido: si va primero, gana.
 
 {{reftest T03.33}}
 
-#### La sesión, `ki check` y la tabla de comandos
+#### La sesión y `ki check`
 
 {{diff ch03-s2..ch03-s3 internal/driver/session.go}}
-
-`ReportAll` escribe en un `strings.Builder` e ignora el error de escritura: stderr es el último sitio donde contarlo.
 
 {{diff ch03-s2..ch03-s3 internal/driver/commands.go}}
 
 {{file ch03-s3 internal/driver/check.go}}
 
-`--diagnostics=human|short|json` elige el formato. Los flags van antes del fichero, porque `flag` para en el primer argumento que no lo es; con el flag detrás, sale con 2. Un fichero ilegible sale con 1: la línea de órdenes estaba bien.
+`--diagnostics=human|short|json` elige el formato.
 
-:::more `CheckSource` y `ki check` por dentro: `&s.Sources`, `newCommand`, `parseFlags` y `fs.String`
-- `DiagFormat` es otro conjunto cerrado con `iota`. `Sources` y `Sink` son valores dentro de la `Session`, y `&s.Sources` da la dirección del campo a quien la necesita.
-- En la condición de `CheckSource`, `&&` liga más que `||`: se lee `(b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b == 0x7F`.
-- El `switch` de `render` es sobre un entero, no un type switch, pero termina igual, en un panic con el valor (`driver: unknown diagnostic format 9`, T03.65).
-- `ReportAll` ordena, deja una línea en blanco entre dos diagnósticos en formato humano y añade la nota de truncado si hizo falta.
-- El mensaje de `CheckSource` escribe el byte con `%04X` (`U+0001`) y la etiqueta con `%x` (`\u{1}`), como se escribe un escape en Ki. Busca los controles con un bucle sobre los bytes: son UTF-8 válido, pero un byte menor que 0x80 nunca aparece dentro de una secuencia de varios bytes.
-- `newCommand` generaliza el `versionCommand` del capítulo 1: envuelve la función del comando en el closure que captura su `command`. `parseFlags` devuelve `(code, done)`: si `done`, la línea de órdenes ya tiene respuesta (la ayuda o un error de uso) y el comando devuelve `code`.
+:::more Cómo lee `ki check` su línea de órdenes
 - `fs.String(…)` registra un flag de texto y devuelve un `*string`, que se lee con `*diagnostics` tras `Parse`.
+- `parseFlags` devuelve `(code, done)`. Si `done`, ya hay respuesta (la ayuda o un error de uso) y el comando devuelve `code`.
+- Los flags van antes del fichero, porque `flag` para en el primer argumento que no lo es; detrás, sale con 2.
 - El `case 1:` vacío casa y no hace nada: un `case` de Go no cae al siguiente.
-- `ki check x.ki --diagnostics=short` responde `ki check: unexpected argument "--diagnostics=short"`.
+- Un fichero ilegible sale con 1: la línea de órdenes estaba bien.
 :::
 
-#### La cabecera de los golden
+#### La cabecera
+
+`header.go` usa:
+
+| Función | Qué hace |
+| --- | --- |
+| `strings.Cut` | parte por la primera aparición de un separador; da antes, después y si lo encontró |
+| `strings.CutPrefix` | quita un prefijo y dice si estaba |
+| `strings.Fields` | parte por espacios |
+| `strconv.Atoi` | lee un entero |
+| `strconv.ParseUint(s, 10, 32)` | lee un entero y rechaza lo que no cabe en 32 bits |
 
 {{file ch03-s3 internal/kitest/header.go}}
 
-- `ParseHeader` anota el BOM y el `\r\n` para que `ki test --update` (capítulo 5) reescriba el fichero igual.
-- Una clave repetida es un error: con dos `// run:` ganaría la segunda sin avisar.
-
-:::more `header.go` por dentro: `splitKey`, `seen`, `setKey` y `args...`
-- El BOM y el `\r\n` se miran solo en la primera línea.
-- `splitKey` usa `strings.CutPrefix`, que quita un prefijo y dice si estaba, y `strings.Cut`, que parte por la primera aparición de un separador y devuelve antes, después y si lo encontró.
-- `seen` es un `map[string]bool`, y `seen[key]` de una clave ausente da el valor cero, `false`.
-- `setKey` tiene receptor puntero porque rellena el `Spec`, y su `switch` termina en `default: panic("unreachable")`: `splitKey` ya filtró las claves. `strconv.Atoi` lee un entero y `strings.Fields` parte por espacios.
-- `outputValue` lee las dos formas de una salida que da la gramática. La sangría tras `// | ` es texto: un diagnóstico humano empieza con espacios (T03.36).
-- `setPosition` lee `@COL` o `@LINE:COL` con `strconv.ParseUint(s, 10, 32)`, que rechaza lo que no cabe en 32 bits.
-- `headerError(format string, args ...any)` reenvía sus argumentos con `args...`.
-:::
+`seen` es un `map[string]bool`: `seen[key]` de una clave ausente da `false`. Una clave repetida es un error: con dos `// run:` ganaría la segunda sin avisar.
 
 {{reftest T03.36}}
 
 #### El runner
 
+`runner.go` y `golden_test.go` usan:
+
+| Función | Qué hace |
+| --- | --- |
+| `strings.CutSuffix` | quita un sufijo y dice si estaba |
+| `strings.SplitAfter` | parte y conserva el separador |
+| `cmp.Compare` | da -1, 0 o 1 |
+| `cmp.Or` | da el primero de sus argumentos que no es cero |
+| `slices.ContainsFunc` | dice si algún elemento cumple una función |
+| `slices.Values` | da un *iterador* sobre el slice |
+| `slices.SortedFunc` | recoge un iterador en un slice nuevo, ordenado |
+| `filepath.Rel`, `filepath.ToSlash` | dan la ruta relativa y con barras `/`, también en Windows |
+| `filepath.Glob` | lista las rutas que casan con un patrón |
+
 {{file ch03-s3 internal/kitest/runner.go}}
 
-- **`Exec`**, un campo función: cómo se ejecuta `ki`, en proceso desde `go test`, como subproceso desde `ki test`.
-- **`enterRoot`** entra en la raíz y devuelve un closure, `restore`, que quien llama difiere con `defer restore()`.
-- **`annotationDifferences`** compara las anotaciones del fichero con los errores de una segunda ejecución con `--diagnostics=json`, como multiconjuntos (dos errores iguales son dos): lo que falta en la ejecución es un `missing`; lo que sobra, un `unexpected`.
+- **`annotationDifferences`** compara las anotaciones con los errores de una segunda ejecución con `--diagnostics=json`, como multiconjuntos: dos errores iguales son dos.
 - **`RunPaths`** tiene resultados con nombre y un `defer` que los escribe. `return 0, 1` los asigna **antes** de que corran los `defer`: el resumen es correcto también al fallar.
-- **`kiFiles`** da como fallo un directorio sin ningún `.ki`: «no se ejecutó nada» no es «todo pasa».
+- **`runHere`** clona la orden antes de cada `append`, como en el capítulo 1.
 
-Cambia el `defer restore()` de `RunPaths` por `_ = restore` (si solo lo borras, no compila). El proceso queda dentro de un directorio temporal que `t.TempDir` borra, y fallan una decena de subtests, casi todos lejos de la causa:
+:::more Cómo compara `annotationDifferences`
+- `json.Unmarshal` lee cada línea en un struct anónimo. `Line` y `Col` no llevan etiqueta: `Line` recibe `"line"`, porque `json.Unmarshal` acepta una clave que solo difiera en mayúsculas. Ignora las que no tienen campo.
+- `byPosition` ordena por línea, columna y código.
+- Los dos lados se ordenan y se recorren juntos: `got` es suyo y se ordena en el sitio; `want` es del `Spec` de quien llama, así que `slices.SortedFunc` ordena una copia.
+:::
+
+Cambia el `defer restore()` de `RunPaths` por `_ = restore`. El proceso queda en un directorio que `t.TempDir` borra, y fallan una decena de subtests lejos de la causa:
 
 ```text
 --- FAIL: TestRunner (0.00s)
@@ -637,13 +589,13 @@ Cambia el `defer restore()` de `RunPaths` por `_ = restore` (si solo lo borras, 
         runner_test.go:144: exit code first, then stdout: got ok=false and "FAIL c.ki\n- cannot enter the root `/tmp/…/001`: getwd: no such file or directory\n", want …
 ```
 
-Con `-run 'TestRunner/restores_cwd'`, T03.49 lo dice en una línea:
+Con `-run 'TestRunner/restores_cwd'`, ese subtest lo dice en una línea:
 
 ```text
 runner_test.go:270: the working directory is "/tmp/…/001" after RunPaths, was "…/internal/kitest"
 ```
 
-Deshaz el cambio.
+Deshazlo.
 
 {{reftest T03.48}}
 
@@ -653,35 +605,20 @@ Deshaz el cambio.
 
 {{file ch03-s3 internal/driver/test.go}}
 
-`ki test` ejecuta cada golden como subproceso de su propio ejecutable (`os.Executable()`). Bajo `go test`, ese es el binario de **test**; por eso existe `testExec`, que solo los tests cambian.
+`ki test` ejecuta cada golden como subproceso de `os.Executable()`. Bajo `go test`, ese es el binario de **test**; por eso existe `testExec`.
 
 {{reftest T03.66}}
 
-El mismo `Runner` corre en proceso desde `tests/golden_test.go`:
+`tests/golden_test.go` corre el mismo `Runner` en proceso con otro `Exec`, su campo función. Cada fichero es un subtest, y su nombre calculado es la excepción a la regla del literal.
 
 {{file ch03-s3 tests/golden_test.go}}
 
-`t.Run(name, …)` recibe un nombre calculado, la excepción a la regla del literal: un subtest por fichero, que `bookx` enlaza con su tarjeta.
-
-:::more El runner y `ki test` por dentro: `runHere`, `cmp.Or`, `slices.Values`, `outWriter` y `ExecSubprocess`
-**`runHere`.** Monta la orden con `append(slices.Clone(spec.Run), spec.Args...)` y clona otra vez antes de añadir el fichero en cada ejecución: los dos `append` sobre una misma base del capítulo 1. El código de salida por omisión sale de `slices.ContainsFunc`. `firstDifference` parte las salidas con `strings.SplitAfter`, que conserva el `\n` de cada línea, y `showLine` lo quita con `strings.CutSuffix`.
-
-**`annotationDifferences`.** Lee los errores con `json.Unmarshal` sobre un struct anónimo, ordena los dos lados y los recorre a la vez. `cmp.Compare` da -1, 0 o 1, y `cmp.Or` el primero de sus argumentos que no es cero: «por línea; si empatan, por columna; si no, por código». `got` es suyo y se ordena en el sitio; `want` es del `Spec` de quien llama, así que `slices.SortedFunc(slices.Values(want), …)` ordena una copia (`slices.Values` da un *iterador* sobre el slice, y `SortedFunc` lo recoge en uno nuevo).
-
-**`enterRoot`, `write` y `kiFiles`.** `enterRoot` guarda el directorio antes de entrar. `write` escribe la línea `PASS`/`FAIL`, vacía la salida si sabe (la aserción de la teoría) y después las diferencias. `kiFiles` devuelve los `.ki` ordenados, y también da como fallo un subdirectorio ilegible.
-
-**`tests/golden_test.go`.** `Main` crea una `Session` nueva en cada llamada, así que ningún caso ve el estado de otro. `filepath.Rel` y `filepath.ToSlash` dan la ruta relativa a la raíz y con barras `/` también en Windows, la forma que muestra el runner. El subtest se llama `TestKi/errors/ch03/invalid_utf8` y su tarjeta tiene de `ref` `tests/errors/ch03/invalid_utf8.ki`.
-
-**`outWriter`.** El runner escribe sin mirar errores, y `outWriter` recuerda el primero para que `runTest` salga con 1 si el informe se perdió (T03.67).
-
-**`ExecSubprocess`.** Conecta los `io.Writer` a `cmd.Stdout` y `cmd.Stderr` y devuelve `cmd.ProcessState.ExitCode()`; si el programa no arrancó, `ProcessState` es `nil` y devuelve -1.
-:::
-
 #### Los golden y la CI
 
-El 0xFF y el 0x01 se escriben con `printf`, no con el editor; la cabecera lleva U+FFFD:
+El 0xFF y el 0x01 se escriben con `printf`:
 
 ```console
+$ mkdir -p tests/errors/ch03
 $ printf '// test: T03.57\n// run: check\nlet x = \xff  // ERROR(E0101) @9\n' > tests/errors/ch03/invalid_utf8.ki
 $ printf '// test: T03.58\n// run: check\n// expect-exit: 1\n// expect-stderr:\n// | error[E0101]: invalid UTF-8 byte 0xFF\n// |   --> tests/errors/ch03/invalid_utf8_render.ki:10:9\n// |    |\n// | 10 | let x = \xef\xbf\xbd\n// |    |         ^ not valid UTF-8\nlet x = \xff\n' > tests/errors/ch03/invalid_utf8_render.ki
 $ printf '// test: T03.59\n// run: check\nlet x = 1\x01  // ERROR(E0102) @10\n' > tests/errors/ch03/control_char.ki
@@ -695,7 +632,7 @@ $ printf '// test: T03.59\n// run: check\nlet x = 1\x01  // ERROR(E0102) @10\n' 
 
 {{file ch03-s3 tests/errors/ch03/valid_file.ki}}
 
-Dos marcan su error en línea; `invalid_utf8_render.ki` fija el texto entero; `valid_file.ki` es el caso «sí»: sin él, un `check` que siempre falla los pasaría. `ci-local.sh` los ejecuta también por el binario:
+`valid_file.ki` es el caso «sí»: sin él, un `check` que siempre falla pasaría. `ci-local.sh` los ejecuta también por el binario:
 
 {{diff ch03-s2..ch03-s3 ci/ci-local.sh}}
 
@@ -705,7 +642,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch03-s3` (mensaje: `ch03-s3:
 
 ## Ejecútalo
 
-Desde la raíz de tu repo, con la sesión 3 terminada y `ki` construido (`go build -o build/bin/ki ./cmd/ki`); `ci/ci-local.sh` acaba con las mismas líneas de `ki test` y `verify: OK`:
+Desde la raíz de tu repo, con `ki` construido (`go build -o build/bin/ki ./cmd/ki`):
 
 ```console
 $ build/bin/ki check tests/errors/ch03/control_char.ki; echo $?
@@ -725,6 +662,8 @@ PASS tests/errors/ch03/valid_file.ki
 ki test: 4 passed, 0 failed
 0
 ```
+
+`ci/ci-local.sh` acaba con esas líneas de `ki test` y `verify: OK`.
 
 ## Ejercicios
 
@@ -789,7 +728,7 @@ func TestParseCode(t *testing.T) {
 :::
 
 :::exercise
-**2. Tres líneas a golden.** Añade a `TestRenderHuman` un subtest `labels_on_three_lines`: un E0301 sobre un nombre de la línea 4 de un fichero de cinco, con secundarias en las líneas 1 y 2. Genera su golden y léelo. ¿Qué otra línea del test cambia?
+**2. Tres líneas a golden.** Añade a `TestRenderHuman` un subtest `labels_on_three_lines`: un E0301 en la línea 4 de un fichero de cinco, con secundarias en las líneas 1 y 2. Genera su golden y léelo. ¿Qué otra línea del test cambia?
 :::
 
 :::solution
@@ -806,7 +745,9 @@ t.Run("labels_on_three_lines", func(t *testing.T) {
 })
 ```
 
-Los ayudantes son los de `render_test.go` en `ref/ch03-s2`: `newSource` crea `test.ki`, `unknownName` el E0301, y `spanWithin(t, src, ctx, sub)` busca `sub` dentro de `ctx`, para un texto que se repite. Primero falla por el golden que falta. Con `-update` se escribe, pero el paquete sigue en rojo, también en esa ejecución: `testdata has 15 golden files, want 14`. Es T03.23: `wantGoldens` pasa a 15. El golden:
+Los ayudantes son los de `render_test.go` en `ref/ch03-s2`: `newSource` crea `test.ki`, `unknownName` el E0301, y `spanWithin(t, src, ctx, sub)` busca `sub` dentro de `ctx`, para un texto que se repite.
+
+Primero falla por el golden que falta. Con `-update` se escribe, pero la siguiente ejecución sigue en rojo: `testdata has 15 golden files, want 14`. La constante `wantGoldens` del test que cuenta los golden pasa a 15. El golden:
 
 ```text
 error[E0301]: unknown name `a2`
@@ -835,19 +776,21 @@ Con una anotación, el runner no compara stderr como texto sino las posiciones d
 $ printf '// test: T03.76\n// run: check\n// args: --diagnostics=short\n// expect-exit: 1\n// expect-stderr: tests/errors/ch03/short_format.ki:6:9: error[E0101]: invalid UTF-8 byte 0xFF\nlet x = \xff\n' > tests/errors/ch03/short_format.ki
 ```
 
-`ki test --root . tests` da `5 passed, 0 failed`. Con `6:8` en la expectativa falla con `- …:6:8: …` y `+ …:6:9: …`; sin la línea `args:`, con `+ error[E0101]: invalid UTF-8 byte 0xFF`.
+`ki test --root . tests` da `5 passed, 0 failed`. Con `6:8` en la expectativa falla con `- …:6:8: …` y `+ …:6:9: …`.
 :::
 
 :::exercise
-**4. Sin límite.** Imagina un `CheckSource` que informara de cada byte inválido, sobre un fichero de 100 000 bytes 0xFF en una sola línea. ¿Qué pasaría con el límite de 100 de `Report`? ¿Y sin él?
+**4. Sin límite.** Imagina un `CheckSource` que informara de cada byte inválido, sobre 100 000 bytes 0xFF en una línea. ¿Qué pasaría con el límite de 100 de `Report`? ¿Y sin él?
 :::
 
 :::solution
-Cada diagnóstico humano muestra una ventana de la línea, no la línea entera (T03.22), así que su tamaño no depende del fichero: unos 350 bytes. La referencia imprime uno solo. Medido con esa variante: con el límite de 100, unos 34 KB de stderr; con un límite de 1000, unos 375 KB; sin límite, 38 MB en unos 20 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla. `MaxErrors` protege de cualquier pase que se desboque; `CheckSource` ni llega a él, porque en un fichero que no es texto basta el primer byte malo.
+Cada diagnóstico humano muestra una ventana de la línea, no la línea entera, así que mide unos 350 bytes sea cual sea el fichero. Con el límite de 100, unos 34 KB de stderr. Sin límite, 38 MB en unos 20 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla.
+
+`MaxErrors` protege de cualquier pase que se desboque. `CheckSource` ni llega a él: en un fichero que no es texto basta el primer byte malo.
 :::
 
 :::exercise
-**5. Una ruta que no existe.** Hoy, `ki test --root . nope` responde `FAIL nope` y `- cannot read file: no such file or directory`, y sale con 1. Haz que sea un error de uso, con un mensaje claro, la línea `usage:` y salida 2, sin ejecutar nada. Escribe el test.
+**5. Una ruta que no existe.** `ki test --root . nope` responde `FAIL nope` y sale con 1. Haz que sea un error de uso, con un mensaje claro, la línea `usage:` y salida 2, sin ejecutar nada. Escribe el test.
 :::
 
 :::solution
@@ -881,13 +824,13 @@ t.Run("test_missing_path_is_usage_error", func(t *testing.T) {
 })
 ```
 
-`goldenDir` y `runCLI` son ayudantes de `cli_test.go` en `ref/ch03-s3`: el primero crea un directorio temporal con `pass.ki`, que pasa, y `fail.ki`, que falla. La segunda fila exige que no se ejecute nada aunque la ruta mala sea la última, y `runGoldensInProcess` evita que, sin la comprobación, `pass.ki` lance el binario de test. Sin el `if`, las dos filas fallan con código 1 y `FAIL nope`.
+La segunda fila exige que no se ejecute nada aunque la ruta mala sea la última, y `runGoldensInProcess` evita que, sin la comprobación, `pass.ki` lance el binario de test. Sin el `if`, las dos filas fallan con código 1 y `FAIL nope`.
 :::
 
 ## Preguntas de repaso
 
 :::review
-¿Por qué un error del programa Ki es un `Diagnostic` que va a un `Sink` y no un `error` de Go?
+¿Por qué un error del programa Ki es un `Diagnostic` y no un `error` de Go?
 :::
 
 :::answer
@@ -936,25 +879,19 @@ Para probar lo que vería una shell: el binario real y su código de salida. Per
 
 ## Resumen
 
-- Un error del programa es un `Diagnostic` que los pases entregan a un `Sink`, que se detiene tras 100 errores.
-- `iota` numera constantes de un tipo definido; Go no cierra el conjunto: cubre el valor imposible.
-- `v, ok := w.(T)` pregunta por un tipo, y un puntero `nil` dentro de una interfaz no es una interfaz `nil`.
-- La interfaz sellada no da exhaustividad: cada type switch termina en `default: panic("unreachable")`.
-- `errors.Join` reúne errores; `(T, error)`, los punteros y el valor cero hacen de `Result` y `Option`.
-- El caret va en columnas visuales, con sustitutos de ancho conocido para lo invisible.
+- Un error del programa es un `Diagnostic`; un `Sink` los reúne, hasta 100.
+- `iota` numera constantes de un tipo definido, pero Go no cierra el conjunto.
+- `v, ok := w.(T)` pregunta por un tipo; un puntero `nil` en una interfaz no la hace `nil`.
+- La interfaz sellada no da exhaustividad: cada type switch termina en `default: panic`.
+- `(T, error)`, los punteros y el valor cero hacen de `Result` y `Option`.
+- El caret va en columnas visuales, con sustitutos para lo invisible.
 - Los golden de `testdata/` se regeneran con `-update` y después se leen.
-- El runner aplica una cabecera estricta, compara posiciones si hay anotaciones y restaura el directorio.
+- El runner exige una cabecera estricta y compara posiciones si hay anotaciones.
 
 ## Go en el trabajo
 
-**Errores como valores.** La FAQ de Go («Why does Go not have exceptions?») dice que acoplar las excepciones a `try-catch-finally` «results in convoluted code», y que empuja a tratar como excepcionales errores corrientes, «such as failing to open a file».
+**Errores como valores.** La FAQ de Go: acoplar las excepciones a `try-catch-finally` «results in convoluted code» y empuja a tratar como excepcionales errores corrientes.
 
-**Envolver en las fronteras.** «Working with Errors in Go 1.13» (blog de Go, 2019): «Wrap an error to expose it to callers. Do not wrap an error when doing so would expose implementation details». La práctica: envolver una vez, en la frontera del paquete, y comprobar con `errors.Is` o `errors.As`.
+**Envolver.** El blog de Go: «wrapping an error makes that error part of your API». Envuelve una vez, en la frontera del paquete, y comprueba con `errors.Is` o `errors.As`.
 
-**Golden en el repo de Go.** `src/cmd/gofmt/testdata/` tiene 31 parejas `.input`/`.golden` (Go 1.27.3), y `gofmt_test.go` declara el flag de este capítulo.
-
-:::more El blog de Go sobre `%w`, y cómo `gofmt` lleva sus opciones y comprueba la idempotencia
-**«Working with Errors in Go 1.13».** Lo firman Damien Neil y Jonathan Amsterdam, y da el motivo: «wrapping an error makes that error part of your API». `Load` envuelve a propósito, para que quien carga un fichero pregunte `errors.Is(err, fs.ErrNotExist)`. Cada paquete envuelve con el contexto que solo él conoce, y quien comprueba nunca compara texto.
-
-**Los golden de `gofmt`.** El flag es `var update = flag.Bool("update", false, "update .golden files")`. Un `.input` que necesita opciones las lleva en un comentario `//gofmt flags` de sus primeras 20 líneas (`//gofmt -s`; 21 de los 31 tienen uno), como la cabecera de Ki. `TestRewrite` comprueba además la idempotencia: formatea el `.golden` y exige que no cambie.
-:::
+**Golden en Go.** `src/cmd/gofmt/testdata/` guarda parejas `.input`/`.golden`, y `gofmt_test.go` declara el mismo flag.
