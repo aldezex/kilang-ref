@@ -284,7 +284,8 @@ ref:     ExampleInterner
 kind:    bench               file: internal/base/interner_test.go
 case:    coste de `Intern` sobre 1000 textos ya conocidos, con `-benchmem`
 input:   `go test ./internal/base -bench Intern -benchmem -run xxx`
-expect:  el capítulo cita ns/op y allocs/op medidos; no hay umbral que `go test` compruebe
+expect:  una llamada por iteración, recorriendo los 1000 textos en círculo; el capítulo cita ns/op y allocs/op
+         medidos; no hay umbral que `go test` compruebe
 why:     la afirmación «Intern no reserva» y la comparación con `unique.Make` solo valen con números
          medidos en esta máquina, y un benchmark es la forma de volver a medirlos
 ref:     BenchmarkIntern
@@ -293,7 +294,8 @@ ref:     BenchmarkIntern
 kind:    bench               file: internal/base/interner_test.go
 case:    coste de `unique.Make(string(b))` sobre los mismos 1000 textos, como punto de comparación
 input:   `go test ./internal/base -bench UniqueMake -benchmem -run xxx`
-expect:  el capítulo cita ns/op y allocs/op medidos junto a los de `Intern`; no hay umbral que `go test` compruebe
+expect:  una llamada por iteración, recorriendo los 1000 textos en círculo; el capítulo cita ns/op y allocs/op
+         medidos junto a los de `Intern`; no hay umbral que `go test` compruebe
 why:     la biblioteca estándar ya trae un interner; sin esta medida no sabrías si escribir el tuyo
          compensa, y la respuesta depende de la máquina y de la versión de Go
 ref:     BenchmarkUniqueMake

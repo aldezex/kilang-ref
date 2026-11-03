@@ -47,7 +47,7 @@ Otras dos restricciones:
 - `cmp.Ordered` es la unión `~int | … | ~string`, los tipos con `<`.
 
 :::from Rust
-`[T cmp.Ordered]` se parece a `<T: Ord>`, pero un trait se implementa a mano; un conjunto de tipos se describe por la forma.
+`[T cmp.Ordered]` se parece a `<T: PartialOrd>`, pero un trait se implementa a mano; un conjunto de tipos se describe por la forma.
 :::
 
 ### Inferencia e instanciación explícita
@@ -76,7 +76,7 @@ func (s *Set) Map[U any](f func(int) U) []U { … }
 `s.Map(f)` infiere `U`, y `s.Map[float64](f)` lo da explícito. Tres límites:
 
 - Exigen `go 1.27` en el `go.mod`.
-- Un valor de método, sin llamar, necesita los argumentos de tipo: `f := s.Map[int]`, no `f := s.Map`.
+- Sin llamar y sin un tipo función de destino, un valor de método necesita los argumentos de tipo: `f := s.Map[int]`, no `f := s.Map`.
 - Una interfaz no puede declararlos: llama a sus métodos por una tabla fija, y uno genérico tendría una entrada por cada `U` posible.
 
 Go tampoco tiene tipos de orden superior (`Functor[F[_]]`), especialización ni acceso a campos a través de una restricción.
@@ -173,7 +173,7 @@ La biblioteca trae un interner, pero el compilador quiere otra cosa: un entero d
 
 Es seguro entre goroutines, y el recolector borra sus entradas, punteros débiles, cuando no queda ningún handle.
 
-Con 1000 textos conocidos, `Intern` gana, y la diferencia está en la búsqueda, según un perfil de CPU.
+Con 1000 textos conocidos, `Intern` gana, y la diferencia está en la búsqueda.
 
 :::more Por qué `unique.Make` tarda más
 Los dos benchmarks recorren textos guardados como `[]byte`. Un `[]byte` no es `comparable`, así que el segundo convierte cada texto con `string(words[i])`, sin reservar: los dos dan `0 allocs/op`.
@@ -290,7 +290,7 @@ Una petición mayor que el slab recibe uno propio, y el actual sigue sirviendo a
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch04-s1` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch04-s1` (mensaje: `ch04-s1: IdVec, typed ids and the arena`); compárate con `ref/ch04-s1`.
+Al terminar: tus tests en verde, commit y etiqueta `ch04-s1`; compárate con `ref/ch04-s1`.
 
 ### Sesión 2: el interner (≈ 3 h)
 
@@ -319,8 +319,8 @@ func (in *Interner) Len() int
    - `prev, dup := seen[sym]` es la búsqueda con dos resultados: el valor y si la clave estaba.
    - Un `const` también puede ir dentro de una función.
    - `func([]byte) uint64 { return 42 }`, el hash constante del test de colisiones, no nombra su parámetro porque no lo usa.
-3. **Míralos fallar.** El rojo es `undefined: NewInterner` y `undefined: Symbol`.
-4. **Escribe las firmas con cuerpos de valor cero,** salvo `NewInterner`, que devuelve `&Interner{arena: NewArena(0)}` para no cortar el binario. De los nuevos, solo pasa el que exige no reservar, por la razón equivocada: un `Intern` que siempre devuelve `NoSymbol` tampoco reserva.
+3. **Míralos fallar.** El rojo es `undefined: NewInterner`.
+4. **Escribe las firmas con cuerpos de valor cero,** salvo `NewInterner`, que devuelve `&Interner{arena: NewArena(0)}` para no cortar el binario. También lo corta tomar `&v[0]` del `nil` de `Bytes`: mira antes `len(v)`. De los nuevos, solo pasa el que exige no reservar, por la razón equivocada: un `Intern` que siempre devuelve `NoSymbol` tampoco reserva.
 
 #### El código
 
@@ -340,7 +340,7 @@ Cambia `bytes.Equal(in.texts[s], b)` por `bytes.HasPrefix(b, in.texts[s])`. El t
 
 Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch04-s2` y sigue.
 
-Al terminar: tus tests en verde, commit y etiqueta `ch04-s2` (mensaje: `ch04-s2: the interner`); compárate con `ref/ch04-s2`.
+Al terminar: tus tests en verde, commit y etiqueta `ch04-s2`; compárate con `ref/ch04-s2`.
 
 ## Ejecútalo
 
@@ -619,7 +619,7 @@ La función libre necesita los tres parámetros, `func Map[I ~uint32, T, U any](
 
 - el método exige `go 1.27` en el `go.mod`;
 - tiene que estar en el paquete de `IdVec` (una función libre puede vivir en cualquiera);
-- `v.Map` como valor necesita `v.Map[int]`;
+- `f := v.Map` no compila: hace falta `v.Map[int]`;
 - y ninguna interfaz puede pedir un método `Map[U]`, así que no ganas polimorfismo, solo una llamada más cómoda.
 :::
 
