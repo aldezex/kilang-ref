@@ -282,13 +282,13 @@ func TestRender(t *testing.T) {
 			"}",
 			"```",
 			"",
-			// The test starts at the `t` of t.Run, with the indentation of the file below it.
+			// The test starts at the `t` of t.Run, and the lines below it lose the indentation of that line.
 			"```go title=\"internal/syntax/lexer_test.go\" tag=\"ch02\" mode=\"test\" hint=\"T02.01 lexer.pipe_continues_line\"",
 			"t.Run(\"pipe_continues_line\", func(t *testing.T) {",
-			"\t\tif continues(\"|> x\") {",
-			"\t\t\tt.Fatal(\"wrong\")",
-			"\t\t}",
-			"\t})",
+			"\tif continues(\"|> x\") {",
+			"\t\tt.Fatal(\"wrong\")",
+			"\t}",
+			"})",
 			"```",
 			"",
 			"```text title=\"go.mod\" tag=\"ch02-s1\" mode=\"file\"",

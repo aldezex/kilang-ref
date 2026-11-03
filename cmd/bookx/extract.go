@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"go/scanner"
 	"go/token"
 	"strconv"
@@ -44,7 +45,8 @@ var testParamTypes = []struct{ prefix, param string }{
 
 // extractGoTest finds a test of the book in the source of a Go file and returns
 // its text, from the `func` keyword or the `t` of `t.Run` to the closing brace
-// or parenthesis, with the indentation the file gives it.
+// or parenthesis. A subtest is dedented (see dedent), so it reads as if it
+// started at the left margin; a function already does.
 //
 //	"TestXxx"      the whole function `func TestXxx(t *testing.T) {…}`
 //	"TestXxx/sub"  the statement `t.Run("sub", func(t *testing.T) {…})` that is
@@ -167,7 +169,37 @@ func extractSubtest(source []byte, body []goToken, recv, sub string) (string, bo
 		if closeIdx < 0 {
 			return "", false
 		}
-		return string(source[t.offset : body[closeIdx].offset+1]), true
+		return dedent(source, body[i:closeIdx+1], t.offset, body[closeIdx].offset+1), true
 	}
 	return "", false
+}
+
+// dedent returns source[start:end] with the indentation of the line that start
+// is on taken off every later line that has it, so a block keeps its shape: its
+// first line, cut at start, has none left. toks are the tokens of that text.
+// A raw string is copied as it is, because its lines are not indentation but
+// the bytes of the value. A comment is not protected: changing the white space
+// of one changes nothing.
+func dedent(source []byte, toks []goToken, start, end int) string {
+	line := source[bytes.LastIndexByte(source[:start], '\n')+1 : start]
+	indent := line[:len(line)-len(bytes.TrimLeft(line, " \t"))]
+	strip := func(code []byte) string {
+		return strings.ReplaceAll(string(code), "\n"+string(indent), "\n")
+	}
+	var out strings.Builder
+	from := start
+	for _, t := range toks {
+		if t.tok != token.STRING || t.lit[0] != '`' {
+			continue
+		}
+		// A raw string has no escapes, so the next backtick closes it. The end
+		// does not come from len(t.lit), because the scanner drops the \r of a
+		// raw string from the literal.
+		rawEnd := t.offset + 1 + bytes.IndexByte(source[t.offset+1:], '`') + 1
+		out.WriteString(strip(source[from:t.offset]))
+		out.Write(source[t.offset:rawEnd])
+		from = rawEnd
+	}
+	out.WriteString(strip(source[from:end]))
+	return out.String()
 }

@@ -105,10 +105,10 @@ func TestExtractGoTest(t *testing.T) {
 		// TestOther have their own.
 		want := joinLines(
 			"t.Run(\"pipe_continues_line\", func(t *testing.T) {",
-			"\t\tif s != \"}{\" || r != '}' || q != '\"' { // } inside a comment",
-			"\t\t\tt.Fatal(\"bad }\")",
-			"\t\t}",
-			"\t})",
+			"\tif s != \"}{\" || r != '}' || q != '\"' { // } inside a comment",
+			"\t\tt.Fatal(\"bad }\")",
+			"\t}",
+			"})",
 		)
 		want = want[:len(want)-1]
 		got, ok := extractGoTest(goSource, "TestLexer/pipe_continues_line")
@@ -121,8 +121,8 @@ func TestExtractGoTest(t *testing.T) {
 			{"TestLexer/after", "t.Run(\"after\", func(t *testing.T) {})"},
 			{"TestLexer/outer", joinLines(
 				"t.Run(\"outer\", func(t *testing.T) {",
-				"\t\tt.Run(\"pipe_continues_line\", func(t *testing.T) { t.Log(\"nested\") })",
-				"\t})",
+				"\tt.Run(\"pipe_continues_line\", func(t *testing.T) { t.Log(\"nested\") })",
+				"})",
 			)},
 			{"TestLexer/pipe_continues_line_twice", "t.Run(\"pipe_continues_line_twice\", func(t *testing.T) {})"},
 			{"TestOther/pipe_continues_line", "t.Run(\"pipe_continues_line\", func(t *testing.T) { t.Log(\"other\") })"},
@@ -137,6 +137,51 @@ func TestExtractGoTest(t *testing.T) {
 			got, ok := extractGoTest(goSource, r.ref)
 			if !ok || got != want {
 				t.Errorf("extractGoTest(%s) = %q, %v\nwant %q, true", r.ref, got, ok, want)
+			}
+		}
+	})
+
+	t.Run("subtest_dedented", func(t *testing.T) {
+		// Every line loses the indentation of the line the subtest starts on,
+		// and only that much, except inside a raw string, whose bytes are the
+		// value the test uses.
+		open := "func TestD(t *testing.T) {\n"
+		rows := []struct{ name, src, want string }{
+			{
+				"the code keeps its relative indentation",
+				open + "\tt.Run(\"a\", func(t *testing.T) {\n\t\tif x {\n\t\t\ty()\n\t\t}\n\n\t\t/* block\n\t\t   comment */\n\t})\n}\n",
+				"t.Run(\"a\", func(t *testing.T) {\n\tif x {\n\t\ty()\n\t}\n\n\t/* block\n\t   comment */\n})",
+			},
+			{
+				"every raw string stays as it is, and the code after it does not",
+				open + "\tt.Run(\"a\", func(t *testing.T) {\n\t\tp := `one\n\tkeeps its tab\n`\n\t\tq := `two\n\t\tkeeps both\n`\n\t\tr(p, q)\n\t})\n}\n",
+				"t.Run(\"a\", func(t *testing.T) {\n\tp := `one\n\tkeeps its tab\n`\n\tq := `two\n\t\tkeeps both\n`\n\tr(p, q)\n})",
+			},
+			{
+				"a backtick that opens no raw string changes nothing",
+				open + "\tt.Run(\"a\", func(t *testing.T) {\n\t\t// a ` in a comment\n\t\ts := \"`\"\n\t\tr := '`'\n\t\tu(s, r)\n\t})\n}\n",
+				"t.Run(\"a\", func(t *testing.T) {\n\t// a ` in a comment\n\ts := \"`\"\n\tr := '`'\n\tu(s, r)\n})",
+			},
+			{
+				"the indentation is whatever the line has, and a line without it stays",
+				open + "    t.Run(\"a\", func(t *testing.T) {\n        x()\n\ty()\nz()\n    })\n}\n",
+				"t.Run(\"a\", func(t *testing.T) {\n    x()\n\ty()\nz()\n})",
+			},
+			{
+				"code before the subtest on its line is not indentation",
+				open + "\tx(); t.Run(\"a\", func(t *testing.T) {\n\t\ty()\n\t})\n}\n",
+				"t.Run(\"a\", func(t *testing.T) {\n\ty()\n})",
+			},
+			{
+				"the scanner drops the CRs of a raw string, and its end is still found",
+				open + "\tt.Run(\"a\", func(t *testing.T) {\r\n\t\tp := `one\r\n\r\n\r\n\r\n\r\n\tx`\r\n\t\tq(p)\r\n\t})\r\n}\r\n",
+				"t.Run(\"a\", func(t *testing.T) {\r\n\tp := `one\r\n\r\n\r\n\r\n\r\n\tx`\r\n\tq(p)\r\n})",
+			},
+		}
+		for _, r := range rows {
+			got, ok := extractGoTest([]byte(r.src), "TestD/a")
+			if !ok || got != r.want {
+				t.Errorf("%s: extractGoTest = %q, %v\nwant %q, true", r.name, got, ok, r.want)
 			}
 		}
 	})
