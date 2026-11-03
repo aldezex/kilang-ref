@@ -54,7 +54,7 @@ stdlib/              el preludio y la biblioteca estándar de Ki, incrustados en
 tests/               programas Ki de prueba: golden/chNN/*.ki y errors/chNN/*.ki
 book/                (solo aquí) la prosa de cada capítulo y sus tarjetas de test
 ci/                  ci-local.sh, session.sh, retag.sh, retag-all.sh y check-tags.sh
-docs/                toolchain.md; research/ (los informes del diseño); superpowers/ (spec, planes y proceso)
+docs/                toolchain.md; errors/ (el catálogo de errores, con ejemplos que un test ejecuta); research/ (los informes del diseño); superpowers/ (spec, planes y proceso)
 .github/workflows/   la CI de GitHub
 ```
 
