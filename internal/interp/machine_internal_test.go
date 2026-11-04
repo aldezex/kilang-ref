@@ -67,9 +67,9 @@ func TestMachineFrames(t *testing.T) {
 			}
 		}
 
-		// The limit in slots of the environments reads the same setting: 1<<16 for
-		// each mebibyte, four times the frames, because a slot takes 16 bytes and a
-		// frame 64. It has its own cut, a little lower than that of the frames.
+		// The limit of the slots reads the same setting: 1<<16 for each mebibyte,
+		// four times the frames, because a slot takes 16 bytes and a frame 64. It
+		// has its own cut, a little lower than that of the frames.
 		const defaultSlots = 256 << 16
 		for _, row := range []struct {
 			setting string

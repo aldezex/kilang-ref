@@ -125,8 +125,8 @@ const (
 // KI_STACK_MB (see limitFor).
 func framesFor(setting string) int { return limitFor(setting, framesPerMB) }
 
-// slotsFor returns the limit of the slots of the environments for the value of
-// KI_STACK_MB (see limitFor).
+// slotsFor returns the limit of the slots for the value of KI_STACK_MB (see
+// limitFor).
 func slotsFor(setting string) int { return limitFor(setting, slotsPerMB) }
 
 // limitFor returns the number of mebibytes that setting says times perMB when it
