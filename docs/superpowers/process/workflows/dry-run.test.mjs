@@ -1,5 +1,5 @@
 // Control-flow tests of chapter-v4.js and part-gate.js, with no agents and no tokens:
-//   node --test docs/superpowers/process/workflows/
+//   node --test docs/superpowers/process/workflows/dry-run.test.mjs
 // The scripts run as the Workflow runtime runs them: an async body with agent(),
 // parallel(), phase(), log() and args as globals. They get args.dryRun, so each
 // agent's prompt is a stub holding its canned answer. The world below plays the

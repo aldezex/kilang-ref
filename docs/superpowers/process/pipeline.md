@@ -60,7 +60,7 @@ A fix from a tag goes forward, as an erratum and a `{{diff}}` in the next sessio
 ## Test
 
 ```sh
-node --test docs/superpowers/process/workflows/
+node --test docs/superpowers/process/workflows/dry-run.test.mjs
 ```
 
 No tokens: `args.dryRun` replaces each prompt with a stub that holds its canned answer, and the test plays the agents. It kills each lens mid-round, gives bad answers, crashes at every step and runs again, and checks that the main checkout stays serialized. To try the runtime itself, call Workflow with `dryRun: {}` (Haiku answers the stubs, a few tokens each) and stop a lens by hand: the run must return `stopped` and name it. `dryRun.answers` scripts findings by label. Any edit to a script reruns this.
