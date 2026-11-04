@@ -22,7 +22,7 @@ error[E0101]: invalid UTF-8 byte 0xFF
 
 `ki test`, el *runner* de Ki, ejecuta los programas de prueba y compara su salida con lo que piden sus cabeceras.
 
-Sin lexer, el único error posible es un fichero que no es texto, pero diagnósticos y runner ya son los definitivos.
+Sin lexer, el único error posible es un fichero que no es texto, pero diagnósticos y runner ya funcionan.
 
 :::note
 **Fe de erratas (2026-10-28).** Estos mensajes de error mejoran en el capítulo 7.
@@ -58,7 +58,7 @@ Go **no** cierra el conjunto: `Severity(7)` compila, y un `switch` incompleto no
 
 ### `fmt`: verbos, `Stringer` y `Formatter`
 
-`fmt` llama a `String() string`, la interfaz `fmt.Stringer`, con los verbos de texto (`%v`, `%s`) y no con los numéricos: `%d` de `Warning` da `1`. El `Code` de un error usa `"%c%04d"`, un carácter y cuatro cifras con ceros: `E0101`.
+`fmt` llama a `String() string`, la interfaz `fmt.Stringer`, con los verbos de cadena (`%v`, `%s`, `%q`, `%x`), no con `%d`: `%d` de `Warning` da `1`. El `Code` de un error usa `"%c%04d"`, un carácter y cuatro cifras con ceros: `E0101`.
 
 Si `String()` no basta, `fmt.Formatter` decide la salida de **todos** los verbos salvo `%T` y `%p`.
 
@@ -83,10 +83,10 @@ if f, ok := out.(interface{ Flush() error }); ok {
 }
 ```
 
-El **type switch**, `switch v := x.(type) { case A: … }`, hace varias aserciones, y en cada `case` `v` tiene ese tipo.
+El **type switch**, `switch v := x.(type) { case A: … }`, hace varias aserciones, y en un `case` con un solo tipo `v` lo tiene.
 
 :::from Rust
-Una interfaz es un trait sin `impl Trait for T`, y `w.(T)` hace de `downcast_ref::<T>()`.
+Una interfaz es un trait sin `impl Trait for T`.
 :::
 
 ### La interfaz sellada
@@ -191,7 +191,7 @@ Una errata como `jsn:"severity"` no avisa: la clave sale `"Severity"`.
 
 `utf8.Valid(b)` solo responde sí o no; un diagnóstico necesita el **offset** del primer byte malo: por eso existe `FirstInvalidUTF8` (capítulo 2).
 
-Un test **golden** compara una salida larga con la guardada en `testdata/`, que el comando `go` ignora. A mano es lento: el test la genera con un flag:
+Un test **golden** compara una salida larga con la guardada en `testdata/`, que el comando `go` ignora. El test la genera con un flag:
 
 ```go
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -205,11 +205,11 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 - **Códigos estables.** No se reutilizan nunca: los buscas en la documentación y los comparan los tests. Su centena dice la etapa.
 - **Un límite.** Tras 100 errores el sink descarta el resto: lo demás suele ser cascada del primero.
-- **Una comprobación previa.** `syntax.CheckSource` rechaza el primer byte de UTF-8 inválido (E0101) o de control, salvo tabulador, `\n` y `\r` (E0102): el lexer del capítulo 5 recibe texto limpio.
-- **Una cabecera estricta.** Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Una mal escrita e ignorada no comprobaría nada.
+- **Una comprobación previa.** `syntax.CheckSource` rechaza el primer byte de UTF-8 inválido (E0101) o de control ASCII, salvo tabulador, `\n` y `\r` (E0102): el lexer del capítulo 5 no los ve.
+- **Una cabecera estricta.** Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Una clave repetida o ausente es error; una mal escrita, texto libre que no comprueba nada.
 - **Anotaciones.** Un error esperado, marcado en línea (`// ERROR(E0101) @9`), se compara por (código, línea, columna), no por su texto: reformular un mensaje no rompe cien golden.
 
-**Dos clases de columna.** La posición cuenta code points, como rustc; el tabulador vale uno, como en un editor. El caret cuenta **columnas visuales**, con el tabulador hasta el siguiente múltiplo de 4. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
+**Dos clases de columna.** La posición cuenta code points, como rustc; el tabulador vale uno. El caret cuenta **columnas visuales**, con el tabulador hasta el siguiente múltiplo de 4; no sabe de caracteres anchos. Aquí, el byte malo está en la columna 10 y el caret, en la 13:
 
 ```console
 $ printf 'fn main() {\n\tlet x = \xff\n}\n' > build/bad.ki
@@ -221,7 +221,7 @@ error[E0101]: invalid UTF-8 byte 0xFF
   |             ^ not valid UTF-8
 ```
 
-Lo invisible lleva un sustituto de ancho conocido: un byte inválido, U+FFFD; un control ASCII, una *control picture* (`␁`); uno C1 (U+0080–U+009F) o bidireccional, `<U+202E>`. El bidireccional reordena el texto en pantalla (el ataque *Trojan Source*).
+Llevan sustituto de ancho conocido: un byte inválido, U+FFFD; un control ASCII, una *control picture* (`␁`); uno C1 (U+0080–U+009F) o bidireccional, `<U+202E>`. El bidireccional reordena el texto en pantalla (el ataque *Trojan Source*).
 
 ## Tests primero
 
@@ -298,6 +298,8 @@ FAIL
 
 {{file ch03-s1 internal/diag/diagnostic.go}}
 
+{{file ch03-s1 internal/diag/sink.go}}
+
 Los `With…` tienen receptor **por valor**: cambian una copia y la devuelven. La copia es superficial (capítulo 2): `Notes` comparte el array, y si sobra capacidad, `append` escribiría en él. `slices.Clip` obliga a reservar uno nuevo. Quítalo de `WithNote`:
 
 ```text
@@ -307,8 +309,6 @@ Los `With…` tienen receptor **por valor**: cambian una copia y la devuelven. L
 ```
 
 Deshazlo.
-
-{{file ch03-s1 internal/diag/sink.go}}
 
 `slices.SortStableFunc` conserva el orden de los iguales. Su función devuelve negativo si `a` va antes, positivo si va después y cero si son iguales. Compara con `<` y `>`: restar dos `uint32` daría la vuelta.
 
@@ -348,7 +348,7 @@ func RenderShort(d Diagnostic, sm *base.SourceManager) string
 func RenderJSON(d Diagnostic, sm *base.SourceManager) string
 ```
 
-El formato humano, como el de rustc:
+El formato humano, parecido al de rustc:
 
 ```text
 <severidad>[<código>]: <mensaje>     la cabecera
@@ -748,7 +748,7 @@ t.Run("labels_on_three_lines", func(t *testing.T) {
 
 Los ayudantes son los de `render_test.go` en `ref/ch03-s2`: `newSource` crea `test.ki`, `unknownName` el E0301, y `spanWithin(t, src, ctx, sub)` busca `sub` dentro de `ctx`, para un texto que se repite.
 
-Primero falla por el golden que falta. Con `-update` se escribe, pero la siguiente ejecución sigue en rojo: `testdata has 15 golden files, want 14`. La constante `wantGoldens` del test que cuenta los golden pasa a 15. El golden:
+Primero falla por el golden que falta. Con `-update` se escribe, pero esa misma ejecución ya da rojo: `testdata has 15 golden files, want 14`. La constante `wantGoldens` del test que cuenta los golden pasa a 15. El golden:
 
 ```text
 error[E0301]: unknown name `a2`
@@ -785,7 +785,7 @@ $ printf '// test: T03.76\n// run: check\n// args: --diagnostics=short\n// expec
 :::
 
 :::solution
-Cada diagnóstico humano muestra una ventana de la línea, no la línea entera, así que mide unos 350 bytes sea cual sea el fichero. Con el límite de 100, unos 34 KB de stderr. Sin límite, 38 MB en unos 20 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla.
+Cada diagnóstico humano muestra una ventana de la línea, no la línea entera, así que mide unos 350 bytes sea cual sea el fichero. Con el límite de 100, unos 34 KB de stderr. Sin límite, 38 MB en unos 30 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla.
 
 `MaxErrors` protege de cualquier pase que se desboque. `CheckSource` ni llega a él: en un fichero que no es texto basta el primer byte malo.
 :::
@@ -809,7 +809,7 @@ En `runTest`, tras comprobar que hay rutas (`test.go` importa además `"errors"`
 	}
 ```
 
-`os.ErrNotExist` es el mismo valor que `fs.ErrNotExist`, que aquí no se puede escribir: en `runTest`, `fs` es el `FlagSet`, una variable local que tapa el paquete `io/fs`. El test, en `TestCLI`:
+`os.ErrNotExist` es el mismo valor que `fs.ErrNotExist`, que aquí no se puede escribir: en `runTest`, `fs` es el `FlagSet`, una variable local, y el fichero no importa `io/fs`. El test, en `TestCLI`:
 
 ```go
 t.Run("test_missing_path_is_usage_error", func(t *testing.T) {
@@ -885,7 +885,7 @@ Para probar lo que vería una shell: el binario real y su código de salida. Per
 - `v, ok := w.(T)` pregunta por un tipo; un puntero `nil` en una interfaz no la hace `nil`.
 - La interfaz sellada no da exhaustividad: cada type switch termina en `default: panic`.
 - `(T, error)`, los punteros y el valor cero hacen de `Result` y `Option`.
-- El caret va en columnas visuales, con sustitutos para lo invisible.
+- El caret va en columnas visuales, con sustitutos para lo ilegible.
 - Los golden de `testdata/` se regeneran con `-update` y después se leen.
 - El runner exige una cabecera estricta y compara posiciones si hay anotaciones.
 
