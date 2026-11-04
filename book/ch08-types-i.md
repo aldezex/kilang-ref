@@ -50,7 +50,7 @@ No es una garantía: `tbl.Node(f).Params[0] = boolT` convierte `(Int) -> Int` en
 Una clave con `Vec<TypeId>` compila, y `&[TypeId]` garantiza lo que aquí nadie garantiza.
 :::
 
-:::more El embedding, que ya usa el capítulo 9
+:::more Embedding: ya lo usa el capítulo 9
 Un struct puede llevar otro sin nombre de campo (capítulo 3): `type Mark struct { Range; Text string }`. Si `Range` tiene `Lo` y un método `Len`, `m.Lo` y `m.Len()` son de `Range`, promocionados; `m.Range` nombra el campo entero.
 
 No es herencia: quien pide un `Range` necesita `m.Range`.
@@ -123,7 +123,7 @@ Una operación con un operando de tipo error tiene tipo error. La excepción es 
 
 ### Una goroutine que vigila: `within`
 
-Un recorrido equivocado de 40 niveles no falla, se cuelga: `go test` lo corta a los diez minutos sin decir la fila ni el motivo. `within.Run` ejecuta el trabajo en otra goroutine y espera con un `select`. En pequeño:
+Un recorrido equivocado de 40 niveles no falla, se cuelga: `go test` lo corta a los diez minutos sin decir la fila. `within.Run` ejecuta el trabajo en otra goroutine y espera con un `select`. En pequeño:
 
 ```go
 func within(t *testing.T, d time.Duration, work func()) {
@@ -369,7 +369,7 @@ La cabecera lleva el error a la línea 12, y las dos cifras ensanchan el margen:
 
 #### El código
 
-- **E0404 y el parser.** `main` tiene que ser `fn main()`, y quitar lo que sobra necesita dos spans. Los guarda el parser: el comprobador no tiene el texto, y no puede buscar el `(` ni el `->`, porque `fn main (x)` o `fn main()->Int` son válidos.
+- **E0404 y el parser.** `main` tiene que ser `fn main()`, y quitar lo que sobra necesita dos spans. Los guarda el parser: el comprobador no tiene el texto, y buscar el `(` fallaría con `fn main /* ( */ (x)`, que es válido.
 - **Cascadas tras un error de sintaxis.** Un `if` sin `else` con la rama ilegible tiene el tipo de error. Mientras falte un argumento, `call` no juzga la cuenta: `g(1,,2)` daría un E0402 que se iría al borrar la coma. Lo decide `c.missingArg`, un valor de método.
 - **El sink lleno.** Si ya perdió un error (`Truncated`), no se escriben los tipos de los siguientes: un tipo puede tener miles de parámetros.
 
@@ -487,9 +487,14 @@ bad.ki:9:17: error[E0402]: this function takes 1 argument(s) but 2 were supplied
 ```go
 	if !e.HasElse {
 		// The E0401 goes to a sink of its own first, so that it can say why
-		// the `if` is `()` before it is reported.
+		// the `if` is `()` before it is reported. Once c.sink has dropped an
+		// error nothing reaches it: a new sink is never Truncated, and mismatch
+		// would write the types for an error nobody sees.
 		var own diag.Sink
 		u := Unifier{Types: c.tp.Types, Sink: &own}
+		if c.sink.Truncated() {
+			u.Sink = c.sink
+		}
 		if !u.Unify(expected, c.unitT, e.Span, r) {
 			for _, d := range own.All() {
 				c.sink.Report(d.WithNote("this `if` has no `else`, so it is `()`"))
@@ -501,7 +506,7 @@ bad.ki:9:17: error[E0402]: this function takes 1 argument(s) but 2 were supplied
 
 Declara en `check_test.go` una constante `noElse` con el texto de la nota y añade `.WithNote(noElse)` al E0401 esperado de las cuatro filas que ahora fallan.
 
-El golden, `tests/errors/ch08/if_without_else_value.ki`, lleva la tarjeta nueva T08.49 de tu `ch08.tests`:
+El golden, `tests/errors/ch08/if_without_else_value.ki`, lleva un id nuevo, T08.49:
 
 ```text
 // test: T08.49
