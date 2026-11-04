@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 )
@@ -40,43 +39,12 @@ var numberedMarkerRe = regexp.MustCompile(`^\d+[.)]$`)
 // are read as the page and `bookx verify` read them, and a fence that is never
 // closed (or a container) takes the rest of the file.
 func flowWords(markdown []byte) int {
-	lines := splitLines(markdown)
-	if len(lines) > 0 && lines[0] == "---" {
-		if end := slices.Index(lines[1:], "---"); end >= 0 {
-			lines = lines[end+2:]
-		}
-	}
 	count := 0
-	var open fence  // the fenced block we are inside, if any
-	var kind string // kind of the open container; "" when none
-	for _, line := range lines {
-		if open.char != 0 {
-			if open.closedBy(line) {
-				open = fence{}
-			}
+	for _, l := range proseLines(markdown) {
+		if l.Kind != lineText || excludedKinds[l.Container] || isTableLine(l.Text) || isDirectiveLine(l.Text) {
 			continue
 		}
-		if f, ok := openingFence(line); ok {
-			open = f
-			continue
-		}
-		if kind == "" {
-			if m := containerOpenRe.FindStringSubmatch(line); m != nil {
-				kind = m[1]
-				continue
-			}
-		} else if strings.TrimSpace(line) == ":::" {
-			kind = ""
-			continue
-		}
-		if excludedKinds[kind] {
-			continue
-		}
-		text := strings.TrimSpace(line)
-		if strings.HasPrefix(text, "|") || (strings.HasPrefix(text, "{{") && strings.HasSuffix(text, "}}")) {
-			continue
-		}
-		count += wordsIn(text)
+		count += wordsIn(strings.TrimSpace(l.Text))
 	}
 	return count
 }
