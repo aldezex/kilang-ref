@@ -30,7 +30,7 @@ $ ki run fib.ki
 
 Recorrer el árbol con recursión de Go heredaría su pila, y desbordarla mata el proceso. Una **máquina abstracta** guarda en datos lo que la recursión esconde: ejecutar es un bucle de transiciones.
 
-Este intérprete es el **oráculo**: la referencia con la que se comparan los otros backends. Tiene tres partes:
+Este intérprete es el **oráculo**: con él se comparan los otros backends. Tiene tres partes:
 
 - **Control:** la expresión que toca evaluar, o el valor que acaba de salir.
 - **Entorno:** las variables de la función en curso.
@@ -147,7 +147,7 @@ Ki aún no tiene `while` (capítulo 23): su bucle es la llamada de cola, de prof
 
 La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: la variable `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función.
 
-**Fe de erratas.** Muchas variables llenan la memoria antes del 103: la rama `main` limita también las casillas, a 16 bytes.
+**Fe de erratas.** Muchas variables llenan la memoria antes del 103: la rama `main` limita también las casillas, a 16 bytes, y borra lo que saca, contra el comentario de `run`.
 
 Empujar un `retFrame` con la pila en el límite termina en `panic: stack overflow at <posición>`, con 103. Una llamada de cola no empuja, así que pasa.
 
@@ -166,7 +166,7 @@ Un panic vacía stdout antes de escribir su mensaje: así sale detrás de lo imp
 
 ### El test de imports
 
-Un test hace cumplir tres reglas; de `kirt`, solo existe `out`:
+Un test hace cumplir tres reglas; de `kirt`, aún solo existe `out`:
 
 - **`kirt` solo importa la biblioteca estándar y a sí mismo.** `ki build` (capítulo 48) copiará `kirt` junto al programa generado, y esa copia tiene que compilar sola.
 - **De `kirt`, el oráculo solo importa `out`, `splitmix` y `fmtnum`,** hojas que no importan nada más de `kirt`. Si usara el planificador o los canales de `kirt`, no podría encontrar sus fallos.
@@ -184,7 +184,7 @@ Sin el `Mutex`, dos goroutines tocarían el mismo `bufio.Writer` a la vez, y `go
 
 ### El proceso ayudante
 
-Un test no puede ver morir a su propio proceso, así que relanza su binario con otro cometido, la idea de `runKi` (capítulo 1):
+Un test no puede ver morir a su proceso: relanza su binario con otro cometido, como `runKi` (capítulo 1):
 
 ```go
 // -test.run is go test's -run, as the test binary spells it
@@ -196,7 +196,7 @@ cmd.Env = append(os.Environ(), "KI_TEST_HELPER=panic")
 
 ### Delve
 
-`dlv` depura el binario real. `dlv exec` arranca `ki`; tras `--` van sus argumentos. `break` para en una función, `continue` sigue hasta otra parada o el final, `print` evalúa una expresión y `clearall` borra las paradas.
+`dlv exec` depura el binario real, `ki`; tras `--` van sus argumentos. `break` para en una función, `continue` sigue hasta otra parada o el final, `print` evalúa una expresión y `clearall` borra las paradas.
 
 ### M1: `fib.ki`, etapa por etapa
 
