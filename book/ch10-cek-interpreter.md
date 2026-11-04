@@ -8,7 +8,7 @@ milestone: **M1**: `ki run fib.ki` imprime `6765`
 
 ## Objetivo
 
-Al terminar, Ki ejecuta programas. Es el hito M1, y con él acaba la Parte I:
+Al terminar, Ki ejecuta programas. Es el hito M1, y acaba la Parte I:
 
 ```console
 $ cat fib.ki
