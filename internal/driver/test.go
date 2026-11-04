@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/aldezex/kilang/internal/kitest"
+	"github.com/aldezex/kilang/kirt/out"
 )
 
 // testExec, when it is not nil, is what `ki test` runs each golden file with
@@ -32,11 +33,7 @@ func (o *outWriter) Write(p []byte) (int, error) {
 // Flush flushes w if it has a Flush method, so that the runner flushes the
 // real output after each PASS or FAIL line, and does nothing otherwise.
 func (o *outWriter) Flush() error {
-	f, ok := o.w.(interface{ Flush() error })
-	if !ok {
-		return nil
-	}
-	err := f.Flush()
+	err := out.TryFlush(o.w)
 	if err != nil && o.err == nil {
 		o.err = err
 	}

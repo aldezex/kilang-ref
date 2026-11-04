@@ -99,6 +99,17 @@ func (w *Writer) Flush() error {
 	return w.w.Flush()
 }
 
+// TryFlush flushes w if it has a Flush method and returns the error of that
+// flush, and does nothing and returns nil if it has none: a plain io.Writer holds
+// nothing back. It is for a function that takes any io.Writer and is given a
+// Writer of this package when it runs for real.
+func TryFlush(w io.Writer) error {
+	if f, ok := w.(interface{ Flush() error }); ok {
+		return f.Flush()
+	}
+	return nil
+}
+
 // Stdout and Stderr are the Writers of the process's standard output and
 // standard error. Stderr flushes at each line break whatever it is attached to,
 // so that a message about an error is never held back behind a buffer.

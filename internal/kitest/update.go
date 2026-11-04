@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/aldezex/kilang/internal/base"
 )
 
 // `ki test --update` rewrites the expect-stdout and expect-stderr of a golden
@@ -58,7 +60,7 @@ func updateFile(path string, data []byte, spec Spec, stdout, stderr string) (upd
 	}
 	if !bytes.Equal(text, data) {
 		if err := os.WriteFile(path, text, 0o644); err != nil {
-			return Spec{}, false, fmt.Errorf("cannot write file: %v", reason(err))
+			return Spec{}, false, fmt.Errorf("cannot write file: %v", base.Cause(err))
 		}
 		changed = true
 	}

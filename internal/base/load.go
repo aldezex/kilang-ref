@@ -91,13 +91,20 @@ func checkSize(size int64) error {
 	return nil
 }
 
-// loadError builds the error Load returns, wrapping cause. The os package
-// puts the real path inside its errors; the reason shown to the user should
-// name only displayPath, so a *fs.PathError is unwrapped to its Err.
+// loadError builds the error Load returns, wrapping cause. The reason shown to
+// the user should name only displayPath (see Cause).
 func loadError(displayPath string, cause error) error {
+	return fmt.Errorf("cannot read file `%s`: %w", displayPath, Cause(cause))
+}
+
+// Cause returns err without the *fs.PathError around it, if it has one, and err
+// itself otherwise. The os package puts the real path inside its errors, and a
+// message that names the file its own way should not repeat it or show the
+// absolute one.
+func Cause(err error) error {
 	var pe *fs.PathError
-	if errors.As(cause, &pe) {
-		cause = pe.Err
+	if errors.As(err, &pe) {
+		return pe.Err
 	}
-	return fmt.Errorf("cannot read file `%s`: %w", displayPath, cause)
+	return err
 }

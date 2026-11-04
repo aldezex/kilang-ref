@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +12,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/aldezex/kilang/internal/base"
+	kout "github.com/aldezex/kilang/kirt/out"
 )
 
 // Runner runs golden files and compares what they print with what their
@@ -115,7 +117,7 @@ func (r *Runner) runHere(absRoot, path string) (ok bool, report string) {
 	rel := displayPath(absRoot, path)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, failReport(rel, fmt.Sprintf("- cannot read file: %v", reason(err)))
+		return false, failReport(rel, fmt.Sprintf("- cannot read file: %v", base.Cause(err)))
 	}
 	spec, err := ParseHeader(data)
 	if err != nil {
@@ -179,17 +181,6 @@ func failReport(rel string, diffs ...string) string {
 		sb.WriteString(d + "\n")
 	}
 	return sb.String()
-}
-
-// reason returns the error without the *fs.PathError around it, so that a
-// message does not repeat the path, which the report already shows relative to
-// the root, and does not show the absolute one.
-func reason(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
 }
 
 // displayPath returns path relative to the root, with forward slashes. The
@@ -322,11 +313,7 @@ func (r *Runner) RunPaths(paths []string) (passed, failed int) {
 	if out == nil {
 		out = io.Discard
 	}
-	flush := func() {
-		if f, ok := out.(interface{ Flush() error }); ok {
-			_ = f.Flush()
-		}
-	}
+	flush := func() { _ = kout.TryFlush(out) }
 	defer func() {
 		_, _ = fmt.Fprintf(out, "ki test: %d passed, %d failed\n", passed, failed)
 		flush()
@@ -404,7 +391,7 @@ func kiFiles(absRoot, path string) (files, problems []string) {
 // could not read: `FAIL <path>` and the reason, without the path that the
 // error repeats. p is the path WalkDir gave, below absRoot.
 func unreadableDirectory(absRoot, p string, err error) string {
-	return failReport(displayPath(absRoot, p), fmt.Sprintf("- cannot read directory: %v", reason(err)))
+	return failReport(displayPath(absRoot, p), fmt.Sprintf("- cannot read directory: %v", base.Cause(err)))
 }
 
 // ExecSubprocess returns an Exec that runs the program at exe with the

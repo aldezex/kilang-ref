@@ -6,6 +6,7 @@ import (
 
 	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/core"
+	"github.com/aldezex/kilang/kirt/out"
 )
 
 // Checked 64-bit arithmetic. In Go, an int64 operation that does not fit wraps
@@ -121,9 +122,7 @@ func (m *Machine) panicAt(sp base.Span, msg string) Halt {
 // cannot fail the program either, and a Writer that fails keeps its error for
 // the flush that ends the process.
 func (m *Machine) haltAt(sp base.Span, msg string, code int) Halt {
-	if f, ok := m.out.(interface{ Flush() error }); ok {
-		_ = f.Flush()
-	}
+	_ = out.TryFlush(m.out)
 	pos := m.sm.LineCol(sp.File, sp.Lo)
 	fmt.Fprintf(m.err, "panic: %s at %s:%d:%d\n", msg, m.sm.DisplayPath(sp.File), pos.Line, pos.Col)
 	return Halt{Code: code}
