@@ -136,6 +136,8 @@ func TestPackageMutants(t *testing.T) {
 			{"a map size", "func f() map[int]int {\n\treturn make(map[int]int, 8)\n}\n", nil, 1},
 			{"the length of make is no hint", "func f() []int {\n\treturn make([]int, 8)\n}\n", []string{"int+1|8|9"}, 0},
 			{"the number of return 0, false", "func f() (int, bool) {\n\treturn 0, false\n}\n", []string{"bool|false|true"}, 1},
+			{"a capacity that is no literal", "func f(n int) []int {\n\treturn make([]int, 2, n)\n}\n", []string{"int+1|2|3"}, 0},
+			{"a result that is no literal", "func f(n int) (int, bool) {\n\treturn n, false\n}\n", []string{"bool|false|true"}, 0},
 			{"the number of return 0, true counts", "func f() (int, bool) {\n\treturn 0, true\n}\n", []string{"int+1|0|1", "bool|true|false"}, 0},
 		} {
 			got, filtered := mutantsOf(t, "package p\n\n"+r.src)
@@ -171,6 +173,15 @@ func TestPackageMutants(t *testing.T) {
 		}
 		if len(ms) != 1 || ms[0].ID != "M0002" || ms[0].Line != 5 || ms[0].Old != "2" {
 			t.Errorf("mutants %+v, want M0002 on line 5", ms)
+		}
+	})
+
+	t.Run("a_report_shows_an_edit_on_one_short_line", func(t *testing.T) {
+		long := strings.Repeat("é", 61)
+		m := mutant{ID: "M0001", File: "a.go", Line: 3, Op: "del-call", Old: "f(a,\n\t\tb)", New: long}
+		want := "M0001 a.go:3 del-call: `f(a, b)` -> `" + strings.Repeat("é", 60) + "…`"
+		if got := m.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
 		}
 	})
 
@@ -343,6 +354,15 @@ func TestMutateRun(t *testing.T) {
 		code, out, errOut := runMutateIn(t, "--repo", dir, "--pkg", "./calc")
 		if code != exitFail || !strings.Contains(errOut, "the tests fail with no mutant") || strings.Contains(out, "killed") {
 			t.Errorf("code %d, stdout %q, stderr %q", code, out, errOut)
+		}
+	})
+
+	t.Run("red_tests_show_the_end_of_a_long_output", func(t *testing.T) {
+		dir := mutantRepo(t)
+		writeFile(t, dir, "calc/red_test.go", "package calc\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestRed(t *testing.T) { t.Error(strings.Repeat(\"x\", 3000)) }\n")
+		code, _, errOut := runMutateIn(t, "--repo", dir, "--pkg", "./calc")
+		if code != exitFail || !strings.Contains(errOut, "FAIL\texample.com/m/calc") || len(errOut) > 2200 {
+			t.Errorf("code %d, %d bytes of stderr: %q", code, len(errOut), errOut)
 		}
 	})
 

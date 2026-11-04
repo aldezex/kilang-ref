@@ -57,6 +57,14 @@ func TestDoctestParse(t *testing.T) {
 		}
 	})
 
+	t.Run("a_line_with_less_indent_than_its_fence_loses_only_spaces", func(t *testing.T) {
+		blocks, _ := parseConsoleBlocks([]byte("   ```console\n   $ a\n b\ncd\n     e\n   ```\n"))
+		want := []string{"b", "cd", "  e"}
+		if len(blocks) != 1 || len(blocks[0].Commands) != 1 || !slices.Equal(blocks[0].Commands[0].Expected, want) {
+			t.Errorf("blocks %+v, want output %q", blocks, want)
+		}
+	})
+
 	t.Run("a_command_can_go_on_in_the_next_line", func(t *testing.T) {
 		blocks, _ := parseConsoleBlocks([]byte("```console\n$ a \\\n  b\nuno\n```\n"))
 		if len(blocks) != 1 || len(blocks[0].Commands) != 1 || blocks[0].Commands[0].Cmd != "a \\\n  b" || !slices.Equal(blocks[0].Commands[0].Expected, []string{"uno"}) {
