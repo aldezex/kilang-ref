@@ -66,5 +66,26 @@ func TestMachineFrames(t *testing.T) {
 				t.Errorf("%s: framesFor(%q) = %d, want %d", row.name, row.setting, got, row.want)
 			}
 		}
+
+		// The limit in slots of the environments reads the same setting: 1<<16 for
+		// each mebibyte, four times the frames, because a slot takes 16 bytes and a
+		// frame 64. It has its own cut, a little lower than that of the frames.
+		const defaultSlots = 256 << 16
+		for _, row := range []struct {
+			setting string
+			want    int
+		}{
+			{"", defaultSlots},
+			{"1", 1 << 16},
+			{"2", 2 << 16},
+			{"0", defaultSlots},
+			{"-1", defaultSlots},
+			{"abc", defaultSlots},
+			{"9223372036854775807", (math.MaxInt >> 16) << 16},
+		} {
+			if got := slotsFor(row.setting); got != row.want {
+				t.Errorf("slotsFor(%q) = %d, want %d", row.setting, got, row.want)
+			}
+		}
 	})
 }

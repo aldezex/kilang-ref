@@ -13,6 +13,16 @@ import (
 	"github.com/aldezex/kilang/internal/testsupport"
 )
 
+// manyLets returns n lines of `let`, each a variable with a slot of its own in the
+// frame of the function they are in.
+func manyLets(n int) string {
+	var sb strings.Builder
+	for i := range n {
+		fmt.Fprintf(&sb, "  let a%d = n\n", i)
+	}
+	return sb.String()
+}
+
 // machineOf returns a new Machine for the program c, and the buffers that its
 // stdout and its stderr go to.
 func machineOf(c *testsupport.Compiled) (m *interp.Machine, out, errOut *bytes.Buffer) {
@@ -980,6 +990,62 @@ fn b(n: Int, acc: Int) -> Int {
 		if s := m.Stats(); s.MaxDepth != 1<<14+3 {
 			t.Errorf("Stats().MaxDepth = %d, want %d", s.MaxDepth, 1<<14+3)
 		}
+
+		// The environments have a limit of their own: a MiB holds 1<<16 slots of 16
+		// bytes, and a call that would take them past that overflows, long before
+		// the frames do (a level of f keeps two frames, so the 1<<14 frames of a MiB
+		// would allow 8192 levels). The entry's environment is the first, and a call
+		// is refused if its own environment does not fit, so MaxEnvs is the largest
+		// e with e*size <= the limit. With 1024 slots the last environment fills the
+		// 65536 slots exactly and is allowed, which a check with >= would refuse; and
+		// with 1001 slots a check that left out the environment of the callee would
+		// allow a 66th.
+		for _, row := range []struct {
+			lets    int
+			mb      string
+			wantEnv int
+		}{
+			{1000, "1", 65},  // 1001 slots: 65*1001 = 65065, 66*1001 = 66066
+			{1023, "1", 64},  // 1024 slots: 64*1024 = 65536
+			{1023, "2", 128}, // 1024 slots: 128*1024 = 131072, the limit of 2 MiB
+		} {
+			t.Setenv("KI_STACK_MB", row.mb)
+			src := "fn f(n: Int) -> Int {\n" + manyLets(row.lets) + "  1 + f(n + 1)\n}"
+			c := testsupport.Compile(t, src)
+			m, _, errOut := machineOf(c)
+			v, ok := m.Call(testsupport.FunNamed(t, c, "f"), []interp.Value{interp.IntV{V: 0}})
+			if v != nil || ok {
+				t.Errorf("%d lets, %s MiB: Call(f, 0) = (%#v, %v), want (nil, false)", row.lets, row.mb, v, ok)
+			}
+			if want := fmt.Sprintf("panic: stack overflow at test.ki:%d:7\n", row.lets+2); errOut.String() != want {
+				t.Errorf("%d lets, %s MiB: stderr = %q, want %q", row.lets, row.mb, errOut.String(), want)
+			}
+			if s := m.Stats(); s.MaxEnvs != row.wantEnv {
+				t.Errorf("%d lets, %s MiB: Stats().MaxEnvs = %d, want %d", row.lets, row.mb, s.MaxEnvs, row.wantEnv)
+			}
+		}
+
+		// What returned no longer counts. Each call of leaf takes 1024 slots and
+		// gives them back, so 100 of them, which would be 102400 slots if they
+		// added up, fit in the 65536 of a MiB.
+		t.Setenv("KI_STACK_MB", "1")
+		returns := "fn leaf(n: Int) -> Int {\n" + manyLets(1023) + "  n\n}\n" +
+			"fn f(n: Int) -> Int { if n == 0 { 0 } else { 1 + leaf(n) - n + f(n - 1) } }"
+		if _, got := call(t, returns, "f", interp.IntV{V: 100}); got != (interp.IntV{V: 100}) {
+			t.Errorf("Call(f, 100) of the calls that return = %#v, want IntV{100}", got)
+		}
+
+		// Each Call starts from an empty machine, the count of slots included: after
+		// an overflow, a call that fits is allowed on the same machine.
+		c := testsupport.Compile(t, "fn f(n: Int) -> Int {\n"+manyLets(1023)+"  if n == 0 { 0 } else { 1 + f(n - 1) }\n}")
+		again, _, _ := machineOf(c)
+		f := testsupport.FunNamed(t, c, "f")
+		if v, ok := again.Call(f, []interp.Value{interp.IntV{V: 1000}}); v != nil || ok {
+			t.Errorf("Call(f, 1000) = (%#v, %v), want (nil, false)", v, ok)
+		}
+		if v, ok := again.Call(f, []interp.Value{interp.IntV{V: 3}}); v != (interp.IntV{V: 3}) || !ok {
+			t.Errorf("Call(f, 3) after the overflow = (%#v, %v), want (IntV{3}, true)", v, ok)
+		}
 	})
 
 	t.Run("stack_limit_counts_frames", func(t *testing.T) {
@@ -1041,6 +1107,28 @@ fn b(n: Int, acc: Int) -> Int {
 		}
 		if want := "panic: stack overflow at test.ki:2:55\n"; errOut.String() != want {
 			t.Errorf("stderr of Call(f, 8193) = %q, want %q", errOut.String(), want)
+		}
+
+		// A tail call replaces the environment, so the count of slots changes by the
+		// difference. spin loops over its own 1024 slots: if they added up, the call
+		// of one at the end would find 102400 of the 65536 of a MiB.
+		const one = "fn one() -> Int { 1 }\n"
+		spin := one + "fn spin(n: Int) -> Int {\n" + manyLets(1023) + "  if n == 0 { 1 + one() } else { spin(n - 1) }\n}"
+		if _, got := call(t, spin, "spin", interp.IntV{V: 100}); got != (interp.IntV{V: 2}) {
+			t.Errorf("Call(spin, 100) = %#v, want IntV{2}", got)
+		}
+		// And small, of one slot, grows to the 1024 of big by a tail call, which
+		// the next call that pushes a frame has to see: it finds 1024 slots for
+		// each level, and at the 64th, with 65536, one more does not fit. If only
+		// the slot of small counted, the 8192 levels of the frames would come first.
+		grow := "fn small(n: Int) -> Int { big(n) }\nfn big(n: Int) -> Int {\n" + manyLets(1023) + "  1 + small(n + 1)\n}"
+		c = testsupport.Compile(t, grow)
+		m, _, errOut = machineOf(c)
+		if v, ok := m.Call(testsupport.FunNamed(t, c, "big"), []interp.Value{interp.IntV{V: 0}}); v != nil || ok {
+			t.Errorf("Call(big, 0) = (%#v, %v), want (nil, false)", v, ok)
+		}
+		if s := m.Stats(); s.MaxEnvs != 64 {
+			t.Errorf("Stats().MaxEnvs of big and small = %d, want 64", s.MaxEnvs)
 		}
 	})
 

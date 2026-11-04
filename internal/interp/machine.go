@@ -105,25 +105,35 @@ type Stats struct {
 	MaxEnvs int
 }
 
-// The limit of the stack is KI_STACK_MB mebibytes (spec 8.10), counted in frames
-// and not in bytes: a frame is assumed to take 64 bytes, so a mebibyte holds
-// 1<<14 of them. New reads the variable (see framesFor) and enter checks the
-// limit. The environments are not counted: each call that is alive also holds
-// one, FrameSize slots of 16 bytes each (a Value is an interface), so the
-// memory used at the limit is that of the frames plus these environments, and
-// it grows with the number of variables of the functions that recurse.
+// The limit of the stack is KI_STACK_MB mebibytes (spec 8.10), counted twice and
+// in nominal sizes, not in the bytes that Go ends up using: that many mebibytes
+// of frames, at 64 bytes each, and as many of environments, at 16 bytes for each
+// slot (a Value is an interface). A mebibyte holds 1<<14 frames or 1<<16 slots.
+// Frames alone would not bound the memory: each call that is alive holds an
+// environment of FrameSize slots, so the bytes that a level of a recursion takes
+// grow with the number of variables of the function. New reads the variable (see
+// framesFor and slotsFor) and enter checks both limits.
 const (
 	stackEnv       = "KI_STACK_MB"
 	defaultStackMB = 256
 	framesPerMB    = 1 << 14
+	slotsPerMB     = 1 << 16
 )
 
-// framesFor returns the limit of the stack, in frames, for the value of
-// KI_STACK_MB: the number of mebibytes times 1<<14 when it is a positive
-// integer, and the default when it is anything else (empty, not a number, zero
-// or negative). A number too large for the product is cut to the largest that
-// fits, because the product would otherwise wrap around to a negative limit.
-func framesFor(setting string) int {
+// framesFor returns the limit of the frames of the stack for the value of
+// KI_STACK_MB (see limitFor).
+func framesFor(setting string) int { return limitFor(setting, framesPerMB) }
+
+// slotsFor returns the limit of the slots of the environments for the value of
+// KI_STACK_MB (see limitFor).
+func slotsFor(setting string) int { return limitFor(setting, slotsPerMB) }
+
+// limitFor returns the number of mebibytes that setting says times perMB when it
+// is a positive integer, and the default number of mebibytes times perMB when it
+// is anything else (empty, not a number, zero or negative). A number too large
+// for the product is cut to the largest that fits, because the product would
+// otherwise wrap around to a negative limit.
+func limitFor(setting string, perMB int) int {
 	// The error says why Atoi failed, and the number says enough: it is 0 for a
 	// text that is not an integer, and the largest int of its sign for one that
 	// does not fit in an int.
@@ -131,7 +141,7 @@ func framesFor(setting string) int {
 	if mb <= 0 {
 		mb = defaultStackMB
 	}
-	return min(mb, math.MaxInt/framesPerMB) * framesPerMB
+	return min(mb, math.MaxInt/perMB) * perMB
 }
 
 // Machine is a CEK machine over one Program. Make it with New. A Machine is not
@@ -166,6 +176,10 @@ type Machine struct {
 	// and, for a chain of operators, MaxChain (1024, E0205) limit together.
 	// TestMachine/stack_overflow_exits_103 works out the figure for its program.
 	maxFrames int
+	// slots is how many slots the environments in envs have, added up, and
+	// maxSlots is its limit: a call whose environment would take slots past
+	// maxSlots overflows (see enter).
+	slots, maxSlots int
 	// halt is nil while the program runs, and the state it ended in once it has
 	// panicked or overflowed its stack. run stops as soon as it is set.
 	halt *Halt
@@ -183,10 +197,11 @@ type Machine struct {
 // the stdout and the stderr of the program. What the program prints (`print`,
 // see externs) goes to out. The machine writes the messages of the program's
 // panics and of its stack overflow to err, using sm for their positions. The
-// limit of the stack is the one that the KI_STACK_MB variable says when New
-// reads it (see framesFor).
+// limits of the stack are the ones that the KI_STACK_MB variable says when New
+// reads it (see framesFor and slotsFor).
 func New(p *core.Program, sm *base.SourceManager, out, err io.Writer) *Machine {
-	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: framesFor(os.Getenv(stackEnv))}
+	setting := os.Getenv(stackEnv)
+	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: framesFor(setting), maxSlots: slotsFor(setting)}
 }
 
 // Stats returns the counts of what the machine has done since New.
@@ -226,7 +241,9 @@ func (m *Machine) Call(f core.FunID, args []Value) (Value, bool) {
 	if !fun.HasBody {
 		panic(fmt.Sprintf("interp: Call of function %d, which has no body", f))
 	}
-	m.envs = append(m.envs[:0], m.newEnv(fun, args))
+	entry := m.newEnv(fun, args)
+	m.envs = append(m.envs[:0], entry)
+	m.slots = len(entry)
 	m.stack = m.stack[:0]
 	m.halt = nil
 	m.stats.MaxEnvs = max(m.stats.MaxEnvs, len(m.envs))
@@ -384,6 +401,9 @@ func (m *Machine) applyFrame(f frame, v Value) {
 		// primitive (see applyPrim).
 		m.eval(selectArm(m.prog.ArmsOf(x.Arms), v.(BoolV).V))
 	case retFrame:
+		// The function that returns has the last environment, and it is the only
+		// one above that of its caller: each frame of this kind has one of its own.
+		m.slots -= len(m.envs[len(m.envs)-1])
 		m.envs = m.envs[:f.env+1]
 		m.ret(v)
 	default:
@@ -448,12 +468,16 @@ func (m *Machine) newEnv(fun core.Fun, args []Value) []Value {
 // the machine's tail-call rule, and it is why a loop written as a tail call
 // does not grow the stack or envs. The function that Call starts has no
 // retFrame, so its own tail call pushes one, and the calls after that reuse it.
-// The stack is not checked in this case, because the call pushes nothing.
+// The stack is not checked in this case, because the call pushes nothing. Its
+// environment can be larger than the one it replaces, and the next call that
+// pushes a frame sees that in slots, so a loop of tail calls cannot grow past
+// the limit by more than the one environment that it keeps replacing.
 //
 // Any other call pushes a retFrame that remembers the environment of the
 // caller, and appends the new one. If the stack already holds maxFrames frames
-// or more, it overflows instead: the machine writes the message at the span of
-// the call to err and halts with Halt{Code: 103}.
+// or more, or if the new environment would take slots past maxSlots, it
+// overflows instead: the machine writes the message at the span of the call to
+// err and halts with Halt{Code: 103}.
 func (m *Machine) enter(call core.Expr, vals []Value) {
 	// A callee that is not a function would be a bug of the type checker.
 	callee := vals[0].(FunV)
@@ -465,14 +489,17 @@ func (m *Machine) enter(call core.Expr, vals []Value) {
 	env := m.newEnv(fun, vals[1:])
 
 	if n := len(m.stack); n > 0 && isRetFrame(m.stack[n-1]) {
-		m.envs[len(m.envs)-1] = env
+		top := len(m.envs) - 1
+		m.slots += len(env) - len(m.envs[top])
+		m.envs[top] = env
 	} else {
-		if len(m.stack) >= m.maxFrames {
+		if len(m.stack) >= m.maxFrames || m.slots+len(env) > m.maxSlots {
 			m.stop(m.haltAt(call.Span, "stack overflow", codeStackOverflow))
 			return
 		}
 		m.push(retFrame{env: len(m.envs) - 1})
 		m.envs = append(m.envs, env)
+		m.slots += len(env)
 	}
 	m.stats.MaxEnvs = max(m.stats.MaxEnvs, len(m.envs))
 	m.eval(fun.Body)
