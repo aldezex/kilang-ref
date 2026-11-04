@@ -132,6 +132,8 @@ func TestPackageMutants(t *testing.T) {
 		}
 		for _, r := range []row{
 			{"a zero field", "type S struct{ X, Y int; N string; B bool; P *int }\nfunc f(v int) S {\n\treturn S{X: 0, Y: v, N: \"\", B: false, P: nil}\n}\n", []string{"int+1|0|1", "field-drop|Y: v, |", "bool|false|true"}, 4},
+			{"a constant that is the zero", "type K int\nconst (\n\tZero K = iota\n\tOne\n)\ntype S struct{ A, B K }\nfunc f(k K) S {\n\treturn S{A: Zero, B: k}\n}\n", []string{"field-drop|, B: k|"}, 1},
+			{"a constant that is not", "type K int\nconst (\n\tZero K = iota\n\tOne\n)\ntype S struct{ A, B K }\nfunc f(k K) S {\n\treturn S{A: One, B: k}\n}\n", []string{"field-drop|A: One, |", "field-drop|, B: k|"}, 0},
 			{"a capacity", "func f() []int {\n\treturn make([]int, 2, 8)\n}\n", []string{"int+1|2|3"}, 1},
 			{"a map size", "func f() map[int]int {\n\treturn make(map[int]int, 8)\n}\n", nil, 1},
 			{"the length of make is no hint", "func f() []int {\n\treturn make([]int, 8)\n}\n", []string{"int+1|8|9"}, 0},

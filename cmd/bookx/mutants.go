@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/constant"
 	"go/importer"
 	"go/parser"
 	"go/token"
@@ -41,7 +42,8 @@ import (
 //	             same struct, or a local variable of the same scope
 //
 // It leaves out shapes that a reading of the survivors found equivalent, and
-// counts them: a dropped field whose value is the zero value anyway, a capacity
+// counts them: a dropped field whose value is the zero value anyway, literal or
+// constant, a capacity
 // hint in `make`, and the number in `return 0, false`, which the caller is told
 // not to read.
 
@@ -211,6 +213,13 @@ func isZeroLiteral(x ast.Expr) bool {
 	return false
 }
 
+// isZeroConstant reports whether x is a constant whose value is zero, such as the
+// first name of an iota: dropping that field changes nothing either.
+func (e *mutantWriter) isZeroConstant(x ast.Expr) bool {
+	tv, ok := e.info.Types[x]
+	return ok && tv.Value != nil && tv.Value.Kind() == constant.Int && constant.Sign(tv.Value) == 0
+}
+
 // walk adds the mutants of every operator but swap.
 func (e *mutantWriter) walk(f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -282,7 +291,7 @@ func (e *mutantWriter) walk(f *ast.File) {
 				if !ok || len(x.Elts) < 2 {
 					continue
 				}
-				if isZeroLiteral(kv.Value) {
+				if isZeroLiteral(kv.Value) || e.isZeroConstant(kv.Value) {
 					e.filtered++
 					continue
 				}
