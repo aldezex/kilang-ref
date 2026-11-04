@@ -170,7 +170,7 @@ La tabla de líneas de `"ab\ncd\nef"` es `[0 3 6]`. `slices.BinarySearch(lines, 
 
 Encontrado en `i`, el offset es el inicio de la línea `i+1`. Si no, el punto de inserción está una posición más allá de la línea, y como las líneas cuentan desde 1, `i` **es** la línea.
 
-`sort.Search(n, f)`, la forma antigua, da el menor `i` con `f(i)` verdadero; si `f` es `lines[i] > off`, ese `i` es la línea. El código usa `slices.BinarySearch`.
+`sort.Search(n, f)`, la forma antigua, da el menor `i` con `f(i)` verdadero; si `f` es `lines[i] > off`, ese `i` es la línea.
 
 ### Qué hace el recolector y de qué no te libra
 
@@ -339,7 +339,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch02-s2`; compárate con `re
 
 #### Los tests, en rojo
 
-1. **Escribe T02.16–T02.43.** El `ref:` de cada tarjeta, en `git show ref/ch02-s3:book/tests/ch02.tests`, dice en qué `TestXxx` va; `load_test.go` y `utf8_test.go` son nuevos. Los ficheros de `Load`, en el pliegue. La interfaz nueva:
+1. **Escribe T02.16–T02.43.** El `ref:` de cada tarjeta, en `git show ref/ch02-s3:book/tests/ch02.tests`, dice en qué `TestXxx` va; `load_test.go` y `utf8_test.go` son nuevos. La interfaz nueva:
 
 ```go
 func (m *SourceManager) LineText(id FileID, line uint32) string
@@ -385,6 +385,10 @@ FAIL
 En `LineText`, `end > start` protege un fichero que empieza por `\n`: `end - 1` sería `0 - 1`. En `uint32` eso da la vuelta, y los enteros sin signo de Go no avisan.
 
 {{diff ch02-s2..ch02-s3 internal/base/source.go}}
+
+:::note
+**Fe de erratas.** El comentario de `HadBOM` se equivoca: `ki test --update` busca la marca él mismo.
+:::
 
 {{file ch02-s3 internal/base/utf8.go}}
 
