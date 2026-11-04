@@ -143,7 +143,7 @@ El tiempo es el mejor de cinco `runtime.GC()` seguidos, y los objetos salen de `
 
 `Arena` aplica la idea a los bytes: los textos del interner van seguidos en slabs, bloques `[]byte`, con una reserva por slab y no por texto.
 
-**La arena no usa `unsafe`.** `unsafe` permitiría reinterpretar sus bytes como nodos: `(*Node)(unsafe.Pointer(&slab[0]))`. Pero el recolector seguiría viendo un `[]byte`: lo que apunte un nodo se libera aunque el nodo lo use. Además, habría que alinear a mano: cada nodo, en una dirección múltiplo de su alineación.
+**La arena no usa `unsafe`.** `unsafe` permitiría reinterpretar sus bytes como nodos: `(*Node)(unsafe.Pointer(&slab[0]))`. Pero el recolector seguiría viendo un `[]byte`: lo que apunte un nodo se libera aunque el nodo lo use. Además, habría que alinear cada nodo a mano.
 
 Por eso `unsafe` vive solo en `kirt/heap`, en el runtime de Ki (Parte VI).
 
@@ -270,8 +270,6 @@ Si hiciera falta más, `cmd.CombinedOutput()` da stdout y stderr mezclados, y `e
 
 #### `SourceManager` pasa a `IdVec`
 
-Los tests del capítulo 2 son la red de este cambio.
-
 {{diff ch03-s3..ch04-s1 internal/base/source.go}}
 
 - `files` pasa a `IdVec[FileID, file]`: los ficheros van seguidos en un array, sin un puntero por fichero, y `Push` puede moverlos. Por eso ningún método guarda un `*file`: pide `m.files.Ptr(id)`, lo usa y lo suelta.
@@ -319,6 +317,7 @@ func (in *Interner) Len() int
    - `prev, dup := seen[sym]` es la búsqueda con dos resultados: el valor y si la clave estaba.
    - Un `const` también puede ir dentro de una función.
    - `func([]byte) uint64 { return 42 }`, el hash constante del test de colisiones, no nombra su parámetro porque no lo usa.
+   - Cada iteración de los dos benchmarks es una llamada, en círculo por los 1000 textos: `ns/op` mide una.
 3. **Míralos fallar.** El rojo es `undefined: NewInterner`.
 4. **Escribe las firmas con cuerpos de valor cero,** salvo `NewInterner`, que devuelve `&Interner{arena: NewArena(0)}` para no cortar el binario. También lo corta tomar `&v[0]` del `nil` de `Bytes`: mira antes `len(v)`. De los nuevos, solo pasa el que exige no reservar, por la razón equivocada: un `Intern` que siempre devuelve `NoSymbol` tampoco reserva.
 

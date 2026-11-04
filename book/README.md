@@ -57,6 +57,8 @@ Una directiva se escribe con dobles llaves, **sola en su línea** (con sangría 
 
 **La prosa cita solo etiquetas de sesión** (`chNN-sK`), nunca la etiqueta del capítulo (`chNN`): mientras escribes la prosa, esa etiqueta todavía no existe. `{{reftest}}` lee el test en la etiqueta `chNN` si existe y, si no, en la última sesión del capítulo (la de mayor `K`).
 
+**`{{cards}}` lee de ese mismo sitio, y la etiqueta de un capítulo publicado no se mueve:** un commit de prosa posterior lleva el código de todos los capítulos, y las tarjetas con lo que cambiaron los siguientes. Así que corregir en `book/tests/` una tarjeta de un capítulo publicado no cambia su página. Si el texto de la etiqueta confundiría a quien lee, la prosa lo aclara o lleva una fe de erratas de una frase; si no, se acepta.
+
 ### Regiones en el código
 
 Una región es un trozo de un fichero que el libro quiere citar. Se marca con comentarios en una línea propia (`//` en Go, `#` en shell y YAML):

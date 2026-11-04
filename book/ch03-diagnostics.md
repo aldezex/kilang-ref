@@ -52,7 +52,7 @@ const (
 )
 ```
 
-En un bloque `const`, `iota` vale 0 y aumenta en uno con cada constante; una constante sin expresión repite la anterior. `Severity` es un tipo definido (capítulo 2).
+En un bloque `const`, `iota` vale 0 y aumenta en uno con cada constante; una constante sin expresión repite la anterior.
 
 Go **no** cierra el conjunto: `Severity(7)` compila, y un `switch` incompleto no avisa. Por eso `String()` termina escribiendo `Severity(7)`: un valor que solo puede salir de un fallo se ve como tal.
 
@@ -61,8 +61,6 @@ Go **no** cierra el conjunto: `Severity(7)` compila, y un `switch` incompleto no
 `fmt` llama a `String() string`, la interfaz `fmt.Stringer`, con los verbos de texto (`%v`, `%s`) y no con los numéricos: `%d` de `Warning` da `1`. El `Code` de un error usa `"%c%04d"`, un carácter y cuatro cifras con ceros: `E0101`.
 
 Si `String()` no basta, `fmt.Formatter` decide la salida de **todos** los verbos salvo `%T` y `%p`.
-
-Otros verbos:
 
 | Verbo | Qué escribe |
 | --- | --- |
@@ -153,7 +151,7 @@ func find(bad bool) error {
 
 `errors.Join` reúne varios errores y descarta los `nil`; `errors.Is` encuentra cada uno.
 
-`errors.As` (capítulo 2) desenvuelve: el runner saca así la causa de un `*fs.PathError`, porque esa capa repite la ruta. `errors.AsType`, su versión genérica, espera al capítulo 4.
+`errors.As` (capítulo 2) desenvuelve: el runner saca así la causa de un `*fs.PathError`, porque esa capa repite la ruta.
 
 ### Sin `Option` ni `Result`
 
@@ -230,6 +228,10 @@ Lo invisible lleva un sustituto de ancho conocido: un byte inválido, U+FFFD; un
 {{cards}}
 
 Escribe el test de cada tarjeta, míralo fallar, implementa lo justo y solo entonces despliega la referencia.
+
+:::note
+**Fe de erratas.** En las tarjetas, tras 100 errores no para el front end: el sink descarta el resto; y la ventana de 82 lleva una etiqueta de dos bytes (de uno, 81).
+:::
 
 ## Implementación
 
@@ -891,6 +893,6 @@ Para probar lo que vería una shell: el binario real y su código de salida. Per
 
 **Errores como valores.** La FAQ de Go: acoplar las excepciones a `try-catch-finally` «results in convoluted code» y empuja a tratar como excepcionales errores corrientes.
 
-**Envolver.** El blog de Go: «wrapping an error makes that error part of your API». Envuelve para exponer la causa a quien llama; si es un detalle interno, usa `%v`. Comprueba con `errors.Is` o `errors.As`.
+**Envolver.** El blog de Go: «wrapping an error makes that error part of your API». Envuelve para exponer la causa a quien llama; si es un detalle interno, usa `%v`.
 
 **Golden en Go.** `src/cmd/gofmt/testdata/` guarda parejas `.input`/`.golden`, y `gofmt_test.go` declara el mismo flag.
