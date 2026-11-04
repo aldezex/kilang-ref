@@ -145,7 +145,9 @@ Ki aún no tiene `while` (capítulo 23): su bucle es la llamada de cola, de prof
 
 ### El límite de la pila
 
-La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: la variable `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función. **Fe de erratas.** Así, muchas variables llenan la memoria antes del 103: `main` limita también las casillas, a 16 bytes.
+La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: la variable `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función.
+
+**Fe de erratas.** Muchas variables llenan la memoria antes del 103: la rama `main` limita también las casillas, a 16 bytes.
 
 Empujar un `retFrame` con la pila en el límite termina en `panic: stack overflow at <posición>`, con 103. Una llamada de cola no empuja, así que pasa.
 
