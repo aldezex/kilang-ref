@@ -38,7 +38,8 @@ func (f *file) lineStarts() []uint32 {
 
 // LineCount returns the number of lines of the file: the number of '\n' plus
 // one. An empty file has one line, and so does a file that ends in a newline
-// (its last line is empty).
+// (its last line is empty). Only the tests call it in Part I: `ki lsp` (chapter
+// 62), which gets line numbers from an editor, is its expected first caller.
 func (m *SourceManager) LineCount(id FileID) uint32 {
 	return uint32(len(m.files.Ptr(id).lineStarts()))
 }

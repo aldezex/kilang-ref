@@ -67,6 +67,8 @@ func (a *Arena) Copy(b []byte) []byte {
 }
 
 // Slabs returns the number of slabs the arena has created, large ones included.
+// Only the tests call it, to see how the arena grows, and no chapter has fixed
+// another caller.
 func (a *Arena) Slabs() int {
 	return len(a.slabs)
 }

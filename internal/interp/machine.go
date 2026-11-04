@@ -204,7 +204,9 @@ func New(p *core.Program, sm *base.SourceManager, out, err io.Writer) *Machine {
 	return &Machine{prog: p, sm: sm, out: out, err: err, maxFrames: framesFor(setting), maxSlots: slotsFor(setting)}
 }
 
-// Stats returns the counts of what the machine has done since New.
+// Stats returns the counts of what the machine has done since New. In Part I only
+// the tests and an exercise of chapter 10 read them, and no chapter has fixed a
+// command that shows them.
 func (m *Machine) Stats() Stats { return m.stats }
 
 // RunMain runs the function `main` of the program and returns the state the

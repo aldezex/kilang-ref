@@ -10,7 +10,9 @@ type ReasonKind uint8
 // The kinds of reason.
 const (
 	// ReasonAnnotation is an expected type that the program wrote as an
-	// annotation. Because is the annotation.
+	// annotation. Because is the annotation. Nothing makes one in Part I, where
+	// the only such annotation is that of a `let` (ReasonLetAnnotation), and no
+	// chapter has fixed which will: the list of kinds is the final one.
 	ReasonAnnotation ReasonKind = iota
 	// ReasonLetAnnotation is the annotation of a `let`: `let x: Bool = 1`.
 	// Because is the annotation. Its label is the same as ReasonAnnotation's.
@@ -18,7 +20,8 @@ const (
 	// ReasonReturnType is a value returned from a function that is not the
 	// tail of a block, which is what a `return` would be. Because is the return
 	// type, or the function's name if it has none. It has the same label as
-	// ReasonBlockTail but not its help.
+	// ReasonBlockTail but not its help. Nothing makes one until `return` arrives,
+	// in chapter 23.
 	ReasonReturnType
 	// ReasonBlockTail is the tail of a function body, checked against the
 	// return type: `fn f() { 1 }` expects `()` there. Because is the return

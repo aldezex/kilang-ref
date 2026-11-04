@@ -46,7 +46,8 @@ func (s *Sink) ErrorCount() int { return s.errors }
 // HasErrors reports whether at least one error was kept.
 func (s *Sink) HasErrors() bool { return s.errors > 0 }
 
-// Count returns how many kept diagnostics have the given code.
+// Count returns how many kept diagnostics have the given code. Only the tests
+// call it in Part I, and no chapter has fixed a caller: a pass asks HasErrors.
 func (s *Sink) Count(code Code) int {
 	n := 0
 	for _, d := range s.diags {

@@ -76,7 +76,9 @@ func (m *SourceManager) Size(id FileID) uint32 {
 // HadBOM reports whether the file started with a UTF-8 byte order mark that
 // Load stripped. Contents never includes the mark, so a tool that rewrites the
 // file could use this to put it back. ki test --update does not: it reads the
-// file itself and finds the mark in its bytes.
+// file itself and finds the mark in its bytes. So only the tests call it in Part
+// I, and `ki fmt` (chapter 65), which rewrites what Load read, is its expected
+// first caller.
 func (m *SourceManager) HadBOM(id FileID) bool {
 	return m.files.Ptr(id).hadBOM
 }

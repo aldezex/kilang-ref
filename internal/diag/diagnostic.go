@@ -19,7 +19,9 @@ const (
 	// Warning means the program is accepted but probably not what was meant.
 	Warning
 	// Note is extra information. Passes use the Notes field of a Diagnostic
-	// for most of it; this severity is for a note that stands on its own.
+	// for most of it; this severity is for a note that stands on its own. No
+	// pass of Part I makes one and no chapter has fixed which will: it is here
+	// because the list of severities is the final one (spec 7.3).
 	Note
 )
 
@@ -49,7 +51,8 @@ type Code struct {
 // E returns the error code with number n.
 func E(n uint16) Code { return Code{Letter: 'E', Number: n} }
 
-// W returns the warning code with number n.
+// W returns the warning code with number n. No pass of Part I reports a warning:
+// the first is the unreachable arm of a match, in chapter 12 (spec 5.7).
 func W(n uint16) Code { return Code{Letter: 'W', Number: n} }
 
 // String writes the code with at least four digits: E(101) is "E0101".
