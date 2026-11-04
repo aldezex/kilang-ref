@@ -11,9 +11,9 @@ import (
 )
 
 // This file is `bookx words`: it counts the flow words of a chapter, the
-// measure of the budget that docs/superpowers/process/prose.md sets for the
-// prose (3 000 words per chapter). The count is made on the Markdown as it is
-// written, with the directives still unresolved.
+// measure of the budget that section 5 of docs/superpowers/process/prose.md
+// sets for the prose. The count is made on the Markdown as it is written, with
+// the directives still unresolved.
 
 // excludedKinds are the containers whose body is not part of the flow: the
 // reader opens them when she needs them. The page shows each one folded.

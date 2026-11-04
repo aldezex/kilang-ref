@@ -386,6 +386,39 @@ func TestRender(t *testing.T) {
 		}
 	})
 
+	t.Run("control_characters_shown_as_pictures", func(t *testing.T) {
+		// A listing of tests/errors/ch03/control_char.ki exists to show the byte
+		// 0x01, and the page of the book would show nothing for it. Each control
+		// character becomes its picture, as in the compiler's diagnostics: U+2400+b
+		// for a byte b below 0x20, and U+2421 for 0x7F. The tab is kept, and so is
+		// the end of a line, whether it is "\n" or "\r\n"; a lone "\r" ends no line
+		// and is shown. The two characters next to each range are not controls.
+		f := cleanFixture(t)
+		f.setTag("ch02-s1", "ctl.txt", "a\x00b\x01c\x1fd\te e\r\n~\x7f\u0080\r\nx\ry\n\x1b[0m")
+		f.setTree(ch2, "{{file ch02-s1 ctl.txt}}\n")
+		checkRender(t, f, "02", strings.Join([]string{
+			"```text title=\"ctl.txt\" tag=\"ch02-s1\" mode=\"file\"",
+			"a\u2400b\u2401c\u241fd\te e",
+			"~\u2421\u0080",
+			"x\u240dy",
+			"\u241b[0m",
+			"```",
+			"",
+		}, "\n"))
+		if got, _ := f.render("02"); strings.ContainsAny(got, "\x00\x01\x1b\x1f\x7f\r") {
+			t.Errorf("the output still has a control character: %q", got)
+		}
+
+		// A {{diff}} goes through the same fence.
+		f = cleanFixture(t)
+		f.setTag("ch02-s1", "d.txt", "a\n")
+		f.setTag("ch02-s2", "d.txt", "a\x01\n")
+		f.setTree(ch2, "{{diff ch02-s1..ch02-s2 d.txt}}\n")
+		if got, problems := f.render("02"); len(problems) != 0 || !strings.Contains(got, "\n+a\u2401\n") || strings.Contains(got, "\x01") {
+			t.Errorf("the diff: problems %v, output %q, want the line +a with the picture of 0x01", problems, got)
+		}
+	})
+
 	t.Run("fence_longer_than_content_and_languages", func(t *testing.T) {
 		f := cleanFixture(t)
 		f.setTag("ch02-s1", "docs/note.md", "Mira:\n```go\nx := 1\n```\n  `````\nfin\n")

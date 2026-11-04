@@ -46,16 +46,39 @@ func fenceInfo(lang string, attrs ...[2]string) string {
 	return sb.String()
 }
 
+// controlPicture returns the character that a listing shows for r, which is r
+// unless it is a control character: the page of the book would show nothing for
+// one, and a listing may exist to show it. It is the rule of the compiler's
+// diagnostics (displayLine in internal/diag, a copy because bookx imports only the
+// standard library): the block of control pictures starts at U+2400 in the order
+// of ASCII, with U+2421 for DEL. The tab is kept, because a listing is indented
+// with it.
+func controlPicture(r rune) rune {
+	switch {
+	case r == '\t':
+		return r
+	case r < 0x20:
+		return 0x2400 + r
+	case r == 0x7F:
+		return 0x2421
+	default:
+		return r
+	}
+}
+
 // fenceBlock returns the lines of a fenced code block with the given info text
 // around content. Invalid UTF-8 in the content becomes U+FFFD (a run of bad
 // bytes becomes one), a BOM and CR characters before a newline are dropped like
-// everywhere else in bookx, and the fence is longer than any run of backticks
-// that starts a line of the content, so the content cannot close it early.
+// everywhere else in bookx, the other control characters are shown as their
+// pictures (see controlPicture), and the fence is longer than any run of
+// backticks that starts a line of the content, so the content cannot close it
+// early.
 func fenceBlock(info string, content []byte) []string {
 	content = bytes.ToValidUTF8(content, []byte(replacementChar))
 	lines := splitLines(content)
 	longest := 2
-	for _, l := range lines {
+	for i, l := range lines {
+		lines[i] = strings.Map(controlPicture, l)
 		if n := backtickRun(strings.TrimLeft(l, " \t"), 0); n > longest {
 			longest = n
 		}
