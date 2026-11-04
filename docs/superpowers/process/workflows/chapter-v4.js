@@ -182,7 +182,7 @@ const argError = () => {
 const implPrompt = (c, t) => L(
   "You own the main checkout of the Ki reference repo " + REPO + " for this job: implement Tarea " + t + ".",
   "First read " + PROC + "/implementer.md (it binds you). Brief: cd " + REPO + " && bash docs/superpowers/process/task-brief.sh " + PLAN + " " + t + " (values verbatim). Base: current main HEAD.",
-  "If the session tag this task names already exists and its commit subject starts with that tag, the code is done: only finish the report.",
+  "If the session tag this task names already exists and its commit subject starts with that tag, the code is done: only finish the report. head is the SHA of the session commit.",
   PLANRULE,
   "Tests kill plausible mutants: ci/mutate --pkg <pkg> --since <the previous chapter tag>, then --apply for what its operators do not cover; a card claims what a mutant does only if that mutant ran. A card's why aims at 25 words and bookx verify fails it above 35 from chapter " + FIRST_STRICT + " on: one sentence that names the bug the test prevents. Comments and cards claim exactly what code and tests do. Soft ceiling: about 400 test lines per reader hour of the session, diagnostics exempt; over it, merge rows into tables or say in one line why not. No wall-clock assertions, bounded inputs. Test files that drive unexported identifiers are *_internal_test.go. Card ids: next free in book/tests/ch" + c.NN + ".tests.",
   "Never touch .claude/worktrees/. " + CAP)

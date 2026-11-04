@@ -19,7 +19,7 @@ Workflow({ scriptPath: "docs/superpowers/process/workflows/chapter-v4.js", args:
   sessions: ["50", "51", "52"],     // session tasks only, one tag chNN-sK each, in order
   diagnostics: true,                // does the chapter add diagnostics? it decides the hunt
   tagFallback: "ch11: <topic>",     // chapter tag message if the plan gives none
-  newKind: false, next: null,       // next: { n, sessions, diagnostics }, its code runs after this freeze
+  newKind: false, next: null,       // next: { n, sessions, diagnostics }, its code runs after this freeze; ch11 runs alone
 }})
 Workflow({ scriptPath: "docs/superpowers/process/workflows/part-gate.js", args: {
   part: "II", baseTag: "m1", plan: "…", chapters: [{ n: 11, file: "book/ch11-x.md", prev: "ch10" }, …],
