@@ -14,9 +14,9 @@ Standing instructions for every subagent that writes a chapter of the book in `~
 
 ## 2. Who does what (the worktree flow)
 
-The controller does steps 0, a and d–j of the template; you do b and c.
+The controller does steps 0, a and d–j of the template; you do b and c. `workflows/chapter-v4.js` runs them (`pipeline.md`), and where the Spanish template says otherwise on the base, the corrections or the merge, this section and the script's prompts win.
 
-- **b. Worktree.** From the main checkout, `~/kilang-ref`: `git worktree add .claude/worktrees/prose-chNN -b prose/chNN main`. Work only there, and touch nothing outside `book/` (the chapter file and, if needed, the wording of its cards; see section 6).
+- **b. Worktree.** From the main checkout, `~/kilang-ref`: `git worktree add .claude/worktrees/prose-chNN -b prose/chNN chNN-sK`, with `chNN-sK` the chapter's last session tag, frozen after its code gate. Not from `main`: another chapter's sessions may already be on it. Work only there, and touch nothing outside `book/` (the chapter file and, if needed, the wording of its cards; see section 6).
 - **c. Write and verify.** Inside the worktree:
   1. write `book/chNN-<slug>.md` (the file name the brief gives);
   2. `go build -o build/bin/bookx ./cmd/bookx && build/bin/bookx verify` must print `bookx verify: OK`. Your chapter counts as *pending*: rules 1–5 run on the working tree, rule 6 on the tags the prose cites;
@@ -24,8 +24,8 @@ The controller does steps 0, a and d–j of the template; you do b and c.
   4. `build/bin/bookx lint book/chNN-*.md` counts the flow words, the folds and the open tables against their limits (section 5), and exits with 0. From chapter 11 on an `error` line fails it. A `warning` comes from a list of words (gender, plan jargon, test names, card ids outside session steps, a `why` above 25 words): read each one, change the sentence if the warning is right, and say in your report why not if it is a coincidence. Then `build/bin/bookx doctest book/chNN-*.md` runs each command of your `console` blocks in a clean copy of the tag and compares the output (section 5), and exits with 0: from chapter 11 on a difference fails it;
   5. `git add book && git commit -m "book: chapter NN prose"`, with `NN` in two digits (`book: chapter 01 prose`): `ci/retag-all.sh` finds the chapter's commit by that exact subject;
   6. `rm -rf build` inside the worktree (your `bookx` binary, the rendered web and your scratch modules), so the controller can remove the worktree cleanly.
-- **d. Review.** A reviewer reads your chapter with `docs/superpowers/process/reviewer.md`. Corrections **amend the prose commit**: fix, `git add book && git commit --amend --no-edit`, re-run step c.2–c.4 and c.6, and append a fix report (old and new SHA of the prose commit, what changed, the `bookx verify` output) to your report file.
-- Steps e–j (merge with `--ff-only`, the `chNN` tag, `ci/check-tags.sh chNN`, Álvaro's push, the GitHub CI, publication, the ledger) are the controller's. Never merge, tag or remove the worktree yourself.
+- **d. Review.** Blind readers read your chapter on frozen text. Corrections are **fixups in the worktree**, never an amend: fix, `git add` the chapter file and any card wording, `git commit -m "fixup! book: chapter NN prose"`, re-run step c.2–c.4 and c.6, and write the report the prompt names (the new branch SHA, what changed, the `bookx verify` output). The text stays comparable with what the readers saw, and the integrate squashes the fixups.
+- Steps e–j (the integrate, which cherry-picks the squashed commit below the next chapter's sessions, the `chNN` tag, `ci/check-tags.sh chNN`, Álvaro's push, the GitHub CI, publication, the ledger) are the controller's. Never merge, tag or remove the worktree yourself.
 
 ## 3. TDD, strong tests and the shape of the book's tests
 
@@ -89,7 +89,7 @@ The sessions already wrote `book/tests/chNN.tests`. `{{cards}}` renders that fil
 
 - **Never push** and never run `gh repo create`; Álvaro pushes.
 - **Never create, move or delete tags.** The prose task has no session tag of its own: `chNN` is the controller's (step e).
-- **Never use `git stash`,** never `git clean -x`, and never rewrite commits other than your own prose commit (which you amend in step d).
+- **Never use `git stash`,** never `git clean -x`, and never rewrite a commit: corrections are fixups (step d).
 - **Never read or modify `~/ki`,** and never modify `~/kilang`.
 - **To check what a mutant does, run it:** `ci/mutate --apply <file> --old '…' --new '…' --pkg <pkg>` (exit 0 only if a test kills it, and it names which one). It works on a copy of your worktree, under the memory cap.
 - **Cap the memory of every mutant, fuzz or stress run** you do to check a claim: `systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 go test …`, one at a time. An unbounded-allocation mutant otherwise fills the 30 GB WSL VM in seconds and kills the machine (it happened three times on 2026-10-27).
