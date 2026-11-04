@@ -111,6 +111,17 @@ Un bloque de más de 30 líneas dentro de una solución, una respuesta o un `:::
 - Si el texto citado tiene una línea con tres o más comillas invertidas, la valla usa una más que la racha más larga, para que el texto no la cierre.
 - Los bytes que no son UTF-8 válido se muestran como U+FFFD.
 
+Una valla `console` escrita a mano puede llevar un atributo más, `doctest`, que la página no muestra y que dice a `bookx doctest` qué no puede comparar tal cual:
+
+````text
+```console doctest="skip: necesita un terminal"
+```console doctest="varies: tiempos de un benchmark"
+```console doctest="red"
+```
+````
+
+`skip` no ejecuta nada, `varies` compara la forma (cualquier número, cualquier racha de espacios) y `red` ejecuta el bloque en la etiqueta anterior más los `*_test.go` de esta sesión. `skip` y `varies` llevan siempre su motivo.
+
 ## Cómo se escriben los tests del libro
 
 `bookx` lee los nombres de los tests del código y de `go test -json`, así que su forma es un contrato:
@@ -136,6 +147,6 @@ Un bloque de más de 30 líneas dentro de una solución, una respuesta o un `:::
 
 El código de un capítulo se lee en la etiqueta `chNN` si existe y, si no, en su última sesión. Un capítulo con prosa y `chNN.list` pero sin etiqueta `chNN` está *pendiente*: se comprueba con la prosa y las tarjetas del árbol de trabajo.
 
-Otros comandos: `bookx render <dir>` escribe el Markdown con las directivas resueltas (`<dir>/chNN.md`), `bookx web <dir> [--repo DIR] [--all]` escribe la página del libro (`index.html`, `book/outline.json`, `book/manifest.json` y `book/chNN.md` de cada capítulo publicado, o de todos con `--all`; solo añade y reemplaza ficheros, así que conviene darle un directorio propio), `bookx regions <etiqueta>` lista las regiones de una etiqueta, `bookx testlist <fichero>` filtra la salida de `go test -json` y `bookx words <fichero>…` imprime, una línea `<palabras> <fichero>` por fichero, las palabras de flujo de cada capítulo. `verify`, `render`, `regions` y `web` aceptan `--repo DIR` (por defecto, el directorio actual).
+Otros comandos: `bookx render <dir>` escribe el Markdown con las directivas resueltas (`<dir>/chNN.md`), `bookx web <dir> [--repo DIR] [--all]` escribe la página del libro (`index.html`, `book/outline.json`, `book/manifest.json` y `book/chNN.md` de cada capítulo publicado, o de todos con `--all`; solo añade y reemplaza ficheros, así que conviene darle un directorio propio), `bookx regions <etiqueta>` lista las regiones de una etiqueta, `bookx testlist <fichero>` filtra la salida de `go test -json` `bookx words <fichero>…` imprime, una línea `<palabras> <fichero>` por fichero, las palabras de flujo de cada capítulo, `bookx lint <fichero>…` comprueba los límites de la prosa y sus listas de palabras, `bookx doctest <fichero>…` ejecuta los bloques `console` (véase abajo), `ci/mutate` rompe un paquete a propósito, un cambio cada vez, y `bookx cascade <programa.ki>…` rompe programas correctos para buscar cascadas de diagnósticos. Sus comentarios y `docs/superpowers/process/` dicen cómo se usan. `verify`, `render`, `regions` y `web` aceptan `--repo DIR` (por defecto, el directorio actual).
 
 Las **palabras de flujo** son las del texto corrido: no cuentan el bloque de metadatos, las vallas de código, las tablas, las directivas, las líneas `:::tipo` y `:::` de los contenedores, ni el cuerpo de `:::solution`, `:::answer` y `:::more`. Cuenta como palabra cada trozo entre espacios con alguna letra o cifra, así que un guion, una flecha o el `1.` de una lista numerada no suman. El presupuesto de un capítulo es de 2 500 palabras de flujo, y las tablas abiertas, que este recuento no ve, tienen su propio tope (`docs/superpowers/process/prose.md`).

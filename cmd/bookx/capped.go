@@ -28,12 +28,15 @@ import (
 var capCommand = systemdCap
 
 // systemdCap is capCommand outside the tests. The cap is the one of section 11
-// of docs/superpowers/process/implementer.md.
+// of docs/superpowers/process/implementer.md, plus OOMPolicy=continue: by default
+// systemd stops the whole unit at the first kill, so `go test` dies with no output
+// and an exit code that says nothing (15, measured). With continue the kernel kills
+// only the process that passed the cap, and `go test` reports `signal: killed`.
 func systemdCap(unit string, argv []string) ([]string, error) {
 	if _, err := exec.LookPath("systemd-run"); err != nil {
 		return nil, fmt.Errorf("the memory cap needs systemd-run: %w", err)
 	}
-	return append([]string{"systemd-run", "--user", "--scope", "-q", "--unit=" + unit, "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0"}, argv...), nil
+	return append([]string{"systemd-run", "--user", "--scope", "-q", "--unit=" + unit, "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"}, argv...), nil
 }
 
 // maxCapturedOutput is how much output of a run is kept. The output arrives at

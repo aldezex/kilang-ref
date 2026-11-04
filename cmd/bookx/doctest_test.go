@@ -451,7 +451,7 @@ func TestCapCommand(t *testing.T) {
 		if err != nil {
 			t.Skipf("no systemd-run here: %v", err)
 		}
-		want := []string{"systemd-run", "--user", "--scope", "-q", "--unit=ki-test-1", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "go", "test"}
+		want := []string{"systemd-run", "--user", "--scope", "-q", "--unit=ki-test-1", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue", "go", "test"}
 		if !slices.Equal(got, want) {
 			t.Errorf("got %q, want %q", got, want)
 		}
