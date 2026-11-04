@@ -37,6 +37,26 @@ var (
 	cardFieldRe = regexp.MustCompile(`^([a-z]+):(.*)$`)
 )
 
+// firstStrictChapter is the first chapter that the machine checks hold to the
+// rules with a failure. The chapters before it were written before the rules:
+// they are measured and reported, and they never fail.
+const firstStrictChapter = 11
+
+// strictChapter reports whether the chapter with the two-digit number nn is held
+// to the rules (see firstStrictChapter). A name that is not a number is not.
+func strictChapter(nn string) bool {
+	n, err := strconv.Atoi(nn)
+	return err == nil && n >= firstStrictChapter
+}
+
+// The words of a card's `why`, counted as `bookx words` counts them: a card aims
+// at whyTargetWords (only `bookx lint` says so), and `bookx verify` fails above
+// whyMaxWords.
+const (
+	whyTargetWords = 25
+	whyMaxWords    = 35
+)
+
 // cardIDHelp finishes the message about a bad card id, in the parser of the
 // cards and in the one of the directives.
 const cardIDHelp = "write it as TNN.MM, as in `T05.07`"

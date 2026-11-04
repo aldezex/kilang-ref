@@ -322,7 +322,7 @@ func (b *book) scanTag(tag string) *tagScan {
 	return s
 }
 
-// verify applies the seven rules of `bookx verify` to the book. It returns the
+// verify applies the eight rules of `bookx verify` to the book. It returns the
 // problems sorted by file and line; an empty result means the book is sound.
 // The error is for what stops the check altogether, such as a repository that
 // cannot be read.
@@ -333,6 +333,7 @@ func verify(tree fs.FS, repo repoReader) ([]ScanError, error) {
 	}
 
 	for _, c := range b.sortedChapters() {
+		problems = append(problems, c.checkWhyCap()...)
 		if !c.Active() {
 			continue
 		}
@@ -347,6 +348,22 @@ func verify(tree fs.FS, repo repoReader) ([]ScanError, error) {
 	problems = append(problems, b.checkCitedTags()...)
 	sortScanErrors(problems)
 	return problems, nil
+}
+
+// checkWhyCap applies rule 8: from chapter 11 on, the `why` of a card has at
+// most whyMaxWords words. It looks only at the cards, so it also holds while a
+// chapter has its sessions and no prose yet, which is when the cards are written.
+func (c *chapter) checkWhyCap() []ScanError {
+	if !strictChapter(c.NN) {
+		return nil
+	}
+	var out []ScanError
+	for _, card := range c.Cards {
+		if n := wordsIn(card.Why); n > whyMaxWords {
+			out = append(out, ScanError{Path: c.Tests, Line: card.Line, Message: fmt.Sprintf("card %s: its `why` has %d words; the limit is %d and the target %d", card.ID, n, whyMaxWords, whyTargetWords)})
+		}
+	}
+	return out
 }
 
 // checkProse applies rules 3 and 7 to the prose of a chapter: it has the

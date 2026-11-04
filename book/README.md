@@ -123,7 +123,7 @@ Un bloque de más de 30 líneas dentro de una solución, una respuesta o un `:::
 
 ## Qué comprueba `bookx verify`
 
-`go build -o build/bin/bookx ./cmd/bookx && build/bin/bookx verify` imprime `bookx verify: OK` o una lista de problemas `fichero:línea: mensaje`, ordenada, y sale con 1. Comprueba siete reglas:
+`go build -o build/bin/bookx ./cmd/bookx && build/bin/bookx verify` imprime `bookx verify: OK` o una lista de problemas `fichero:línea: mensaje`, ordenada, y sale con 1. Comprueba ocho reglas:
 
 1. Cada `file`, `listing` y `diff` se resuelve en su etiqueta, y un `listing` encuentra su región una sola vez. Un `diff` cuyo fichero es igual en las dos etiquetas también es un problema, porque mostraría un bloque vacío.
 2. En cada etiqueta citada, las marcas `@book` y `@end` están equilibradas y los ids son únicos.
@@ -132,6 +132,7 @@ Un bloque de más de 30 líneas dentro de una solución, una respuesta o un `:::
 5. Cada test nuevo del capítulo (el que está en `chNN.list` y no en el `ch(NN-1).list`) tiene tarjeta, y cada tarjeta que no es un `bench` tiene su test en `chNN.list`.
 6. Cada etiqueta citada está en `verified-tags.txt` con el SHA de su commit, y cada etiqueta `chNN` lleva la prosa y las tarjetas de su capítulo.
 7. Los contenedores no se anidan, todos se cierran y `:::more` lleva título.
+8. Desde el capítulo 11, el `why` de una tarjeta no pasa de 35 palabras, contadas como en `bookx words`. El objetivo es 25. Los capítulos anteriores están exentos.
 
 El código de un capítulo se lee en la etiqueta `chNN` si existe y, si no, en su última sesión. Un capítulo con prosa y `chNN.list` pero sin etiqueta `chNN` está *pendiente*: se comprueba con la prosa y las tarjetas del árbol de trabajo.
 
