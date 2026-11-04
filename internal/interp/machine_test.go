@@ -677,8 +677,10 @@ fn idInt(x: Int) -> Int { x }
 			if errOut.String() != row.msg || probe.text.String() != "0\n0\n" {
 				t.Errorf("%s: stderr %q and stdout %q, want %q and two lines of 0", row.name, errOut.String(), probe.text.String(), row.msg)
 			}
-			if len(probe.live) == 2 && probe.live[1]-probe.live[0] >= maxHeld {
-				t.Errorf("%s: the machine still holds %d bytes after the next Call, want under %d", row.name, probe.live[1]-probe.live[0], maxHeld)
+			if len(probe.live) != 2 {
+				t.Errorf("%s: the probe saw %d writes, want 2", row.name, len(probe.live))
+			} else if held := probe.live[1] - probe.live[0]; held >= maxHeld {
+				t.Errorf("%s: the machine still holds %d bytes after the next Call, want under %d", row.name, held, maxHeld)
 			}
 		}
 	})
@@ -1050,8 +1052,10 @@ fn b(n: Int, acc: Int) -> Int {
 			if h != (interp.Halt{Code: 0}) || probe.text.String() != "0\n0\n" || errOut.Len() != 0 {
 				t.Errorf("%s: RunMain() = %+v, stdout %q, stderr %q, want Halt{0}, two lines of 0 and nothing", row.name, h, probe.text.String(), errOut.String())
 			}
-			if len(probe.live) == 2 && probe.live[1]-probe.live[0] >= maxHeld {
-				t.Errorf("%s: the machine still holds %d bytes after the return, want under %d", row.name, probe.live[1]-probe.live[0], maxHeld)
+			if len(probe.live) != 2 {
+				t.Errorf("%s: the probe saw %d writes, want 2", row.name, len(probe.live))
+			} else if held := probe.live[1] - probe.live[0]; held >= maxHeld {
+				t.Errorf("%s: the machine still holds %d bytes after the return, want under %d", row.name, held, maxHeld)
 			}
 		}
 	})
