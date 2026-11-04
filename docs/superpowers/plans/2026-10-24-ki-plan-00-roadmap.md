@@ -28,6 +28,12 @@ El diseño cubre 71 capítulos (el 54 en dos mitades; los 62–64, el servidor d
 
 Las horas son las de las cabeceras de parte del índice del spec (apartado 12.5) y suman 856: las de los capítulos más las de las secciones «Proyectos en Ki», que no son filas del índice. Se revisan al cerrar cada plan.
 
+**Lo que la revisión final de la Parte I deja al Plan 02** (se copia en la tarea del capítulo que se cita):
+
+- **Capítulo 16, que lee los strings.** `trackBracket` (`internal/syntax/recover.go`) no tiene caso para los tokens de un string: tras un error dentro de una interpolación que deja un corchete abierto (`"${ g(a }"`), el salto de sentencia sigue hasta el `}` del bloque y calla los errores de por medio, mientras que la regla de línea cierra en el `StringTail`. La tarea lo resuelve y fija con tests dos casos: un salto que empieza dentro de una interpolación, donde el `StringTail` no tiene `StringHead` propio, y un string que nunca termina.
+- **Capítulos 14 y 18, donde una etiqueta puede caer en otro fichero.** `RenderHuman` hace panic con una etiqueta o un fix-it en otro fichero (desde el cierre de la Parte I, un ICE del pase `render`, con 70). Esos capítulos le enseñan a dibujarla, porque «definido aquí» señalará a otro módulo; la degradación que la quitara en silencio escondería el dato que el diagnóstico quiere dar.
+- **Capítulo 11, primera sesión.** El árbol del lector llega a `ch10-s4`, y los commits de código de `main` posteriores a `m1` no están en él: los recibe con el `{{diff}}` de esa sesión, que tiene que decirlo (el límite de los entornos en `interp`, el pase `render` y la nota del ICE en `driver`, `base.Cause` y `out.TryFlush`).
+
 ## Reglas que valen para todos los planes
 
 - **Publicación incremental.** Cada capítulo se publica en el libro web (artifact `https://claude.ai/artifact/F9s6xctJx1vRvagDt2aQUL`, privado, con `db` y `user`; siempre la misma URL) cuando su prosa está revisada y la CI de GitHub está en verde sobre su etiqueta `chNN`. El libro se republica con `bookx web` desde el controlador, con la herramienta Artifact, tras cada capítulo. Los capítulos pendientes aparecen en el índice marcados «En preparación».

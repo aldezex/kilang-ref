@@ -721,7 +721,7 @@ error[E0401]: mismatched types
    = help: write `2.0`; Ki never converts Int to Float implicitly
 ```
 
-**Recuperación:** el lexer salta los bytes inválidos; el parser resincroniza e inserta nodos Error, sin emitir errores nuevos a menos de 3 tokens del anterior; los nombres desconocidos se ligan a una definición de error, y `{error}` unifica en silencio; cada item de nivel superior se comprueba por separado; el front end deja de informar tras 100 errores, y las etapas posteriores solo corren sobre entrada sin errores.
+**Recuperación:** `CheckSource` rechaza antes del lexer un fichero con UTF-8 inválido o un carácter de control crudo (E0101, E0102), con un solo error por fichero; el lexer solo salta un carácter que es UTF-8 válido pero no es de Ki (E0104), y sigue; el parser resincroniza e inserta nodos Error, sin emitir errores nuevos a menos de 3 tokens del anterior; los nombres desconocidos se ligan a una definición de error, y `{error}` unifica en silencio; cada item de nivel superior se comprueba por separado; el front end deja de informar tras 100 errores, y las etapas posteriores solo corren sobre entrada sin errores.
 
 ---
 
@@ -920,7 +920,7 @@ El heap es acíclico por construcción, salvo a través de los canales. Esta es 
 
 ### 8.10 Desbordamiento de pila y códigos de salida
 
-Las pilas también cambian de dueño. El oráculo y la VM tienen la pila como datos (slices de marcos) y el desbordamiento es suyo: `KI_STACK_MB` fija el límite y el panic sale con 103, como ayer. El código nativo corre sobre pilas de goroutines que Go hace crecer por copia hasta 1 GB (`maxstacksize`), y pasarse es un **error fatal, no un panic**: `fatal error: stack overflow`, código de salida 2, sin ningún gancho para interceptarlo [R1 §2.4, R2 §1.1]. Verificado con `debug.SetMaxStack(64<<20)` y 2×10⁶ marcos [R1 ok overflow, R2 P11].
+Las pilas también cambian de dueño. El oráculo y la VM tienen la pila como datos (slices de marcos) y el desbordamiento es suyo: `KI_STACK_MB` fija el límite y el panic sale con 103, como ayer. En el oráculo, esos MiB cuentan dos veces, en tamaños nominales: para los marcos, a 64 bytes, y para las casillas de los entornos, a 16, porque una función con muchas variables llenaría la memoria mucho antes que sus marcos. El código nativo corre sobre pilas de goroutines que Go hace crecer por copia hasta 1 GB (`maxstacksize`), y pasarse es un **error fatal, no un panic**: `fatal error: stack overflow`, código de salida 2, sin ningún gancho para interceptarlo [R1 §2.4, R2 §1.1]. Verificado con `debug.SetMaxStack(64<<20)` y 2×10⁶ marcos [R1 ok overflow, R2 P11].
 
 **Decisión** **[decisión tuya, 2026-10-24: apartado 4; el detalle de la mecánica es del diseño]**:
 - `KI_STACK_MB` se traduce en nativo a `debug.SetMaxStack`, que es un límite **de todo el proceso** bajo el portador A, porque todas las fibras comparten las pilas de las goroutines worker.
@@ -1750,6 +1750,11 @@ Lo que corrige cada comprobación, en el orden del documento. **T** es la compro
 - **Apartado 7.2:** el interner indexa con un `map[uint64]Symbol` sobre `hash/maphash` con cadenas de colisión, en lugar de un `map[string]Symbol`.
 - **Apartado 7.3:** el color del renderizador humano se aplaza al capítulo 19, con `ki explain`.
 - **Apartados 11.1 y 11.2:** las directivas citan etiquetas de sesión (`chNN-sK`), `{{solution}}` es el modo `solution` de las regiones y la página del libro vive en `cmd/bookx/web/`.
+
+**Cierre de la Parte I (2026-11-04, revisión final de la rama).**
+
+- **Apartado 7.3:** la recuperación dice lo que el compilador y la fila del capítulo 3 hacen: un fichero con UTF-8 inválido o un carácter de control se rechaza antes del lexer, con un solo error; el lexer solo salta caracteres válidos que no son de Ki.
+- **Apartado 8.10:** `KI_STACK_MB` limita en el oráculo los marcos y también las casillas de los entornos.
 
 **Enmiendas del 2026-10-28** (cinco decisiones tomadas con Álvaro durante el capítulo 7; `.superpowers/sdd/2026-10-28-decisions-pending-amendment.md`; G58–G62). Los números de capítulo que cita el resto de este apéndice son los del 2026-10-24: el antiguo 63 es hoy el 66.
 
