@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Break a package on purpose, one small edit at a time, and say which test
+# noticed each edit: bookx mutate, whose comment in cmd/bookx/mutate.go says how.
+# It works on a copy under build/mutate, so your tree is never touched, and each
+# mutant runs alone under the memory cap.
+#
+# Usage:
+#   ci/mutate --pkg ./internal/sema [--since REV] [--limit N] [--timeout SECS]
+#       The mutants of the operators in a package; with --since, only on the
+#       lines changed since REV (the previous chapter's tag, while you work on a
+#       session). Each verdict is one line: killed, oom, timeout, survived or
+#       nocompile, with its id and what killed it.
+#   ci/mutate --pkg ./internal/sema --only M0012,M0033
+#       Run those again, after you add the test that should kill them.
+#   ci/mutate --pkg ./internal/sema --list
+#       List the mutants and run nothing.
+#   ci/mutate --apply mutant.patch [--pkg ./internal/sema]
+#   ci/mutate --apply internal/sema/check.go --old 'a < b' --new 'a <= b' [--pkg ...]
+#       One mutant written by hand, on all the packages or on --pkg.
+#
+# Exit codes: 0 the sweep ended, whatever survived, or a test killed the hand
+# mutant; 1 the hand mutant survived or did not compile, the tests fail with no
+# mutant, or it could not do its work; 2 usage error.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+export GOTOOLCHAIN=local GOFLAGS= GOENV=off GOWORK=off
+go build -o build/bin/bookx ./cmd/bookx
+exec build/bin/bookx mutate "$@"

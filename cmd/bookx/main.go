@@ -7,7 +7,8 @@
 // and return values and errors, and never touch git or the disk. Around them,
 // Git reads the tags of a repository, verify and render check and resolve the
 // book through the small repoReader interface, and run (this file) is the
-// command line: verify, render, web, regions, testlist, words, lint and doctest.
+// command line: verify, render, web, regions, testlist, words, lint, doctest and
+// mutate.
 package main
 
 import (
@@ -48,6 +49,7 @@ var commandUsage = map[string]string{
 	"words":    "usage: bookx words <file>...",
 	"lint":     "usage: bookx lint <file>...",
 	"doctest":  "usage: bookx doctest [--repo DIR] <file>...",
+	"mutate":   "usage: bookx mutate --pkg PKG [--repo DIR] [--since REV] [--limit N] [--timeout SECS] [--only IDS] [--list]\n       bookx mutate --apply PATCH|FILE [--old TEXT --new TEXT] [--pkg PKG] [--repo DIR] [--timeout SECS]",
 }
 
 // run is main without the process around it: it runs the command in args,
@@ -72,11 +74,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cmd = runLint
 		case "doctest":
 			cmd = runDoctest
+		case "mutate":
+			cmd = runMutate
 		}
 	}
 	if cmd == nil {
 		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
-		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint, doctest")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint, doctest, mutate")
 		return exitUsage
 	}
 	return cmd(args[1:], stdout, stderr)
