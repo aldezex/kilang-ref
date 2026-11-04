@@ -388,7 +388,11 @@ func (d *doctestChapter) runBlock(b doctestBlock) error {
 	}
 	dir, needs, err := d.copyOf(tag, b.Mode == doctestRed)
 	if err != nil {
-		d.report(b.Line, "red: %v", err)
+		what := "cannot copy the tag"
+		if b.Mode == doctestRed {
+			what = "red"
+		}
+		d.report(b.Line, "%s: %v", what, err)
 		d.failed = true
 		return nil
 	}

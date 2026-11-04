@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -461,6 +462,67 @@ func TestCapCommand(t *testing.T) {
 		_, err := systemdCap("ki-test-1", []string{"go", "test"})
 		if err == nil || !strings.Contains(err.Error(), "the memory cap needs systemd-run") {
 			t.Errorf("error %v", err)
+		}
+	})
+}
+
+func TestCappedRun(t *testing.T) {
+	run := func(t *testing.T, script string) ([]byte, int) {
+		t.Helper()
+		noCap(t)
+		out, exit, err := cappedRun{Unit: "u", Dir: t.TempDir(), Env: cleanEnv(), Seconds: "10", Argv: []string{"sh", "-c", script}}.run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, exit
+	}
+	t.Run("merges_the_streams_and_gives_the_exit_code", func(t *testing.T) {
+		out, exit := run(t, "echo a; echo b >&2; echo c; exit 3")
+		if string(out) != "a\nb\nc\n" || exit != 3 {
+			t.Errorf("output %q, exit %d", out, exit)
+		}
+	})
+	t.Run("a_kill_is_reported_as_a_shell_does", func(t *testing.T) {
+		if _, exit := run(t, "kill -9 $$"); exit != exitKilled {
+			t.Errorf("exit %d, want %d", exit, exitKilled)
+		}
+	})
+	t.Run("output_without_end_stays_at_the_limit", func(t *testing.T) {
+		out, exit := run(t, fmt.Sprintf("head -c %d /dev/zero", maxCapturedOutput+1000))
+		if len(out) != maxCapturedOutput || exit != 0 {
+			t.Errorf("%d bytes, exit %d; want %d bytes, exit 0", len(out), exit, maxCapturedOutput)
+		}
+	})
+	t.Run("the_cap_comes_first_and_is_given_the_unit", func(t *testing.T) {
+		var unit string
+		var argv []string
+		old := capCommand
+		capCommand = func(u string, a []string) ([]string, error) {
+			unit, argv = u, a
+			return a, nil
+		}
+		t.Cleanup(func() { capCommand = old })
+		if _, _, err := (cappedRun{Unit: "ki-x-1", Dir: t.TempDir(), Seconds: "7", Argv: []string{"true"}}).run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"timeout", "-k", "1", "7", "true"}; unit != "ki-x-1" || !slices.Equal(argv, want) {
+			t.Errorf("unit %q, argv %q; want %q", unit, argv, want)
+		}
+	})
+	t.Run("clean_env_takes_out_what_changes_ki", func(t *testing.T) {
+		t.Setenv("KI_STACK_MB", "1")
+		t.Setenv("KI_DEBUG_PANIC_IN", "lint")
+		t.Setenv("GOFLAGS", "-race")
+		env := cleanEnv()
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "KI_") || kv == "GOFLAGS=-race" {
+				t.Errorf("%s stays", kv)
+			}
+		}
+		for _, want := range []string{"GOTOOLCHAIN=local", "GOFLAGS=", "GOENV=off", "GOWORK=off", "LC_ALL=C.UTF-8"} {
+			if !slices.Contains(env, want) {
+				t.Errorf("%s is missing", want)
+			}
 		}
 	})
 }
