@@ -14,12 +14,14 @@ import (
 // Every pass of the compiler that a command runs is under guard (see
 // Session.runPass). If one panics, the command stops at once, Main writes the
 // report of the internal compiler error to stderr (the message, a newline and
-// the stack) and returns ExitICE.
+// the stack, and a line if the program had diagnostics, which the report does
+// not show) and returns ExitICE. Writing the diagnostics is a pass too, called
+// render (see Session.report), because what can go wrong there is a bug of the
+// pass that built them.
 //
-// What a command prints is not a pass: the printers (the dumps of `ki emit`)
-// and ReportAll run outside runPass. A panic in one of them is not an ICE:
-// catchICE raises it again, and ki ends with Go's own report of the panic and
-// exit code 2, which is also the code of a wrong command line.
+// The printers (the dumps of `ki emit`) are not passes. A panic in one of them is
+// not an ICE: catchICE raises it again, and ki ends with Go's own report of the
+// panic and exit code 2, which is also the code of a wrong command line.
 //
 // The environment variable KI_DEBUG_PANIC_IN names a pass that panics on
 // purpose when it starts, to try that boundary: "ki check" with

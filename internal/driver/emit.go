@@ -89,7 +89,7 @@ func emitCore(s *Session, c *command, args []string) int {
 	}
 	s.Analyze(f)
 	if s.Sink.HasErrors() {
-		s.ReportAll()
+		s.report()
 		return 1
 	}
 	p := s.Lower(f)
@@ -104,7 +104,7 @@ func emitCore(s *Session, c *command, args []string) int {
 // printOut), and the diagnostics are still shown.
 func finishEmit(s *Session, c *command, out string) int {
 	code := printOut(s, c, out)
-	s.ReportAll()
+	s.report()
 	if code == 0 && s.Sink.HasErrors() {
 		return 1
 	}

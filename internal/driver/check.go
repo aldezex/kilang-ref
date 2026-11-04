@@ -39,7 +39,7 @@ func runCheck(s *Session, c *command, args []string) int {
 		return 1
 	}
 	s.Analyze(f)
-	s.ReportAll()
+	s.report()
 	if s.Sink.HasErrors() {
 		return 1
 	}

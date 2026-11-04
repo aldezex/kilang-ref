@@ -61,7 +61,7 @@ func runRun(s *Session, c *command, args []string) int {
 			WithHelp("add `fn main() { … }`"))
 	}
 	if s.Sink.HasErrors() {
-		s.ReportAll()
+		s.report()
 		return 1
 	}
 	p := s.Lower(f)

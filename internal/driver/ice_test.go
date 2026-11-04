@@ -12,6 +12,7 @@ import (
 
 	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/core"
+	"github.com/aldezex/kilang/internal/diag"
 )
 
 // TestMain clears KI_DEBUG_PANIC_IN before any test runs. Main reads it from the
@@ -182,11 +183,33 @@ func TestICE(t *testing.T) {
 			checkICE(t, "ki "+strings.Join(row.args[:len(row.args)-1], " ")+" with the hook in "+row.pass, code, stdout, stderr, row.pass)
 		}
 
+		// Writing the diagnostics is a pass too, called render, in each command
+		// that writes them. The dumps of ki emit come out before it, so they are
+		// on stdout as they are without the hook; and ki run writes diagnostics
+		// only for a file that has errors.
+		t.Setenv("KI_DEBUG_PANIC_IN", "render")
+		code, stdout, stderr = runCLI(t, "check", path)
+		checkICE(t, "ki check with the hook in render", code, stdout, stderr, "render")
+		code, stdout, stderr = runCLI(t, "run", writeKi(t, "fn main() { y }\n"))
+		checkICE(t, "ki run of a file with an error, with the hook in render", code, stdout, stderr, "render")
+		code, stdout, stderr = runCLI(t, "emit", "core", writeKi(t, "fn main() { y }\n"))
+		checkICE(t, "ki emit core of a file with an error, with the hook in render", code, stdout, stderr, "render")
+		for _, target := range []string{"tokens", "ast", "core"} {
+			t.Setenv("KI_DEBUG_PANIC_IN", "")
+			_, wantOut, _ := runCLI(t, "emit", target, path)
+			t.Setenv("KI_DEBUG_PANIC_IN", "render")
+			code, stdout, stderr := runCLI(t, "emit", target, path)
+			checkICE(t, "ki emit "+target+" with the hook in render", code, "", stderr, "render")
+			if stdout != wantOut || stdout == "" {
+				t.Errorf("ki emit %s with the hook in render: stdout %q, want the dump %q", target, stdout, wantOut)
+			}
+		}
+
 		// What the passes before the one that panicked had found is not
-		// written: the report is all there is on stderr. The file has a syntax
-		// error, which the parser reports to the sink before the resolver
-		// panics. Without the hook that error is written, so the file does
-		// have something to drop.
+		// written: the report is all there is on stderr, and its last line says
+		// how many diagnostics it leaves out. The file has a syntax error, which
+		// the parser reports to the sink before the resolver panics. Without the
+		// hook that error is written, so the file does have something to drop.
 		bad := writeKi(t, "fn main( {}\n")
 		t.Setenv("KI_DEBUG_PANIC_IN", "")
 		if code, stdout, stderr := runCLI(t, "check", bad); code != 1 || stdout != "" || !strings.HasPrefix(stderr, "error[E0201]: ") {
@@ -197,6 +220,27 @@ func TestICE(t *testing.T) {
 		checkICE(t, "ki check of a file with a syntax error, with the hook in resolve", code, stdout, stderr, "resolve")
 		if strings.Contains(stderr, "error[") {
 			t.Errorf("ki check of a file with a syntax error, with the hook in resolve: stderr %q has a diagnostic, want only the report of the ICE", stderr)
+		}
+		for _, row := range []struct{ name, source, want string }{
+			{"one", "fn main( {}\n", "note: 1 diagnostic was reported before this error and is not shown\n"},
+			{"two", "fn f(x {}\nfn g(y {}\n", "note: 2 diagnostics were reported before this error and are not shown\n"},
+			// The sink keeps the first 100 and only knows that there were more.
+			{"past_the_limit", strings.Repeat("fn f( {}\n", 150), "note: more than 100 diagnostics were reported before this error and are not shown\n"},
+		} {
+			code, stdout, stderr := runCLI(t, "check", writeKi(t, row.source))
+			checkICE(t, "the pending diagnostics, "+row.name, code, stdout, stderr, "resolve")
+			if !strings.HasSuffix(stderr, row.want) {
+				t.Errorf("%s: stderr %q does not end in %q", row.name, stderr, row.want)
+			}
+			if strings.Count(stderr, "reported before this error") != 1 {
+				t.Errorf("%s: stderr %q does not say it once", row.name, stderr)
+			}
+		}
+		// With nothing pending, the report says nothing about it.
+		code, _, stderr = runCLI(t, "check", path)
+		checkICE(t, "ki check of a valid file with the hook in resolve", code, "", stderr, "resolve")
+		if strings.Contains(stderr, "reported before this error") {
+			t.Errorf("ki check of a valid file: stderr %q speaks of diagnostics, and there are none", stderr)
 		}
 	})
 
@@ -254,6 +298,34 @@ func TestICE(t *testing.T) {
 		}
 		if ran {
 			t.Errorf("the hook is set to panic on entry, but the pass ran")
+		}
+
+		// A label in another file makes RenderHuman panic. The commands write
+		// diagnostics as the pass render, so that bug of a pass is an ICE, with
+		// exit code 70 and the message of the renderer, and not Go's own report.
+		old := commands
+		commands = append(slices.Clone(old), command{
+			Name: "badlabel", Usage: "ki badlabel",
+			Run: func(s *Session, _ []string) int {
+				a := s.Sources.Add("a.ki", []byte("x\n"))
+				b := s.Sources.Add("b.ki", []byte("y\n"))
+				s.Sink.Report(diag.NewError(diag.E(101), "an error", diag.Label{Span: base.Span{File: a, Lo: 0, Hi: 1}}).
+					WithSecondary(diag.Label{Span: base.Span{File: b, Lo: 0, Hi: 1}, Message: "here"}))
+				s.report()
+				return 1
+			},
+		})
+		t.Cleanup(func() { commands = old })
+		var out, errOut strings.Builder
+		code := Main([]string{"badlabel"}, strings.NewReader(""), &out, &errOut)
+		if code != 70 || out.Len() != 0 {
+			t.Errorf("a label in another file: exit code %d, stdout %q, want 70 and nothing", code, out.String())
+		}
+		if want := "internal compiler error: render: diag: secondary label in file 1, primary in file 0\ngoroutine "; !strings.HasPrefix(errOut.String(), want) {
+			t.Errorf("a label in another file: stderr %q does not start with %q", errOut.String(), want)
+		}
+		if want := "note: 1 diagnostic was reported before this error and is not shown\n"; !strings.HasSuffix(errOut.String(), want) {
+			t.Errorf("a label in another file: stderr %q does not end in %q", errOut.String(), want)
 		}
 	})
 

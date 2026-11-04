@@ -65,7 +65,8 @@ func (s *Session) runPass(name string, f func()) {
 
 // catchICE is the deferred call of Main. If the command is unwinding because a
 // pass raised an ICE, it writes the report to stderr (the message, a newline
-// and the stack) and sets *code to ExitICE. It does not touch any other
+// and the stack), then the line that says how many diagnostics it leaves out
+// (see pendingNote), and sets *code to ExitICE. It does not touch any other
 // panic: those are not passes, so they are not reports, and it raises them
 // again.
 func (s *Session) catchICE(code *int) {
@@ -79,6 +80,27 @@ func (s *Session) catchICE(code *int) {
 	}
 	// stderr is the last place left to report this; if it fails too there is
 	// nowhere else to say so.
-	_, _ = fmt.Fprintf(s.Stderr, "%s\n%s", ice.Error(), ice.Stack)
+	_, _ = fmt.Fprintf(s.Stderr, "%s\n%s%s", ice.Error(), ice.Stack, s.pendingNote())
 	*code = ExitICE
+}
+
+// pendingNote returns the line that tells the reader of an ICE that the program
+// also had diagnostics, or "" if the sink has none. They are not written: the
+// report is about a bug of ki, and rendering them could panic again, since the
+// renderer is one of the passes that can be the one that failed. But they may be
+// what set the bug off, so the report says that they exist. The sink keeps the
+// first diag.MaxErrors errors and only knows that there were more, hence "more
+// than".
+func (s *Session) pendingNote() string {
+	n := len(s.Sink.All())
+	switch {
+	case s.Sink.Truncated():
+		return fmt.Sprintf("note: more than %d diagnostics were reported before this error and are not shown\n", n)
+	case n == 0:
+		return ""
+	case n == 1:
+		return "note: 1 diagnostic was reported before this error and is not shown\n"
+	default:
+		return fmt.Sprintf("note: %d diagnostics were reported before this error and are not shown\n", n)
+	}
 }

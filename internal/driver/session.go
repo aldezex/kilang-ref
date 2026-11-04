@@ -82,7 +82,8 @@ const truncationNote = "note: too many errors; the first 100 are shown\n"
 //
 // Stderr is the last place left to report a failure, so a failed write is
 // ignored. A Format that is not one of the DiagFormat constants is a bug of
-// the caller, and ReportAll panics on the first diagnostic it has to write.
+// the caller, and ReportAll panics on the first diagnostic it has to write. The
+// commands call it through report.
 func (s *Session) ReportAll() {
 	s.Sink.SortByPosition()
 	var sb strings.Builder
@@ -99,6 +100,14 @@ func (s *Session) ReportAll() {
 		sb.WriteString(truncationNote)
 	}
 	_, _ = io.WriteString(s.Stderr, sb.String())
+}
+
+// report runs ReportAll as the pass "render" (see runPass), which is how every
+// command writes its diagnostics. A diagnostic that the renderer cannot draw (a
+// label in another file, say) is a bug of the pass that built it, so it ends in
+// an ICE: exit code 70 and the buffers of kirt/out flushed, not Go's own report.
+func (s *Session) report() {
+	s.runPass("render", s.ReportAll)
 }
 
 // render writes one diagnostic in the session's format.
