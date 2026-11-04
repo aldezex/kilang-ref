@@ -445,10 +445,9 @@ func (r *mutateRun) applyHand() (bool, error) {
 // the paths outside its directory, and says nothing. A patch that changes nothing
 // is an error, because it would survive and prove nothing.
 func (r *mutateRun) applyPatch(patch string) (int, error) {
-	env := append(cleanEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(r.tree))
 	git := func(args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(r.ctx, "git", args...)
-		cmd.Dir, cmd.Env = r.tree, env
+		cmd.Dir, cmd.Env = r.tree, r.env
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return nil, fmt.Errorf("git %s: %v: %s", args[0], err, out)
@@ -552,7 +551,9 @@ func runMutate(args []string, stdout, stderr io.Writer) int {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return fail(err)
 	}
-	r.env = append(cleanEnv(), "GOCACHE="+cache, "TMPDIR="+tmp)
+	// The ceiling keeps git inside the scratch directory, which is itself inside the
+	// repository: a test that looks for no repository must find none.
+	r.env = append(cleanEnv(), "GOCACHE="+cache, "TMPDIR="+tmp, "GIT_CEILING_DIRECTORIES="+scratch)
 	if err := r.listPackages(); err != nil {
 		return fail(err)
 	}

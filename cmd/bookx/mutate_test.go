@@ -346,6 +346,16 @@ func TestMutateRun(t *testing.T) {
 		}
 	})
 
+	t.Run("a_test_in_the_copy_finds_no_repository", func(t *testing.T) {
+		// Its temporary files are inside the repository, and git must not see it.
+		dir := mutantRepo(t)
+		writeFile(t, dir, "calc/git_test.go", "package calc\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc TestNoRepo(t *testing.T) {\n\tcmd := exec.Command(\"git\", \"rev-parse\", \"--git-dir\")\n\tcmd.Dir = t.TempDir()\n\tif out, err := cmd.CombinedOutput(); err == nil {\n\t\tt.Errorf(\"found %s\", out)\n\t}\n}\n")
+		code, out, errOut := runMutateIn(t, "--repo", dir, "--pkg", "./calc", "--only", "M0003")
+		if code != exitOK || errOut != "" || !strings.Contains(out, "survived  M0003") {
+			t.Errorf("code %d, stdout %q, stderr %q", code, out, errOut)
+		}
+	})
+
 	t.Run("no_cap_no_run", func(t *testing.T) {
 		dir := mutantRepo(t)
 		old := capCommand
