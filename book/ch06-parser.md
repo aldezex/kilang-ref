@@ -20,7 +20,7 @@ fn main() {
   let n = fib(20)
   print(n)
 }
-$ ki emit ast fib.ki
+$ build/bin/ki emit ast fib.ki
 (fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))
 (fn main (params) (ret _) (block (let n _ (call fib 20)) (call print n)))
 ```
