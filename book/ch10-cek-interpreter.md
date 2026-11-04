@@ -120,7 +120,7 @@ fmt.Println(p == &envs[0], slot == &envs[0][0]) // false true
 
 Un panic de Ki es un estado: la máquina escribe su mensaje, guarda `Halt{Code: 101}` y el bucle termina.
 
-Un `panic` de Go es un bug del compilador, y el `recover` de cada pase (capítulo 9) lo convierte en un ICE: sin recuperar saldría con 2, el código del uso incorrecto.
+Un `panic` de Go es un bug del compilador, y el `recover` de cada pase (capítulo 9) lo convierte en un ICE: sin recuperar saldría con 2, el del uso incorrecto.
 
 | Código | Significado |
 |---|---|
@@ -145,7 +145,7 @@ Ki aún no tiene `while` (capítulo 23): su bucle es la llamada de cola, de prof
 
 ### El límite de la pila
 
-La recursión de Ki vive en un slice, en el heap de Go, así que el límite es nuestro: la variable de entorno `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función.
+La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: la variable `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función. **Fe de erratas.** Así, muchas variables llenan la memoria antes del 103: `main` limita también las casillas, a 16 bytes.
 
 Empujar un `retFrame` con la pila en el límite termina en `panic: stack overflow at <posición>`, con 103. Una llamada de cola no empuja, así que pasa.
 
@@ -164,7 +164,7 @@ Un panic vacía stdout antes de escribir su mensaje: así sale detrás de lo imp
 
 ### El test de imports
 
-Un test hace cumplir tres reglas; de `kirt`, aún solo existe `out`:
+Un test hace cumplir tres reglas; de `kirt`, solo existe `out`:
 
 - **`kirt` solo importa la biblioteca estándar y a sí mismo.** `ki build` (capítulo 48) copiará `kirt` junto al programa generado, y esa copia tiene que compilar sola.
 - **De `kirt`, el oráculo solo importa `out`, `splitmix` y `fmtnum`,** hojas que no importan nada más de `kirt`. Si usara el planificador o los canales de `kirt`, no podría encontrar sus fallos.
@@ -172,11 +172,11 @@ Un test hace cumplir tres reglas; de `kirt`, aún solo existe `out`:
 
 `parser.ParseFile` (capítulo 7), con `parser.ImportsOnly`, lee solo los `import`, así que un comentario no cuenta.
 
-Cada regla corre sobre el repositorio y sobre árboles pequeños con el error que debe cazar: una regla que nunca se ha visto encontrar algo no demuestra nada.
+Cada regla corre también sobre árboles pequeños con el error que debe cazar: si nunca encontró nada, no demuestra nada.
 
 ### Goroutines, lo justo
 
-El test del escritor las necesita; la Parte IV las enseña. `go f()`, los canales y `select` vienen del capítulo 8. Para esperar a varias, un `sync.WaitGroup`, en la forma larga de `wg.Go` (capítulo 1): `wg.Add(1)` avisa antes de lanzar, `defer wg.Done()` descuenta y `wg.Wait()` espera.
+El test del escritor las necesita. `go f()`, los canales y `select` vienen del capítulo 8. Para esperar a varias, un `sync.WaitGroup`, en la forma larga de `wg.Go` (capítulo 1): `wg.Add(1)` avisa antes de lanzar, `defer wg.Done()` descuenta y `wg.Wait()` espera.
 
 Sin el `Mutex`, dos goroutines tocarían el mismo `bufio.Writer` a la vez, y `go test -race` lo detecta.
 

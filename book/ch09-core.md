@@ -168,6 +168,8 @@ func guard(pass string, f func()) (ice *ICE) {
 - **Un `fatal error`** no es un panic: el `defer` con `recover` no corre, y el código es 2.
 - **Los diagnósticos pendientes.** Cuando salta un ICE, los que ya estaban en el sink no se escriben: con el gancho en `resolve`, un error de sintaxis da el informe y ningún `error[`.
 - **Lo que no es un pase.** `core.Print`, `syntax.DumpTokens`, `syntax.PrintModule` y `ReportAll` corren fuera de `runPass`, y un panic ahí saldría con 2.
+
+**Fe de erratas.** En `main`, los comandos ya escriben los diagnósticos como pase `render`, de modo que un panic ahí sale con 70, y el informe de un ICE acaba diciendo cuántos diagnósticos no muestra.
 :::
 
 ## Tests primero
