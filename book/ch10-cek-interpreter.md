@@ -20,7 +20,7 @@ fn main() {
   let x = fib(20)
   print(x)
 }
-$ ki run fib.ki
+$ build/bin/ki run fib.ki
 6765
 ```
 
@@ -52,7 +52,7 @@ Los cinco marcos:
 |---|---|---|
 | `primFrame` | un argumento de una primitiva | pasa al segundo o calcula |
 | `argFrame` | la función o un argumento | con todos, llama |
-| `letFrame` | la inicialización de un `let` | lo escribe y sigue |
+| `letFrame` | la inicialización de un `let` | lo escribe |
 | `matchFrame` | lo que compara un `match` | elige el brazo |
 | `retFrame` | el cuerpo de una función | recorta los entornos y baja el valor |
 
