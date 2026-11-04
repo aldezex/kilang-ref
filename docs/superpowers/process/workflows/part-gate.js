@@ -170,7 +170,7 @@ const argError = () => {
   if (A.practice !== undefined && !Array.isArray(A.practice)) return 'practice must list chapter numbers'
   return null
 }
-const WHY = "This gate runs after the chapters were published, and it is the only reading of the Part as a whole. You are one independent check; you have not seen what the others find, and you are blind: do NOT read anything under .superpowers/, nor any review, panel or fix report. The only file you write there is your own report."
+const WHY = "This gate runs after the chapters were published, and it is the only reading of the Part as a whole. You are one independent check; you have not seen what the others find, and you are blind: do NOT read anything under .superpowers/, nor any review, panel or fix report. The only exceptions are the two files this prompt names: its result file, which you look for first and write last, and your own report."
 const blocking = (f) => f.kind === 'memory-death' || f.kind === 'limit'
 const TAGS = "Published tags never move. Fixes are forward commits on main, no history rewrite. If a fix changes what a chapter describes at its tag, the chapter gets one sentence of erratum, within its budget, and the file " + W + "/errata-part-" + A.part + ".md gets a line for the next session's {{diff}}."
 

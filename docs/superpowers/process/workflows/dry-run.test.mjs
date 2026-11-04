@@ -347,6 +347,7 @@ test('prompts: paths and ids, never pasted findings; blind readers; 2 500 words;
   for (const key of ['facts', 'whys', 'apprentice', 'follower']) {
     const p = r.trace.find((x) => x.label === 'ch11:pass:' + key).prompt
     assert.match(p, /You are blind/)
+    assert.match(p, /its result file, which you look for first and write last/, 'blind must not cost the resume')
     assert.deepEqual(uniqueW(p), [V + '/pass-' + key + '.json', V + '/pass-' + key + '.md'].sort(), 'a reader knows no other report')
     assert.ok(!/panel-|task-\d|review-T|gate\d/.test(p))
   }
