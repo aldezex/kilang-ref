@@ -57,6 +57,12 @@ const maxSourceShown = 200
 // uses Analyze. The failure names the first error and shows at most the first
 // maxSourceShown bytes of source, because some tests compile a source of
 // 100 000 lines.
+//
+// It also fails the test if core.Lint finds a violation in the Core, as the
+// commands that lower a program do with an ICE: an elaboration that breaks the
+// invariants of Core (an unbound variable, a slot outside the frame) would
+// otherwise be seen only by the tests that happen to look at that part of the
+// result or run it.
 func Compile(t *testing.T, source string) *Compiled {
 	t.Helper()
 	p := Analyze(t, source)
@@ -74,7 +80,11 @@ func Compile(t *testing.T, source string) *Compiled {
 		}
 		t.Fatalf("the front end reported errors, the first %s, in %q%s", first, shown, cut)
 	}
-	return &Compiled{Program: p, Core: p.Session.Lower(p.Frontend)}
+	program := p.Session.Lower(p.Frontend)
+	if violations := core.Lint(program, p.Session.Interner); len(violations) > 0 {
+		t.Fatalf("Lint rejected the Core of the elaboration:\n%s", strings.Join(violations, "\n"))
+	}
+	return &Compiled{Program: p, Core: program}
 }
 
 // FunNamed returns the id in c.Core of the function that the user's file defines
