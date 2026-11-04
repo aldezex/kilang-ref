@@ -107,12 +107,13 @@ type Stats struct {
 
 // The limit of the stack is KI_STACK_MB mebibytes (spec 8.10), counted twice and
 // in nominal sizes, not in the bytes that Go ends up using: that many mebibytes
-// of frames, at 64 bytes each, and as many of environments, at 16 bytes for each
-// slot (a Value is an interface). A mebibyte holds 1<<14 frames or 1<<16 slots.
-// Frames alone would not bound the memory: each call that is alive holds an
-// environment of FrameSize slots, so the bytes that a level of a recursion takes
-// grow with the number of variables of the function. New reads the variable (see
-// framesFor and slotsFor) and enter checks both limits.
+// of frames, at 64 bytes each, and as many of values, at 16 bytes for each slot
+// (a Value is an interface). A mebibyte holds 1<<14 frames or 1<<16 slots. Frames
+// alone would not bound those values: each call that is alive holds an
+// environment of FrameSize slots, and each call being prepared holds an argFrame
+// with room for its callee and its arguments, so the bytes that a level of a
+// recursion takes grow with the variables and the arguments of the function. New
+// reads the variable (see framesFor and slotsFor) and enter checks both limits.
 const (
 	stackEnv       = "KI_STACK_MB"
 	defaultStackMB = 256
@@ -176,9 +177,9 @@ type Machine struct {
 	// and, for a chain of operators, MaxChain (1024, E0205) limit together.
 	// TestMachine/stack_overflow_exits_103 works out the figure for its program.
 	maxFrames int
-	// slots is how many slots the environments in envs have, added up, and
-	// maxSlots is its limit: a call whose environment would take slots past
-	// maxSlots overflows (see enter).
+	// slots is how many slots the environments in envs and the argFrames on the
+	// stack have, added up, and maxSlots is its limit: a call whose environment
+	// would take slots past maxSlots overflows (see enter).
 	slots, maxSlots int
 	// halt is nil while the program runs, and the state it ended in once it has
 	// panicked or overflowed its stack. run stops as soon as it is set.
@@ -338,8 +339,11 @@ func (m *Machine) step(id core.ExprID) {
 	case core.Call:
 		// The callee is a value like any other (Core allows any expression
 		// there), so it is evaluated first, and then each argument. The frame
-		// has room for all the values.
-		m.push(argFrame{call: id, vals: make([]Value, 0, 1+len(m.prog.Args(x.Args)))})
+		// has room for all the values, and those count as slots until enter
+		// takes them out.
+		n := 1 + len(m.prog.Args(x.Args))
+		m.slots += n
+		m.push(argFrame{call: id, vals: make([]Value, 0, n)})
 		m.eval(x.Callee)
 	case core.Match:
 		m.push(matchFrame{match: id})
@@ -480,7 +484,17 @@ func (m *Machine) newEnv(fun core.Fun, args []Value) []Value {
 // or more, or if the new environment would take slots past maxSlots, it
 // overflows instead: the machine writes the message at the span of the call to
 // err and halts with Halt{Code: 103}.
+//
+// The check is only here, and step charges an argFrame when it pushes it, so
+// slots can pass maxSlots between two checks: by the one environment that a tail
+// call can make bigger, and by the argFrames opened since the last check that
+// have not been entered yet. Those are nested in one another in the source, so
+// MaxNesting (256, E0204) limits how many there are. The excess does not add up
+// from level to level: the next check sees it and overflows.
 func (m *Machine) enter(call core.Expr, vals []Value) {
+	// The argFrame is gone: its values become the new environment, or the
+	// arguments of a function of the runtime, and step charged all of them.
+	m.slots -= cap(vals)
 	// A callee that is not a function would be a bug of the type checker.
 	callee := vals[0].(FunV)
 	fun := m.prog.Funs.Get(callee.Fun)

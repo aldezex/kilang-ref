@@ -23,6 +23,19 @@ func manyLets(n int) string {
 	return sb.String()
 }
 
+// manyParams returns the parameter list of a function of n Int parameters, and
+// the arguments of a call of it whose last one is the text last and whose others
+// are the variable n.
+func manyParams(n int, last string) (params, args string) {
+	var ps, as []string
+	for i := range n {
+		ps = append(ps, fmt.Sprintf("p%d: Int", i))
+		as = append(as, "n")
+	}
+	as[n-1] = last
+	return strings.Join(ps, ", "), strings.Join(as, ", ")
+}
+
 // machineOf returns a new Machine for the program c, and the buffers that its
 // stdout and its stderr go to.
 func machineOf(c *testsupport.Compiled) (m *interp.Machine, out, errOut *bytes.Buffer) {
@@ -1033,6 +1046,60 @@ fn b(n: Int, acc: Int) -> Int {
 			"fn f(n: Int) -> Int { if n == 0 { 0 } else { 1 + leaf(n) - n + f(n - 1) } }"
 		if _, got := call(t, returns, "f", interp.IntV{V: 100}); got != (interp.IntV{V: 100}) {
 			t.Errorf("Call(f, 100) of the calls that return = %#v, want IntV{100}", got)
+		}
+
+		// The values of a call still being prepared are slots too: its argFrame has
+		// room for the callee and each argument. A level of f keeps 1 slot of its own
+		// environment and the 1 + params of the argFrame of g, which waits for f(n + 1),
+		// so the check of a call finds e*(params+2) slots with e environments alive, and
+		// allows the call if one more slot fits. The argFrame of f(n + 1) itself is
+		// gone by then: the values have moved to the environment. With 100 parameters
+		// the sizes around the right one give other counts (101: 649, 103: 637), which
+		// is what kills a charge or a release that is off by one. At the overflow the
+		// count is 65586, past the limit by the argFrame opened since the last check.
+		for _, row := range []struct {
+			params  int
+			mb      string
+			wantEnv int
+		}{
+			{100, "1", 643},  // 102 a level: 642*102 + 1 = 65485, 643*102 + 1 = 65587
+			{100, "2", 1286}, // 1285*102 + 1 = 131071, 1286*102 + 1 = 131173
+			{400, "1", 164},  // 402 a level: 163*402 + 1 = 65527, 164*402 + 1 = 65929
+		} {
+			t.Setenv("KI_STACK_MB", row.mb)
+			params, args := manyParams(row.params, "f(n + 1)")
+			src := "fn g(" + params + ") -> Int { p0 }\nfn f(n: Int) -> Int { g(" + args + ") }"
+			c := testsupport.Compile(t, src)
+			m, _, errOut := machineOf(c)
+			v, ok := m.Call(testsupport.FunNamed(t, c, "f"), []interp.Value{interp.IntV{V: 0}})
+			if v != nil || ok {
+				t.Errorf("%d parameters, %s MiB: Call(f, 0) = (%#v, %v), want (nil, false)", row.params, row.mb, v, ok)
+			}
+			col := len("fn f(n: Int) -> Int { g(") + len("n, ")*(row.params-1) + 1
+			if want := fmt.Sprintf("panic: stack overflow at test.ki:2:%d\n", col); errOut.String() != want {
+				t.Errorf("%d parameters, %s MiB: stderr = %q, want %q", row.params, row.mb, errOut.String(), want)
+			}
+			if s := m.Stats(); s.MaxEnvs != row.wantEnv {
+				t.Errorf("%d parameters, %s MiB: Stats().MaxEnvs = %d, want %d", row.params, row.mb, s.MaxEnvs, row.wantEnv)
+			}
+		}
+
+		// And a call gives those slots back however it goes on. Each of these loops
+		// makes 40000 calls of two values, 80000 slots if they added up, on the 65536
+		// of a MiB, and the last call of each one that pushes a frame would see them.
+		t.Setenv("KI_STACK_MB", "1")
+		const one = "fn one() -> Int { 1 }\n"
+		for _, row := range []struct{ name, src string }{
+			{"a tail call", one + "fn f(n: Int) -> Int { if n == 0 { 1 + one() } else { f(n - 1) } }"},
+			{"a call of the runtime", one + "fn f(n: Int) -> Int { if n == 0 { 1 + one() } else { let u = print(n)\n f(n - 1) } }"},
+			{"a call that pushes", one + "fn id(n: Int) -> Int { n }\nfn f(n: Int) -> Int { if n == 0 { 1 + one() } else { let u = id(n)\n f(n - 1) } }"},
+		} {
+			c := testsupport.Compile(t, row.src)
+			m, _, errOut := machineOf(c)
+			v, ok := m.Call(testsupport.FunNamed(t, c, "f"), []interp.Value{interp.IntV{V: 40000}})
+			if v != (interp.IntV{V: 2}) || !ok {
+				t.Errorf("40000 of %s: Call(f, 40000) = (%#v, %v), want (IntV{2}, true); stderr %q", row.name, v, ok, errOut.String())
+			}
 		}
 
 		// Each Call starts from an empty machine, the count of slots included: after
