@@ -1,0 +1,34 @@
+// How many primes are there up to a hundred?
+fn divides(d: Int, n: Int) -> Bool {
+  n % d == 0
+}
+
+fn noDivisorFrom(d: Int, n: Int) -> Bool {
+  if d * d > n {
+    true
+  } else if divides(d, n) {
+    false
+  } else {
+    noDivisorFrom(d + 1, n)
+  }
+}
+
+fn isPrime(n: Int) -> Bool {
+  n >= 2 && noDivisorFrom(2, n)
+}
+
+fn countPrimes(n: Int, upTo: Int, found: Int) -> Int {
+  if n > upTo {
+    found
+  } else {
+    let more = if isPrime(n) { 1 } else { 0 }
+    countPrimes(n + 1, upTo, found + more)
+  }
+}
+
+fn main() {
+  let total = countPrimes(2, 100, 0)
+  print(total)
+  let big = if isPrime(97) { 1 } else { 0 }
+  print(big)
+}

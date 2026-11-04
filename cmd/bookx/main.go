@@ -7,8 +7,8 @@
 // and return values and errors, and never touch git or the disk. Around them,
 // Git reads the tags of a repository, verify and render check and resolve the
 // book through the small repoReader interface, and run (this file) is the
-// command line: verify, render, web, regions, testlist, words, lint, doctest and
-// mutate.
+// command line: verify, render, web, regions, testlist, words, lint, doctest,
+// mutate and cascade.
 package main
 
 import (
@@ -49,6 +49,7 @@ var commandUsage = map[string]string{
 	"words":    "usage: bookx words <file>...",
 	"lint":     "usage: bookx lint <file>...",
 	"doctest":  "usage: bookx doctest [--repo DIR] <file>...",
+	"cascade":  "usage: bookx cascade [--ki BIN] [--limit N] [--top N] <file.ki>...",
 	"mutate":   "usage: bookx mutate --pkg PKG [--repo DIR] [--since REV] [--limit N] [--timeout SECS] [--only IDS] [--list]\n       bookx mutate --apply PATCH|FILE [--old TEXT --new TEXT] [--pkg PKG] [--repo DIR] [--timeout SECS]",
 }
 
@@ -76,11 +77,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cmd = runDoctest
 		case "mutate":
 			cmd = runMutate
+		case "cascade":
+			cmd = runCascade
 		}
 	}
 	if cmd == nil {
 		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
-		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint, doctest, mutate")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint, doctest, mutate, cascade")
 		return exitUsage
 	}
 	return cmd(args[1:], stdout, stderr)

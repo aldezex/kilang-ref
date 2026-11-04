@@ -1,0 +1,28 @@
+// The longest Collatz chain below a limit.
+fn step(n: Int) -> Int {
+  if n % 2 == 0 { n / 2 } else { 3 * n + 1 }
+}
+
+fn chain(n: Int, length: Int) -> Int {
+  if n == 1 { length } else { chain(step(n), length + 1) }
+}
+
+fn best(n: Int, limit: Int, winner: Int, longest: Int) -> Int {
+  if n >= limit {
+    winner
+  } else {
+    let length = chain(n, 1)
+    if length > longest {
+      best(n + 1, limit, n, length)
+    } else {
+      best(n + 1, limit, winner, longest)
+    }
+  }
+}
+
+fn main() {
+  let limit = 1000
+  let winner = best(1, limit, 1, 1)
+  print(winner)
+  print(chain(winner, 1))
+}

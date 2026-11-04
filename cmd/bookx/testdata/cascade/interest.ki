@@ -1,0 +1,35 @@
+// A loan paid month by month, with the interest in whole cents.
+fn interest(balance: Int, rate: Int) -> Int {
+  balance * rate / 10000
+}
+
+fn nextBalance(balance: Int, rate: Int, payment: Int) -> Int {
+  let owed = balance + interest(balance, rate)
+  let paid = if payment > owed { owed } else { payment }
+  owed - paid
+}
+
+fn monthsToPay(
+  balance: Int,
+  rate: Int,
+  payment: Int,
+  months: Int
+) -> Int {
+  if balance <= 0 || months >= 600 {
+    months
+  } else {
+    monthsToPay(
+      nextBalance(balance, rate, payment),
+      rate,
+      payment,
+      months + 1
+    )
+  }
+}
+
+fn main() {
+  let months = monthsToPay(1000000, 50, 25000, 0)
+  print(months)
+  let forever = !(months < 600)
+  if forever { print(0) } else { print(1) }
+}
