@@ -92,10 +92,10 @@ Rellenarlo a mano invita a olvidar un campo, así que hay una **API builder**:
 - **Un método por clase de nodo:** lo crea, lo guarda y devuelve su id.
 - **De abajo arriba:** los hijos existen antes que el padre.
 - **Copia las listas al pool:** quien llama puede reutilizar su slice.
-- **No valida:** si no, los tests no podrían fabricar Core inválido.
+- **No valida:** así los tests fabrican Core inválido.
 
 :::from Rust
-Sería un `enum` con datos, y leer `Init` de un `LitInt` no compilaría. En Go es una convención, que protegen el builder y `default: panic("unreachable")` en cada `switch`.
+Sería un `enum` con datos, y leer `Init` de un `LitInt` no compilaría. En Go es una convención, que protege el builder.
 :::
 
 **Interfaces pequeñas.** `Builder` es un struct y no una interfaz: tiene una sola implementación, y una interfaz la declara quien la consume.
@@ -181,7 +181,7 @@ func guard(pass string, f func()) (ice *ICE) {
 :::more Los ayudantes de los tests
 Los tests de referencia y las soluciones los usan sin definirlos; el código está en `ref/ch09-s3`.
 
-- **`core_test.go`.** `span` crea un span en el fichero 1, para que un span olvidado, que sería del fichero 0, se note. `newBuilder` da un `Builder` sobre un `Program` vacío.
+- **`core_test.go`.** `span` crea un span en el fichero 1. `newBuilder` da un `Builder` sobre un `Program` vacío.
 - **`ice_test.go`,** en `package driver` porque prueba `guard` y `runPass`. Su `TestMain` borra `KI_DEBUG_PANIC_IN`. `explode` hace panic; tiene nombre, y sale en la pila aunque el compilador sustituya la llamada por su cuerpo. `writeKi` escribe un fichero temporal, `raised` devuelve el valor de un panic y `newSession` crea una `Session` con el gancho pedido.
 - **`elaborate_test.go`.** `elabFun` busca una función por nombre, `elabText` da el texto de un span y `elabWant` compara una expresión escrita en una línea, sin spans.
 - **`lint_test.go`.** `lintProg` monta programas a mano, con variables `v<id>` y funciones `f<id>`. `lintCheck` compara la lista entera de violaciones.
@@ -398,7 +398,7 @@ func (s *Session) lint(p *core.Program)
 
 `Print` también recorre con una pila propia. Escribe los literales con `strconv.FormatInt`, el inverso de `ParseInt` (capítulo 5), y `strconv.FormatBool`.
 
-:::more `Print` es para leer, no para parsear
+:::more `Print` es solo para leer
 Un `Let` como *callee* (la función llamada) no tiene delimitador: `print({ let g = f; g }(1))` se imprime `print(let g = f;` y, debajo, `g(1))`, que parece un `Let` cuyo cuerpo es la llamada.
 :::
 
