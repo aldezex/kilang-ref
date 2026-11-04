@@ -7,7 +7,7 @@
 // and return values and errors, and never touch git or the disk. Around them,
 // Git reads the tags of a repository, verify and render check and resolve the
 // book through the small repoReader interface, and run (this file) is the
-// command line: verify, render, web, regions, testlist, words and lint.
+// command line: verify, render, web, regions, testlist, words, lint and doctest.
 package main
 
 import (
@@ -47,6 +47,7 @@ var commandUsage = map[string]string{
 	"web":      "usage: bookx web <out-dir> [--repo DIR] [--all]",
 	"words":    "usage: bookx words <file>...",
 	"lint":     "usage: bookx lint <file>...",
+	"doctest":  "usage: bookx doctest [--repo DIR] <file>...",
 }
 
 // run is main without the process around it: it runs the command in args,
@@ -69,11 +70,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			cmd = runWords
 		case "lint":
 			cmd = runLint
+		case "doctest":
+			cmd = runDoctest
 		}
 	}
 	if cmd == nil {
 		fmt.Fprintln(stderr, "usage: bookx <command> [args]")
-		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint")
+		fmt.Fprintln(stderr, "commands: verify, render, regions, testlist, web, words, lint, doctest")
 		return exitUsage
 	}
 	return cmd(args[1:], stdout, stderr)
