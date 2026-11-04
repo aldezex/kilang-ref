@@ -1,6 +1,6 @@
 export const meta = {
   name: 'ki-chapter-v4',
-  description: 'Ki book, one chapter: sessions and session reviews, code gate, frozen session tags, draft, lint and doctest, one blind pass, one fix, a check of the diff (at most 2 turns), integrate, verify. Fails closed. See docs/superpowers/process/pipeline.md',
+  description: 'Ki book, one chapter: sessions and session reviews, code gate, frozen session tags, draft, lint and doctest, one blind pass of five readers, one fix, a check of the diff (at most 2 turns), integrate, verify. Fails closed. See docs/superpowers/process/pipeline.md',
   phases: [{ title: 'Sessions' }, { title: 'Code gate' }, { title: 'Draft' }, { title: 'Blind pass' }, { title: 'Fix' }, { title: 'Integrate' }, { title: 'Second pass' }],
 }
 // args: pipeline.md has the full list and an example.
@@ -35,11 +35,12 @@ const FINDING = {
     owner: { type: 'string', enum: ['prose', 'code'], description: 'prose: the chapter text or the wording of a card, and where starts with book/. code: anything else, and where does not start with book/ch' },
     kind: { type: 'string', enum: KINDS, description: 'text: owner prose. For owner code: message, fixit, output, limit or memory-death when the reader or a user of ki would see the failure; test-gap when a test does not check what is claimed; other otherwise' },
     visible: { type: 'boolean', description: 'the reader sees this on the page: text, card, listing, shown message. Always true for owner prose' },
+    falsehood: { type: 'boolean', description: 'true when this finding says that a reason, a magnitude or an absolute (never, only, none, would not finish) stated in the text is false; not when it is merely unclear, weak or incomplete. It is fixed whatever its severity' },
     where: { type: 'string', description: 'repo-relative file:line; the first location decides' },
     claim: { type: 'string' },
     evidence: { type: 'string', description: 'the command and its output, or the primary source and its words' },
   },
-  required: ['id', 'severity', 'owner', 'kind', 'visible', 'where', 'claim', 'evidence'],
+  required: ['id', 'severity', 'owner', 'kind', 'visible', 'falsehood', 'where', 'claim', 'evidence'],
 }
 const FIND = {
   type: 'object',
@@ -60,6 +61,8 @@ const RESOLVED = {
   required: [...DONE.required, 'resolutions'],
 }
 const serious = (f) => f.severity === 'Critical' || f.severity === 'Important'
+// A false reason is fixed whatever severity its reader gave it: the blind trial's hits came in as Minor and Nit.
+const must = (f) => serious(f) || f.falsehood === true
 const isBehaviour = (f) => BEHAVIOUR.includes(f.kind)
 const ids = (fs) => fs.map((f) => f.id).join(', ')
 
@@ -77,6 +80,7 @@ const checkFind = (o) => (r, label) => {
     need(['prose', 'code'].includes(f.owner), name, 'owner must be prose or code, got ' + f.owner)
     need(KINDS.includes(f.kind), name, 'bad kind ' + f.kind)
     need(typeof f.visible === 'boolean', name, 'visible must be a boolean')
+    need(typeof f.falsehood === 'boolean', name, 'falsehood must be a boolean')
     for (const k of ['where', 'claim', 'evidence']) need(typeof f[k] === 'string' && f[k].trim() !== '', name, k + ' is empty')
     if (f.owner === 'prose') {
       need(f.where.startsWith('book/'), name, 'owner prose but where is ' + f.where)
@@ -144,7 +148,7 @@ const onMain = (fn) => { const p = mainLock.then(fn); mainLock = p.then(() => nu
 const doneRule = (file, input) => "RESUME RULE. If " + file + " exists and its \"input\" field is exactly \"" + input + "\", this step already finished: return its \"result\" field as your structured output and do nothing else. Otherwise an earlier attempt may have died half way: look at what it left before you start (git status, git log, an open rebase, the report file) and continue from it. Uncommitted work may be yours from that attempt: read it, keep what is right. Never git reset --hard, git clean, git stash or a second worktree. As your LAST act, once everything else has succeeded (a BLOCKED answer writes no file, so that a re-run tries again), mkdir -p its directory and write {\"input\": \"" + input + "\", \"result\": <your structured output>} to " + file + ".tmp and mv it to " + file + "."
 const CAP = "ci/mutate, bookx cascade and bookx doctest cap their own memory. Any other mutant, fuzz or stress run goes under systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0, one go test at a time; an unbounded mutant otherwise kills the whole machine. Bound every long command. Never push, never stash."
 const READER = "Do not modify the repo, its tags or any worktree. Never run anything in the main checkout. Work in a NEW dir under " + SCRATCH + " that you delete at the end. ci/mutate needs a git repository, so in your copy first run git init -q && git add -A && git -c user.name=x -c user.email=x@x commit -qm copy; then check what a mutant does with ci/mutate --apply. " + CAP + " Report a finding only with evidence you produced: the command and its output, or the primary source and its words. The book is short on purpose: a claim that is true and merely not exhaustive is fine."
-const FORMAT = (path, lens) => "Write " + path + ": what you checked and how, and every finding under its id. Structured output: findings (id starting with " + lens + "-, severity, owner, kind, visible, where, claim, evidence; empty if nothing is wrong), checked (how many you really went through) and report_path exactly " + path + "."
+const FORMAT = (path, lens) => "Write " + path + ": what you checked and how, and every finding under its id. Structured output: findings (id starting with " + lens + "-, severity, owner, kind, visible, falsehood, where, claim, evidence; empty if nothing is wrong; falsehood is true when the finding says a reason, a magnitude or an absolute in the text is false, and then it gets fixed whatever its severity), checked (how many you really went through) and report_path exactly " + path + "."
 const dryFind = (path) => ({ findings: [], checked: 1, report_path: path })
 const dryDone = (path, extra) => ({ status: 'DONE', head: 'dry0000', report_path: path, concerns: [], ...(extra || {}) })
 
@@ -161,6 +165,7 @@ const froms = (fs) => uniq(fs.map((f) => f.from)).join(', ')
 // </shared>
 
 const FIRST_STRICT = 11, LAST_CONTROL = 13
+const visibleFailure = (f) => serious(f) && isBehaviour(f)
 const PLANRULE = "Once a session is tagged its code rules over the plan, except the promised theory topics and the rows of each diagnostic: in a doubt, first try to make the promise true rather than weaken it. Do not amend the plan for finished tasks."
 const PKG = "$(command ls -d /home/scami/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills/subagent-driven-development/scripts/review-package | sort -V | tail -1)"
 
@@ -196,7 +201,7 @@ const reviewPrompt = (c, t, head) => L(
 const FOLD = (c) => "Procedure: one 'fixup! <exact session subject>' commit per fix; git -c sequence.editor=: rebase -i --autosquash --update-refs " + c.tag + "-s1^; then ci/retag-all.sh (later commits on main get re-parented and their tags move with them). If you find a rebase open from an earlier attempt: git rebase --abort, the fixups are still there, start the fold again. A fixup already folded needs nothing."
 const batch = (c, label, name, list, phaseName, extra) => {
   const path = c.V + "/" + name + ".md"
-  const required = list.filter((f) => serious(f) || f.visible)
+  const required = list.filter((f) => must(f) || f.visible)
   return onMain(() => stepDone(c, label, name, ids(list), { model: 'sonnet', phase: phaseName, path, schema: RESOLVED, dry: { resolutions: list.map((f) => ({ id: f.id, action: 'fixed', note: 'dry' })) }, check: checkResolved(path, required, ['fixed', 'rejected']) },
     "You own the main checkout of " + REPO + " for this job: a chapter-" + c.n + " code batch folded IN PLACE into the tagged " + c.tag + "-sK session commits. Read " + PROC + "/implementer.md (it binds you).",
     FOLD(c),
@@ -239,8 +244,8 @@ const codeTrack = async (c) => {
   }
   if (pending.length) reviews.push(...await gather(pending))
   const fromReviews = reviews.flatMap((r) => r.findings)
-  const parked = fromReviews.filter((f) => !(serious(f) || f.visible))
-  const chapterBatch = fromReviews.filter((f) => serious(f) || f.visible)
+  const parked = fromReviews.filter((f) => !(must(f) || f.visible))
+  const chapterBatch = fromReviews.filter((f) => must(f) || f.visible)
   if (chapterBatch.length) await batch(c, c.tag + ':batch', 'batch', chapterBatch, P, "These come from the session reviews; the gate reads the result, so no re-review follows.")
 
   const G = 'Code gate'
@@ -250,18 +255,18 @@ const codeTrack = async (c) => {
     iterations = iter
     const res = await gateLenses(c, iter, lastTag(), G)
     const all = res.flatMap((r) => r.findings)
-    const list = [...openBehaviour, ...all.filter((f) => serious(f) || f.visible)]
-    parked.push(...all.filter((f) => !(serious(f) || f.visible)))
+    const list = [...openBehaviour, ...all.filter((f) => must(f) || f.visible)]
+    parked.push(...all.filter((f) => !(must(f) || f.visible)))
     log(c.tag + ' gate ' + iter + ': ' + all.filter(serious).length + ' Critical/Important of ' + all.length)
     const behaviourFound = list.some((f) => serious(f) && isBehaviour(f))
     openBehaviour = []
     if (list.length) {
       await batch(c, c.tag + ':gate' + iter + ':batch', 'gate' + iter + '-batch', list, G)
       const rr = await rereview(c, c.tag + ':gate' + iter + ':rereview', 'gate' + iter + '-rereview', list, 'gate' + iter + '-batch', G)
-      const open = rr.findings.filter(serious)
-      parked.push(...rr.findings.filter((f) => !serious(f)))
-      openBehaviour = open.filter(isBehaviour)
-      carry.push(...open.filter((f) => !isBehaviour(f)))
+      const open = rr.findings.filter(must)
+      parked.push(...rr.findings.filter((f) => !must(f)))
+      openBehaviour = open.filter(visibleFailure)
+      carry.push(...open.filter((f) => !visibleFailure(f)))
     }
     // A second iteration only for a failure someone would see, unless the control lens has made it fixed.
     if (!(A.fixedSecondIteration || behaviourFound || openBehaviour.length)) break
@@ -321,7 +326,8 @@ const readers = (c, ref, prefix, phaseName, withControl) => {
   const lastSession = c.tag + "-s" + c.sessions.length
   const list = [
     ['facts', 'opus', true, "FACTS. List every claim about Go, the toolchain, the runtime, Linux, compilers, type theory, parsing, Unicode, other languages and real projects, folds, solutions, answers and «Go en el trabajo» included, and check EVERY one: run it here on the Go that go.mod names, or find it in a primary source (the Go spec, go.dev, the source in GOROOT, the paper, the project's repository). Not a sample, not the likeliest ones. A false or overstated claim is Important. The ledger of every claim and how you checked it goes in your report."],
-    ['whys', 'opus', true, "WHYS. Every explanation of why something works or is designed so, and every statement about what this chapter's code or tests do, in the prose, the cards (why, case, expect) and the comments the page shows: check that the reason given is the real reason by running what it depends on, ci/mutate --apply for a mutant and a small program for a behaviour. A wrong reason is Important even if the conclusion holds. A claim about what a test catches broader than the test is Important. All of them, not a sample."],
+    ['whys', 'opus', true, "WHYS. Every explanation of why something works or is designed so, and every statement about what this chapter's code or tests do, in the prose, the cards (why, case, expect) and the comments the page shows: check that the reason given is the real reason by running what it depends on, ci/mutate --apply for a mutant and a small program for a behaviour. A wrong reason is Important, and falsehood true, even if the conclusion holds. A claim about what a test catches broader than the test is Important. All of them, not a sample."],
+    ['cards', 'opus', true, "CARDS. Your copy's book/tests/" + c.tag + ".tests, card by card and clause by clause: every clause of every case, expect and why. Your report holds a record of each card, by id: each clause, what you ran or read for it, and your verdict; a card with no record was not read. Run each clause: ci/mutate --apply for a mutant it names or implies, a small program for a behaviour, the test itself for what it says the test checks. Every claim of magnitude or absolute («nunca», «no acabaría», «solo», «ninguno», «cualquier», «tardaría horas», «unas pocas líneas») gets a number: run it at several sizes and extrapolate the curve. A time limit proves nothing by itself: a mutant cut at 10 s has not shown «no acabaría», so say how long it would really take, and whether the program as the card describes it has that size. Every promise about a later chapter (what chapter N adds, what the next chapter's interpreter does) is checked against the plan " + PLAN + ", by grep, and the spec's index; what no plan backs is a finding. A reason that is false is falsehood true and owner prose even if the conclusion holds and the reader would barely notice. All cards, not a sample: checked is the number of cards."],
     ['apprentice', 'opus', false, "APPRENTICE. Read cold, in order, as someone who knows TS/JS, Python and Rust, has read the earlier chapters (book/ch*.md in your copy) and is new to everything else in Go and compilers. What is used before it is explained; what you could not follow; what reads as a list of facts; a helper with no file; an exercise you cannot start from its statement; a question that asks for a definition; Spanish (Spain), «tú», no gendered words about the reader. A concept used before it is explained, or a dense or tedious stretch (name its lines), is Important. Budgets and fold counts are the machine's: do not count them."],
     ['follower', 'sonnet', false, "FOLLOWER, from the reader's tree. In a second new dir, git -C " + REPO + " archive ch" + c.PP + " | tar -x, delete cmd/bookx, add nothing to PATH: that is the tree the reader has before this chapter. Do its sessions in order as the reader does: write what the steps and cards say, see each red, reach each green, run every command and compare every output as printed. Do every exercise from its statement, then check against its solution. At the end compare your tree with " + lastSession + ". A step that cannot be followed, a red or output that differs, an exercise that cannot be started or whose solution fails is Important. Doctest already compares the commands against the reference tree: what it cannot see is what the reader's own tree does."],
   ]
@@ -335,12 +341,14 @@ const readers = (c, ref, prefix, phaseName, withControl) => {
 
 // ================= what happens to a finding =================
 // A visible failure unfreezes, a test gap narrows the sentence, a Minor the reader sees travels before the tag.
+// A falsehood never parks and is never optional: in code that does not thaw, it narrows like a test gap.
+const thaws = (f) => f.owner === 'code' && (visibleFailure(f) || (f.severity === 'Minor' && f.visible))
 const route = (all) => ({
-  thaw: all.filter((f) => f.owner === 'code' && ((serious(f) && isBehaviour(f)) || (f.severity === 'Minor' && f.visible))),
-  narrow: all.filter((f) => f.owner === 'code' && serious(f) && !isBehaviour(f)),
-  prose: all.filter((f) => f.owner === 'prose' && (serious(f) || f.severity === 'Minor')),
-  optional: all.filter((f) => f.severity === 'Nit' && f.owner === 'prose'),
-  parked: all.filter((f) => !serious(f) && (f.owner === 'code' ? !(f.severity === 'Minor' && f.visible) : f.severity === 'Nit')),
+  thaw: all.filter(thaws),
+  narrow: all.filter((f) => f.owner === 'code' && !thaws(f) && must(f)),
+  prose: all.filter((f) => f.owner === 'prose' && (must(f) || f.severity === 'Minor')),
+  optional: all.filter((f) => f.owner === 'prose' && f.severity === 'Nit' && !f.falsehood),
+  parked: all.filter((f) => !must(f) && (f.owner === 'code' ? !thaws(f) : f.severity === 'Nit')),
 })
 
 const proseTrack = async (c, carry) => {
@@ -355,16 +363,20 @@ const proseTrack = async (c, carry) => {
   log(c.tag + ' pass: ' + all.filter(serious).length + ' Critical/Important of ' + all.length)
   const controlVisible = all.filter((f) => f.id.startsWith('pass-control-') && isBehaviour(f) && serious(f)).length
 
-  let r = route(all), head = text, parked = [...r.parked], errata = [...r.narrow], thaws = 0, turn = 1, deletedIds = []
+  let r = route(all), head = text, parked = [...r.parked], errata = [...r.narrow], thawCount = 0, turn = 1, deletedIds = []
   const fixTurn = async (t) => {
     let thawed = ''
     if (r.thaw.length) {
-      thaws++
-      need(thaws <= 2, c.tag + ':thaw', 'a visible failure is still open after two unfreezes: ' + ids(r.thaw) + ' in ' + froms(r.thaw))
+      thawCount++
+      need(thawCount <= 2, c.tag + ':thaw', 'a visible failure is still open after two unfreezes: ' + ids(r.thaw) + ' in ' + froms(r.thaw))
       await batch(c, c.tag + ':thaw' + t + ':batch', 'thaw' + t + '-batch', r.thaw, 'Fix', "The session tags were frozen: this is an unfreeze before publishing, for failures the reader would see.")
       const rr = await rereview(c, c.tag + ':thaw' + t + ':rereview', 'thaw' + t + '-rereview', r.thaw, 'thaw' + t + '-batch', 'Fix')
-      const open = rr.findings.filter((f) => serious(f) && isBehaviour(f))
+      const open = rr.findings.filter(visibleFailure)
       need(!open.length, c.tag + ':thaw', 'the unfreeze did not close ' + ids(open) + ' in ' + rr.report_path)
+      // The re-review's own false reasons go to this turn's fix: the code is about to freeze again.
+      const falseAfter = rr.findings.filter((f) => f.falsehood)
+      r.narrow.push(...falseAfter)
+      errata.push(...falseAfter)
       await freeze(c, 'refreeze' + t, c.tag + ':refreeze' + t, [], 'Fix')
       thawed = "Code moved: read " + c.V + "/thaw" + t + "-batch.md, discard the regenerated book/verified-tags.txt and book/tests/" + c.tag + ".list, rebase " + c.branch + " onto the new " + frozenTag + " (git rebase --onto " + frozenTag + " <old base> " + c.branch + ") and make the prose exact again for what changed, and only that."
     }
@@ -386,7 +398,7 @@ const proseTrack = async (c, carry) => {
   while (turn <= 2 && (r.thaw.length || r.prose.length || r.narrow.length)) {
     await fixTurn(turn)
     const chk = await stepFind(c, c.tag + ':check' + turn, 'check' + turn, head, { lens: 'check' + turn, model: 'opus', phase: 'Fix' },
-      "Check of the diff of a fix to chapter " + c.n + " of the Ki book. Not a fresh reading: only git -C " + REPO + " diff " + text + " " + head + " -- book/ and what the fix report " + c.V + "/fix" + turn + ".md claims" + (thaws ? ", plus the unfreeze reports in " + c.V : "") + ".",
+      "Check of the diff of a fix to chapter " + c.n + " of the Ki book. Not a fresh reading: only git -C " + REPO + " diff " + text + " " + head + " -- book/ and what the fix report " + c.V + "/fix" + turn + ".md claims" + (thawCount ? ", plus the unfreeze reports in " + c.V : "") + ".",
       "Findings it answers: " + (turn === 1 ? passReports.join(', ') : c.V + "/check1.md") + ". For each, by its resolution: fixed, narrowed or deleted as it says, or rejected with evidence that holds when you run it. Anything the diff adds that is unchecked or wrong, by running or reading a primary source. Severity: " + PROC + "/reviewer.md section 5. " + READER)
     r = route(chk.findings)
     parked.push(...r.parked)
@@ -397,17 +409,17 @@ const proseTrack = async (c, carry) => {
   // Two turns are the limit. What is still open is not left silently.
   const stillVisible = r.thaw.filter(serious)
   need(!stillVisible.length, c.tag + ':check', 'a visible failure is still open after 2 turns, so this chapter does not publish: ' + ids(stillVisible) + ' in ' + froms(stillVisible))
-  const openSerious = [...r.prose, ...r.narrow].filter(serious)
+  const openSerious = [...r.prose, ...r.narrow, ...r.thaw].filter(must)
   if (openSerious.length) {
     const path = c.V + "/delete.md"
     const del = await stepDone(c, c.tag + ':delete', 'delete', head + ' ' + ids(openSerious), { model: 'opus', phase: 'Fix', path, schema: RESOLVED, dry: { resolutions: openSerious.map((f) => ({ id: f.id, action: 'deleted', note: 'dry' })) }, check: checkResolved(path, openSerious, ['deleted', 'narrowed']) },
       PROSEBASE(c),
-      "Two turns are over and these Importants are still open: " + ids(openSerious) + ", in " + froms(openSerious) + ". Delete each sentence or card wording they point at, or narrow it to what you verify now. Add nothing. Keep the page true and the steps followable: if deleting it breaks a step the reader needs, answer BLOCKED.",
+      "Two turns are over and these Importants or false reasons are still open: " + ids(openSerious) + ", in " + froms(openSerious) + ". Delete each sentence or card wording they point at, or narrow it to what you verify now. Add nothing. Keep the page true and the steps followable: if deleting it breaks a step the reader needs, answer BLOCKED.",
       "Structured output also has resolutions: one per id, action deleted or narrowed, and a note. head is the branch SHA after your commit.")
     head = await machineGate(c, 'delete', del.head, 'Fix')
     deletedIds = openSerious.map((f) => f.id)
   }
-  parked.push(...r.thaw, ...r.prose.filter((f) => !serious(f)), ...r.optional)
+  parked.push(...r.thaw.filter((f) => !must(f)), ...r.prose.filter((f) => !must(f)), ...r.optional)
 
   await stepDone(c, c.tag + ':ledger', 'ledger', head + ' ' + ids(parked), { model: 'sonnet', phase: 'Integrate' },
     "Clerk's job; change no code and no prose. Append to " + c.parked + " one line per id (id, severity, where, claim, copied from its report; skip an id already there): " + (ids(uniq(parked)) || "none") + ". Reports are in " + c.V + ".",
@@ -419,7 +431,7 @@ const proseTrack = async (c, carry) => {
     "Verify the integrated chapter " + c.n + " of the Ki book in " + REPO + ". In a git-archive copy of tag " + c.tag + " go build -o bookx ./cmd/bookx, then bookx verify --repo " + REPO + " and bookx web --all <dir> --repo " + REPO + ": every {{…}} directive resolved, the rendered cards match book/tests/" + c.tag + ".tests at that tag. bookx lint and bookx doctest of the chapter exit 0. Also bookx verify at main HEAD, read-only. Compare the chapter at tag " + c.tag + " with the text at " + head + ": the same. No worktree left for this chapter and build/tags empty. Findings have owner code unless they are in the chapter's text. " + READER)
   const bad = v.findings.filter(serious)
   need(!bad.length, c.tag + ':verify', 'integrated but not verified, so do not publish: ' + ids(bad) + ' in ' + v.report_path)
-  return { text, head, integrated: integ.head, counts: { pass: all.length, passImportant: all.filter(serious).length, thaws, turns: turn - 1, deleted: deletedIds, parked: uniq(parked.map((f) => f.id)).length, controlVisible, errata: errata.map((f) => f.id) } }
+  return { text, head, integrated: integ.head, counts: { pass: all.length, passImportant: all.filter(serious).length, passFalse: all.filter((f) => f.falsehood).length, thaws: thawCount, turns: turn - 1, deleted: deletedIds, parked: uniq(parked.map((f) => f.id)).length, controlVisible, errata: errata.map((f) => f.id) } }
 }
 
 const integrate = (c) => stepDone(c, c.tag + ':integrate', 'integrate', c.tag, { model: 'sonnet', phase: 'Integrate' },

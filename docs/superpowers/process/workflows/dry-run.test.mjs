@@ -66,7 +66,8 @@ const exec = async (name, args, w) => {
 const W = '/home/scami/kilang-ref/.superpowers/sdd/2026-10-24-ki-plan-01-part1'
 const V = W + '/v4-ch11'
 const base = (extra = {}, answers = {}) => ({ n: 11, part: 'II', proseTask: '60', sessions: ['50', '51'], diagnostics: true, tagFallback: 'ch11: x', controlLens: false, ...extra, dryRun: { answers } })
-const F = (id, severity, owner, kind, visible, where = owner === 'prose' ? 'book/ch11-x.md:3' : 'internal/x/y.go:7') => ({ id, severity, owner, kind, visible, where, claim: 'SECRET-CLAIM ' + id, evidence: 'SECRET-EVIDENCE' })
+const F = (id, severity, owner, kind, visible, where = owner === 'prose' ? 'book/ch11-x.md:3' : 'internal/x/y.go:7') => ({ id, severity, owner, kind, visible, falsehood: false, where, claim: 'SECRET-CLAIM ' + id, evidence: 'SECRET-EVIDENCE' })
+const LIE = (id, severity, owner, kind, visible, where) => ({ ...F(id, severity, owner, kind, visible, where), falsehood: true })
 const finds = (...fs) => ({ findings: fs })
 const chapter = (extra, answers, opts) => { const w = world(opts); return exec('chapter-v4.js', base(extra, answers), w).then((r) => ({ w, r })) }
 const after = (w, label) => w.called.slice(w.called.indexOf(label) + 1)
@@ -77,7 +78,7 @@ const HAPPY = [
   'ch11:impl:T50', 'ch11:review:T50', 'ch11:impl:T51', 'ch11:review:T51',
   'ch11:gate1:code', 'ch11:gate1:truth', 'ch11:gate1:hunt', 'ch11:freeze',
   'ch11:draft', 'ch11:machine:draft',
-  'ch11:pass:facts', 'ch11:pass:whys', 'ch11:pass:apprentice', 'ch11:pass:follower',
+  'ch11:pass:facts', 'ch11:pass:whys', 'ch11:pass:cards', 'ch11:pass:apprentice', 'ch11:pass:follower',
   'ch11:ledger', 'ch11:integrate', 'ch11:verify',
 ]
 
@@ -95,7 +96,7 @@ test('a clean chapter runs each step once, in order, and ends ready to publish',
 })
 
 test('killing a lens mid-round stops the chapter; the other lenses finish; nothing after them runs', async () => {
-  for (const lens of ['facts', 'whys', 'apprentice', 'follower']) {
+  for (const lens of ['facts', 'whys', 'cards', 'apprentice', 'follower']) {
     for (const how of ['null', 'empty', 'throw', {}]) {
       const label = 'ch11:pass:' + lens
       const { w, r } = await chapter({}, {}, { kills: { [label]: how } })
@@ -135,6 +136,8 @@ test('a bad result is a stop too: owner, kind, Nit, emptiness, report path', asy
     'id of another lens': finds(F('pass-whys-1', 'Important', 'prose', 'text', true)),
     'duplicate id': finds(F('pass-facts-1', 'Minor', 'prose', 'text', true), F('pass-facts-1', 'Minor', 'prose', 'text', true)),
     'no evidence': finds({ ...F('pass-facts-1', 'Important', 'prose', 'text', true), evidence: ' ' }),
+    'falsehood missing': finds({ ...F('pass-facts-1', 'Minor', 'prose', 'text', true), falsehood: undefined }),
+    'falsehood not a boolean': finds({ ...F('pass-facts-1', 'Minor', 'prose', 'text', true), falsehood: 'yes' }),
     'checked nothing': { findings: [], checked: 0 },
     'no findings': { findings: undefined },
     'wrong report': { report_path: '/somewhere/else.md' },
@@ -156,6 +159,88 @@ test('a session that is not DONE stops everything after it', async () => {
   assert.equal(r.stopped, 'ch11:impl:T50')
   assert.match(r.reason, /the plan contradicts the spec/)
   none(w, ['ch11:impl:T51', 'ch11:freeze', 'ch11:draft'])
+})
+
+test('the cards reader goes card by card, runs or extrapolates every absolute, and checks promises against the plan', async () => {
+  const { r } = await chapter()
+  const t = r.trace.find((x) => x.label === 'ch11:pass:cards')
+  assert.equal(t.model, 'opus')
+  assert.equal(t.phase, 'Blind pass')
+  for (const words of [/book\/tests\/ch11\.tests/, /card by card and clause by clause/, /record of each card/, /«nunca», «no acabaría», «solo», «ninguno»/, /extrapolate/, /A time limit proves nothing/, /later chapter[^\n]*docs\/superpowers\/plans\/2026-10-24-ki-plan-01-part1\.md/, /All cards, not a sample/]) {
+    assert.match(t.prompt, words)
+  }
+  const nit = await chapter({}, { 'ch11:pass:cards': finds(LIE('pass-cards-1', 'Nit', 'prose', 'text', true, 'book/tests/ch11.tests:9')) })
+  assert.equal(nit.r.status, 'ready-to-publish', 'a truth reader may report a Nit, and it points at the cards')
+  const second = await chapter({ mode: 'second-pass' })
+  assert.ok(second.w.called.includes('ch11:second:cards'))
+})
+
+test('a false reason is fixed whatever its severity: the fix must answer a Nit that says so, and a plain Nit stays optional', async () => {
+  const lie = LIE('pass-whys-1', 'Nit', 'prose', 'text', true)
+  const plain = F('pass-whys-2', 'Nit', 'prose', 'text', true)
+  const { w, r } = await chapter({}, { 'ch11:pass:whys': finds(lie, plain) })
+  assert.equal(r.status, 'ready-to-publish')
+  const fix = r.trace.find((x) => x.label === 'ch11:fix1').prompt
+  assert.match(fix, /Fix these prose findings, by id: pass-whys-1\./)
+  assert.match(fix, /If it costs no words, also: pass-whys-2,/)
+  assert.ok(w.called.includes('ch11:check1'))
+  assert.equal(r.counts.passFalse, 1)
+  assert.match(r.trace.find((x) => x.label === 'ch11:ledger').prompt, /pass-whys-2/, 'the plain Nit is parked')
+  assert.ok(!/one line per id[^\n]*: pass-whys-1/.test(r.trace.find((x) => x.label === 'ch11:ledger').prompt), 'the lie is not')
+
+  const silent = await chapter({}, { 'ch11:pass:whys': finds(lie, plain), 'ch11:fix1': { resolutions: [] } })
+  assert.equal(silent.r.stopped, 'ch11:fix1')
+  assert.match(silent.r.reason, /left silently.*pass-whys-1/)
+  assert.ok(!/left silently.*pass-whys-2/.test(silent.r.reason))
+
+  const alone = await chapter({}, { 'ch11:pass:whys': finds(plain) })
+  none(alone.w, ['ch11:fix1', 'ch11:check1'])
+})
+
+test('a false reason in frozen code narrows the page and goes forward: no unfreeze, not parked', async () => {
+  const lie = LIE('pass-whys-1', 'Minor', 'code', 'other', false)
+  const { w, r } = await chapter({}, { 'ch11:pass:whys': finds(lie) })
+  assert.equal(r.status, 'ready-to-publish')
+  none(w, ['ch11:thaw1:batch'])
+  assert.match(r.trace.find((x) => x.label === 'ch11:fix1').prompt, /no code will fix after the freeze: pass-whys-1/)
+  assert.deepEqual(r.counts.errata, ['pass-whys-1'])
+  assert.equal(r.counts.parked, 0)
+  const nit = await chapter({}, { 'ch11:pass:facts': finds(LIE('pass-facts-1', 'Nit', 'code', 'other', true)) })
+  none(nit.w, ['ch11:thaw1:batch'])
+  assert.deepEqual(nit.r.counts.errata, ['pass-facts-1'])
+  const seen = await chapter({}, { 'ch11:pass:whys': finds(LIE('pass-whys-1', 'Minor', 'code', 'other', true)) })
+  assert.ok(seen.w.called.includes('ch11:thaw1:batch'), 'a Minor the reader sees still travels before the tag')
+  const reviewed = await chapter({}, { 'ch11:pass:whys': finds(F('pass-whys-1', 'Important', 'code', 'message', true)), 'ch11:thaw1:rereview': finds(LIE('thaw1-rereview-1', 'Minor', 'code', 'other', false)) })
+  assert.match(reviewed.r.trace.find((x) => x.label === 'ch11:fix1').prompt, /no code will fix after the freeze: thaw1-rereview-1/)
+  assert.deepEqual(reviewed.r.counts.errata, ['thaw1-rereview-1'])
+})
+
+test('a false reason still open after two turns is deleted, like an Important; a plain Minor is parked', async () => {
+  const passing = { 'ch11:pass:facts': finds(F('pass-facts-1', 'Important', 'prose', 'text', true)), 'ch11:check1': finds(F('check1-1', 'Important', 'prose', 'text', true)) }
+  const lie = await chapter({}, { ...passing, 'ch11:check2': finds(LIE('check2-1', 'Minor', 'prose', 'text', true), LIE('check2-2', 'Minor', 'code', 'other', false), LIE('check2-3', 'Minor', 'code', 'other', true)) })
+  assert.ok(lie.w.called.includes('ch11:delete'))
+  assert.deepEqual([...lie.r.counts.deleted].sort(), ['check2-1', 'check2-2', 'check2-3'])
+  assert.equal(lie.r.counts.parked, 0)
+  const plain = await chapter({}, { ...passing, 'ch11:check2': finds(F('check2-1', 'Minor', 'prose', 'text', true)) })
+  none(plain.w, ['ch11:delete'])
+  assert.equal(plain.r.counts.parked, 1)
+})
+
+test('in the gate and the session reviews a false reason goes to the batch, not the parked file; the re-review carries it to the writer', async () => {
+  const review = await chapter({}, { 'ch11:review:T50': finds(LIE('review-T50-1', 'Minor', 'code', 'other', false)), 'ch11:batch': { resolutions: [] } })
+  assert.equal(review.r.stopped, 'ch11:batch')
+  assert.match(review.r.reason, /left silently.*review-T50-1/)
+  const nit = await chapter({}, { 'ch11:gate1:truth': finds(LIE('gate1-truth-1', 'Nit', 'code', 'other', false)) })
+  assert.ok(nit.r.stopped, 'only the truth readers report Nits, and the gate has none')
+  const minor = await chapter({}, { 'ch11:gate1:truth': finds(LIE('gate1-truth-1', 'Minor', 'code', 'other', false)) })
+  assert.ok(minor.w.called.includes('ch11:gate1:batch'))
+  assert.match(minor.r.trace.find((x) => x.label === 'ch11:gate1:batch').prompt, /gate1-truth-1/)
+  assert.equal(minor.r.code.parked, 0)
+  const carried = await chapter({}, { 'ch11:gate1:truth': finds(F('gate1-truth-1', 'Important', 'code', 'other', false)), 'ch11:gate1:rereview': finds(LIE('gate1-rereview-1', 'Minor', 'code', 'output', false)) })
+  assert.equal(carried.r.status, 'ready-to-publish', 'a Minor false reason is no visible failure: no second iteration, no stop')
+  assert.deepEqual(carried.r.code.carried, ['gate1-rereview-1'])
+  none(carried.w, ['ch11:gate2:code'])
+  assert.match(carried.r.trace.find((x) => x.label === 'ch11:draft').prompt, /do not claim what they deny\. Ids gate1-rereview-1/)
 })
 
 test('after the freeze: a visible failure unfreezes, a test gap narrows, a seen Minor travels, an unseen one is parked', async () => {
@@ -344,7 +429,7 @@ test('prompts: paths and ids, never pasted findings; blind readers; 2 500 words;
     assert.ok(!/git push/.test(t.prompt), t.label + ' tells an agent to push')
     assert.ok(!/(^|[^,r] )git stash/.test(t.prompt.replace(/Never git reset --hard, git clean, git stash/, '')), t.label + ' tells an agent to stash')
   }
-  for (const key of ['facts', 'whys', 'apprentice', 'follower']) {
+  for (const key of ['facts', 'whys', 'cards', 'apprentice', 'follower']) {
     const p = r.trace.find((x) => x.label === 'ch11:pass:' + key).prompt
     assert.match(p, /You are blind/)
     assert.match(p, /its result file, which you look for first and write last/, 'blind must not cost the resume')
@@ -522,6 +607,26 @@ test('part gate: no rate of findings adds a round; what stays open is deleted or
   const silent = await gate({}, { 'gate:theory-ch11': finds(F('theory-ch11-1', 'Important', 'prose', 'text', true)), 'gate:fix:prose': { resolutions: [] } })
   assert.equal(silent.r.stopped, 'gate:fix:prose')
   assert.match(silent.r.reason, /left silently/)
+})
+
+test('part gate: a false reason is fixed whatever its severity, and what stays open is deleted or carried by name', async () => {
+  const lieP = LIE('theory-ch11-1', 'Nit', 'prose', 'text', true)
+  const lieC = LIE('branch-1', 'Minor', 'code', 'other', false)
+  const plainP = F('theory-ch11-2', 'Nit', 'prose', 'text', true)
+  const { r } = await gate({}, { 'gate:theory-ch11': finds(lieP, plainP), 'gate:branch': finds(lieC) })
+  assert.equal(r.status, 'closed')
+  const trace = (label) => r.trace.find((t) => t.label === label).prompt
+  assert.match(trace('gate:fix:prose'), /Findings, by id: theory-ch11-1,/)
+  assert.ok(!trace('gate:fix:prose').includes('theory-ch11-2'))
+  assert.match(trace('gate:fix:code'), /Findings, by id: branch-1,/)
+  assert.match(trace('gate:close'), /what stays: theory-ch11-2 /)
+  const silentP = await gate({}, { 'gate:theory-ch11': finds(lieP), 'gate:fix:prose': { resolutions: [] } })
+  assert.equal(silentP.r.stopped, 'gate:fix:prose')
+  const silentC = await gate({}, { 'gate:branch': finds(lieC), 'gate:fix:code': { resolutions: [] } })
+  assert.equal(silentC.r.stopped, 'gate:fix:code')
+  const open = await gate({}, { 'gate:reverify': finds(LIE('reverify-1', 'Minor', 'prose', 'text', true), LIE('reverify-2', 'Minor', 'code', 'other', false), F('reverify-3', 'Minor', 'prose', 'text', true)) })
+  assert.deepEqual(open.r.counts.deleted, ['reverify-1'])
+  assert.deepEqual(open.r.counts.forward, ['reverify-2'])
 })
 
 test('part gate: practice is a sample by default, an argument otherwise; milestone; bad args', async () => {

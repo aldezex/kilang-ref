@@ -4,10 +4,12 @@
 
 ```
 sessions + reviews → chapter batch → CODE GATE (code ∥ whys and comments ∥ hunt if diagnostics) → one batch → scoped re-review → FREEZE
-→ draft (2 500 words) → lint, doctest → BLIND PASS (facts ∥ whys ∥ apprentice ∥ follower, + control in ch11-13) → one fix → check of the diff (≤2 turns) → integrate → verify
+→ draft (2 500 words) → lint, doctest → BLIND PASS (facts ∥ whys ∥ cards ∥ apprentice ∥ follower, + control in ch11-13) → one fix → check of the diff (≤2 turns) → integrate → verify
 ```
 
 A second gate iteration runs only after a failure someone would see (`message`, `fixit`, `output`, `limit`, `memory-death`), or always with `fixedSecondIteration`. After the freeze, a visible failure, or a Minor in code the reader sees, unfreezes before publishing; a test gap narrows the sentence; an Important still open after 2 turns has its sentence deleted, or stops the chapter if it is a visible failure. A Minor nobody sees is parked in `parked-part-<part>.md`, and only the gate burns that file.
+
+**A false reason is fixed whatever its severity.** The blind trial's hits came as Minor and Nit, so every finding carries `falsehood`: true when it says a reason, a magnitude or an absolute in the text is false. The fix must answer it like an Important: in prose it is fixed, in frozen code it narrows the page and goes forward as an erratum, and two turns later it is deleted. It is never parked or optional, in the gate and the part gate either. CARDS is the reader that finds most of them: `chNN.tests` card by card and clause by clause, with a record of each; it runs or extrapolates every magnitude and absolute, because the trial's misses were a mutant cut at 10 s read as «no acabaría», and it checks promises about later chapters against the plan.
 
 ## Run
 
@@ -40,10 +42,10 @@ A stop for a bad answer names its result file: delete that file if it holds the 
 
 The return value is the summary. `stopped` and `reason` mean **nothing after that step ran**: a dead reader, an empty result, a bad finding, a BLOCKED agent or an open failure, named. `{ stopped: "args" }` means no agent ran. There is no status with `stopped`.
 
-- `status: "ready-to-publish"`: `counts` (`pass`, `passImportant`, `thaws`, `turns`, `deleted`, `parked`, `controlVisible`, `errata`), `code`, `next`, `ask_verdict`, `second_pass_due`, `push`.
+- `status: "ready-to-publish"`: `counts` (`pass`, `passImportant`, `passFalse`, `thaws`, `turns`, `deleted`, `parked`, `controlVisible`, `errata`), `code`, `next`, `ask_verdict`, `second_pass_due`, `push`.
 - `status: "closed"` (gate): `counts` (`perChapter`, `blockingTurns`, `deleted`, `forward`, `parked`), `advice`, `republish`, `push`. `needs_alvaro: true` with a stop: a memory death or broken limit survived 3 turns, and the Part does not close.
 
-Reports sit next to the result files, one per step, with findings under their ids: `gate1-code.md`, `pass-facts.md`, `fix1.md`, `check1.md`. Session reports stay in `task-N-report.md`, `task-N-review.md`. `errata-part-<part>.md` and «Erratas hacia delante» in the parked file are for the next session's `{{diff}}`. Prompts hold paths and ids, never findings.
+Reports sit next to the result files, one per step, with findings under their ids: `gate1-code.md`, `pass-facts.md`, `pass-cards.md`, `fix1.md`, `check1.md`. Session reports stay in `task-N-report.md`, `task-N-review.md`. `errata-part-<part>.md` and «Erratas hacia delante» in the parked file are for the next session's `{{diff}}`. Prompts hold paths and ids, never findings.
 
 ## After `ready-to-publish`
 
