@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,6 +36,32 @@ func manyParams(n int, last string) (params, args string) {
 	as[n-1] = last
 	return strings.Join(ps, ", "), strings.Join(as, ", ")
 }
+
+// heapProbe is a stdout that collects the garbage at each write and notes how
+// many bytes of the heap are still alive. So a program that prints when it has
+// returned from everything it called shows what the machine still holds of those
+// calls, which no count of the machine sees: Stats and the limits of the stack
+// count what is alive for the program, and not what an array keeps behind the
+// length of its slice.
+type heapProbe struct {
+	text strings.Builder
+	live []int64
+}
+
+func (h *heapProbe) Write(p []byte) (int, error) {
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	h.live = append(h.live, int64(ms.HeapAlloc))
+	return h.text.Write(p)
+}
+
+// maxHeld is the most bytes that the tests of heapProbe let a run leave alive.
+// The arrays of the two stacks stay, because the next call can use them, and what
+// they take for the 1000 levels of those tests is far less than this. What a
+// level would leave behind if it were not cleared is 400 slots of 16 bytes, so
+// 6.4 MB for the 1000 levels.
+const maxHeld = 1 << 20
 
 // machineOf returns a new Machine for the program c, and the buffers that its
 // stdout and its stderr go to.
@@ -615,6 +642,45 @@ fn idInt(x: Int) -> Int { x }
 		if errOut.String() != msg || out.Len() != 0 {
 			t.Errorf("after the calls, stderr = %q and stdout = %q, want %q and nothing", errOut.String(), out.String(), msg)
 		}
+
+		// A halt leaves the two stacks full, and the next Call has to let go of
+		// them too. Each program panics 1000 levels down: the first with 400 slots
+		// per level in envs, the second with 400 values per level in the argFrames
+		// of the stack. See heapProbe and maxHeld.
+		t.Setenv("KI_STACK_MB", "")
+		params, args := manyParams(400, "deep(n - 1)")
+		for _, row := range []struct{ name, src, msg string }{
+			{
+				"environments of a halted run",
+				"fn deep(n: Int) -> Int {\n" + manyLets(400) + "  if n == 0 { 1 / n } else { 1 + deep(n - 1) }\n}\nfn say() { print(0) }",
+				"panic: division by zero at test.ki:402:17\n",
+			},
+			{
+				"argument frames of a halted run",
+				"fn g(" + params + ") -> Int { p0 }\nfn deep(n: Int) -> Int { if n == 0 { 1 / n } else { g(" + args + ") } }\nfn say() { print(0) }",
+				"panic: division by zero at test.ki:2:40\n",
+			},
+		} {
+			c := testsupport.Compile(t, row.src)
+			probe, errOut := new(heapProbe), new(bytes.Buffer)
+			m := interp.New(c.Core, &c.Session.Sources, probe, errOut)
+			deep, say := testsupport.FunNamed(t, c, "deep"), testsupport.FunNamed(t, c, "say")
+			if _, ok := m.Call(say, nil); !ok {
+				t.Errorf("%s: the first Call(say) halted", row.name)
+			}
+			if v, ok := m.Call(deep, []interp.Value{interp.IntV{V: 1000}}); v != nil || ok {
+				t.Errorf("%s: Call(deep, 1000) = (%#v, %v), want (nil, false)", row.name, v, ok)
+			}
+			if _, ok := m.Call(say, nil); !ok {
+				t.Errorf("%s: the second Call(say) halted", row.name)
+			}
+			if errOut.String() != row.msg || probe.text.String() != "0\n0\n" {
+				t.Errorf("%s: stderr %q and stdout %q, want %q and two lines of 0", row.name, errOut.String(), probe.text.String(), row.msg)
+			}
+			if len(probe.live) == 2 && probe.live[1]-probe.live[0] >= maxHeld {
+				t.Errorf("%s: the machine still holds %d bytes after the next Call, want under %d", row.name, probe.live[1]-probe.live[0], maxHeld)
+			}
+		}
 	})
 
 	t.Run("call_with_args", func(t *testing.T) {
@@ -963,6 +1029,30 @@ fn b(n: Int, acc: Int) -> Int {
 		// one starts. Without that, the three g would pile up: five in all.
 		if s := m.Stats(); s.MaxEnvs != 3 {
 			t.Errorf("Stats().MaxEnvs = %d, want 3", s.MaxEnvs)
+		}
+
+		// What returns also has to leave the arrays behind the slices. f goes 1000
+		// levels down and, on the way back up, each level calls big. Each level is
+		// shallower than the one before, so nothing overwrites what the earlier
+		// calls of big dropped. In the first row that is the environment of big, in
+		// envs. In the second it is also the argFrame of the call of g, on the
+		// stack: that call is in tail position, so no retFrame takes the place of
+		// the argFrame. See heapProbe and maxHeld.
+		t.Setenv("KI_STACK_MB", "")
+		params, args := manyParams(400, "n")
+		for _, row := range []struct{ name, big string }{
+			{"environment of 400 slots", "fn big(n: Int) -> Int {\n" + manyLets(400) + "  n\n}\n"},
+			{"tail call of 400 arguments", "fn g(" + params + ") -> Int { p0 }\nfn big(n: Int) -> Int { g(" + args + ") }\n"},
+		} {
+			c := testsupport.Compile(t, row.big+"fn f(n: Int) -> Int { if n == 0 { 0 } else { let a = f(n - 1)\n let b = big(n)\n a + b - n } }\nfn main() {\n print(0)\n print(f(1000))\n}")
+			probe, errOut := new(heapProbe), new(bytes.Buffer)
+			h := interp.New(c.Core, &c.Session.Sources, probe, errOut).RunMain()
+			if h != (interp.Halt{Code: 0}) || probe.text.String() != "0\n0\n" || errOut.Len() != 0 {
+				t.Errorf("%s: RunMain() = %+v, stdout %q, stderr %q, want Halt{0}, two lines of 0 and nothing", row.name, h, probe.text.String(), errOut.String())
+			}
+			if len(probe.live) == 2 && probe.live[1]-probe.live[0] >= maxHeld {
+				t.Errorf("%s: the machine still holds %d bytes after the return, want under %d", row.name, probe.live[1]-probe.live[0], maxHeld)
+			}
 		}
 	})
 

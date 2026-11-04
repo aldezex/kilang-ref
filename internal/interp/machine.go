@@ -75,8 +75,8 @@ func (matchFrame) frame() {}
 // pushes one, and it stays on the stack until the function returns; a call in
 // tail position reuses the one that is there (see enter). env is the index in
 // envs of the environment of the function that made the call: applying the frame
-// cuts envs back to it, so that the environment of the function that returns is
-// no longer in envs, and hands the value on to the frame below.
+// clears the environment of the function that returns and cuts envs back to env,
+// so that it is no longer in envs, and hands the value on to the frame below.
 type retFrame struct{ env int }
 
 func (retFrame) frame() {}
@@ -245,8 +245,12 @@ func (m *Machine) Call(f core.FunID, args []Value) (Value, bool) {
 		panic(fmt.Sprintf("interp: Call of function %d, which has no body", f))
 	}
 	entry := m.newEnv(fun, args)
+	// A run that halted left both stacks full. They are cleared before the cut,
+	// for the reason in run.
+	clear(m.envs)
 	m.envs = append(m.envs[:0], entry)
 	m.slots = len(entry)
+	clear(m.stack)
 	m.stack = m.stack[:0]
 	m.halt = nil
 	m.stats.MaxEnvs = max(m.stats.MaxEnvs, len(m.envs))
@@ -269,11 +273,14 @@ func (m *Machine) run() (Value, bool) {
 			m.stats.Steps++
 			f := m.stack[n-1]
 			// Cutting the slice does not clear the frame it drops: the backing
-			// array still points at it, and at the values it holds, until a later
-			// push overwrites it. The same goes for the environments that
-			// applyFrame cuts off envs. Nothing here needs it otherwise, because
-			// `ki run` makes one machine for one program and then ends; a machine
-			// reused after a deep run would have to clear them.
+			// array would still point at it, and at the values it holds, until a
+			// later push overwrites it. One run is enough for that to fill the
+			// memory, with nothing counting it: a recursion that comes back up
+			// calls a function at each level, and each level is shallower than the
+			// one before, so nothing overwrites what the earlier calls dropped. So
+			// each cut of stack and of envs clears what it drops: here, in
+			// applyFrame and in Call.
+			m.stack[n-1] = nil
 			m.stack = m.stack[:n-1]
 			m.applyFrame(f, m.val)
 		default:
@@ -409,7 +416,9 @@ func (m *Machine) applyFrame(f frame, v Value) {
 	case retFrame:
 		// The function that returns has the last environment, and it is the only
 		// one above that of its caller: each frame of this kind has one of its own.
+		// It is cleared before the cut, for the reason in run.
 		m.slots -= len(m.envs[len(m.envs)-1])
+		m.envs[len(m.envs)-1] = nil
 		m.envs = m.envs[:f.env+1]
 		m.ret(v)
 	default:
