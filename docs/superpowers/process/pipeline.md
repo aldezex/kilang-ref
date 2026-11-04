@@ -1,6 +1,6 @@
 # The chapter pipeline
 
-`workflows/chapter-v4.js` takes one chapter from its first session to ready to publish. `workflows/part-gate.js` closes a Part after its chapters are published, and replaces the triple check. They live here so that no session owns them; the reasons are in `.superpowers/speed/report.md`.
+`workflows/chapter-v4.js` takes one chapter from its first session to ready to publish. `workflows/part-gate.js` closes a Part after its chapters are published, and replaces the triple check. They live here so that no session owns them; the reasons are in `.superpowers/speed/report.md`. The way back is `workflows/old/`: the v3 chapter script and `ki-go-chapter-close-2.js`, as they ran, not maintained.
 
 ```
 sessions + reviews → chapter batch → CODE GATE (code ∥ whys and comments ∥ hunt if diagnostics) → one batch → scoped re-review → FREEZE
