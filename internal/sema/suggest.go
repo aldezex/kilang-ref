@@ -50,8 +50,9 @@ func suggest(name string, candidates []string) (string, bool) {
 // candidates returns the names that the unknown name being resolved could have
 // meant: the ones name looks for before it gives up, that is, the local
 // variables visible at this place, the definitions of the module being walked
-// and the `pub` definitions of the prelude. They come sorted and each one once,
-// so the list does not depend on the order they were gathered in.
+// (functions and constructors: a type is in the other name space) and the `pub`
+// definitions of the prelude. They come sorted and each one once, so the list
+// does not depend on the order they were gathered in.
 func (r *resolver) candidates() []string {
 	// A set, because a variable can have the name of a function and then the
 	// name is one candidate, not two. Its keys come out in a Go map's order,
@@ -64,11 +65,29 @@ func (r *resolver) candidates() []string {
 	// from a walk over a map of tops. A repeated definition is skipped: the name
 	// stands for the first one, and lookupDef looks at that one's `pub`.
 	for id, def := range r.rp.Defs.All() {
-		if r.tops[def.Module][def.Name] != id {
+		if def.Kind == DefType || r.tops[def.Module][def.Name] != id {
 			continue
 		}
 		if def.Module == r.mod || (def.Module == PreludeModule && def.Pub) {
 			set[r.in.String(def.Name)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
+// visibleTypes returns the names of the types that a type annotation in module
+// mod can name, for the help line of an unknown type: the types that mod
+// declares and the `pub` types of the prelude, and not the builtins, which the
+// caller adds. They come sorted and each one once, for the reason candidates
+// gives. A repeated declaration is skipped: the name stands for the first.
+func (rp *ResolvedProgram) visibleTypes(mod ModuleIdx, in *base.Interner) []string {
+	set := make(map[string]bool)
+	for id, def := range rp.Defs.All() {
+		if def.Kind != DefType || rp.types[def.Module][def.Name] != id {
+			continue
+		}
+		if def.Module == mod || (def.Module == PreludeModule && def.Pub) {
+			set[in.String(def.Name)] = true
 		}
 	}
 	return slices.Sorted(maps.Keys(set))

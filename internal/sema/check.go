@@ -53,8 +53,14 @@ type TypedProgram struct {
 //
 // Signatures come first. Every function gets its type from its annotations:
 // a parameter without one gets a new variable, and a function without `->`
-// returns `()`. A type name that is not `Int`, `Float`, `Bool` or `()` is E0406
-// (an unknown type), reported once where it is written, and has the error type.
+// returns `()`. A type name is a type that the program declares (the module's
+// own, or a `pub` one of the prelude: see ResolvedProgram.LookupType), or `Int`,
+// `Float`, `Bool`, or `()`; any other is E0406 (an unknown type), reported once
+// where it is written, and has the error type. So has a type that is declared,
+// until the pass that makes the types of the declarations (Declare, in the next
+// session) gives it one: nothing is compared with it, and what has it is not a
+// mistake. The type of a constructor is the error type too, for the same
+// reason.
 // Then `main`, if the user's file has one, is held to its type, `() -> ()`
 // (E0404). Only then are the bodies checked, each against the return type of
 // its function (the tail of a body is the reason ReasonBlockTail). All the
@@ -119,6 +125,7 @@ type checker struct {
 
 	// The module whose bodies are being checked, its tree, its names and its
 	// table of types (a slice of tp.Modules, so a write here is a write there).
+	mod       ModuleIdx
 	m         *syntax.Module
 	rm        *ModuleRes
 	exprTypes []TypeID
@@ -183,8 +190,13 @@ func (c *checker) signatures() {
 
 // signature returns the function type of def, and gives its parameters their
 // types. A parameter with an annotation has that type; one without gets a new
-// variable. A function without `->` returns `()`.
+// variable. A function without `->` returns `()`. The definition of a type or of
+// a constructor has the error type: it is not a function, and nothing can be
+// compared with it yet.
 func (c *checker) signature(def Def) TypeID {
+	if def.Kind == DefType || def.Kind == DefCtor {
+		return c.errT
+	}
 	m := c.mods[def.Module]
 	it := m.ItemNodes.Get(def.Item)
 	locals := c.res.Modules[def.Module].ParamLocals[def.Item]
@@ -192,7 +204,7 @@ func (c *checker) signature(def Def) TypeID {
 	for i, p := range m.Params(it.Params) {
 		var ty TypeID
 		if p.HasType {
-			ty = c.typeOf(m, p.Type)
+			ty = c.typeOf(def.Module, p.Type)
 		} else {
 			ty = c.tp.Types.FreshVar(Origin{
 				Span: c.res.Locals.Get(locals[i]).Span,
@@ -204,18 +216,27 @@ func (c *checker) signature(def Def) TypeID {
 	}
 	ret := c.unitT
 	if it.HasRet {
-		ret = c.typeOf(m, it.Ret)
+		ret = c.typeOf(def.Module, it.Ret)
 	}
 	return c.tp.Types.Fun(params, ret, c.tp.Types.EmptyRow())
 }
 
-// typeOf returns the type that the type expression id of module m writes.
-func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
-	te := m.Types.Get(id)
+// typeOf returns the type that the type expression id of module mod writes.
+//
+// A name is looked up among the types that the program declares first, and then
+// among the builtins, so a declared type wins over `Bool` (see LookupType). A
+// declared type, and one that the parser could not read after its name, have the
+// error type, silently: for the second the parser has said what is wrong, and
+// for the first nothing makes the type of a declaration until Declare does.
+func (c *checker) typeOf(mod ModuleIdx, id syntax.TypeExprID) TypeID {
+	te := c.mods[mod].Types.Get(id)
 	switch te.Kind {
 	case syntax.TypeUnit:
 		return c.unitT
 	case syntax.TypeNamed:
+		if _, ok := c.res.LookupType(mod, te.Name); ok {
+			return c.errT
+		}
 		switch c.in.String(te.Name) {
 		case "Int":
 			return c.intT
@@ -224,9 +245,10 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 		case "Bool":
 			return c.boolT
 		}
-		// Not a type Ki has: reported here, once, where it is written, and the
-		// error type from then on, which says nothing more wherever it is used.
-		c.unknownTypeError(te.Span, c.in.String(te.Name))
+		// Not a type that is in scope: reported here, once, where it is
+		// written, and the error type from then on, which says nothing more
+		// wherever it is used.
+		c.unknownTypeError(mod, te.Span, c.in.String(te.Name))
 		return c.errT
 	case syntax.TypeError:
 		return c.errT
@@ -235,14 +257,20 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 	}
 }
 
-// unknownTypeError reports E0406 for the type name that is written at. The
-// help and its edit are there when a type Ki has is spelled almost like it
-// (`Bol` for `Bool`), as for an unknown name.
-func (c *checker) unknownTypeError(at base.Span, name string) {
-	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
-		WithNote("the types Ki knows: `Int`, `Float`, `Bool` and `()`")
-	if best, ok := suggest(name, []string{"Int", "Float", "Bool"}); ok {
-		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
+// unknownTypeError reports E0406 for the type name that is written at, in module
+// mod. The help and its edit are there when a type in scope, a builtin or one
+// that the program declares, is spelled almost like it (`Bol` for `Bool`,
+// `Shap` for `Shape`), as for an unknown name. There is no note: what is in
+// scope depends on the program.
+func (c *checker) unknownTypeError(mod ModuleIdx, at base.Span, name string) {
+	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type in this scope"})
+	// Like the help of an unknown name, it costs a pass over the candidates,
+	// which nobody reads once the sink is full.
+	if !c.sink.Truncated() {
+		candidates := append([]string{"Int", "Float", "Bool"}, c.res.visibleTypes(mod, c.in)...)
+		if best, ok := suggest(name, candidates); ok {
+			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
+		}
 	}
 	c.sink.Report(d)
 }
@@ -316,7 +344,7 @@ func (c *checker) bodies() {
 		if !it.HasBody {
 			continue
 		}
-		c.m, c.rm, c.exprTypes = m, &c.res.Modules[def.Module], c.tp.Modules[def.Module].ExprTypes
+		c.mod, c.m, c.rm, c.exprTypes = def.Module, m, &c.res.Modules[def.Module], c.tp.Modules[def.Module].ExprTypes
 		because := def.Span
 		if it.HasRet {
 			because = m.Types.Get(it.Ret).Span
@@ -444,7 +472,7 @@ func (c *checker) stmts(e syntax.Expr) {
 			// has the type of the initializer.
 			var ty TypeID
 			if s.HasType {
-				ty = c.typeOf(c.m, s.Type)
+				ty = c.typeOf(c.mod, s.Type)
 				c.check(s.Expr, ty, Reason{Kind: ReasonLetAnnotation, Because: c.m.Types.Get(s.Type).Span})
 			} else {
 				ty = c.infer(s.Expr)

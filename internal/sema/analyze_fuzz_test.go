@@ -58,6 +58,13 @@ func FuzzAnalyze(f *testing.F) {
 	f.Add("fn main(\n  x: Int\n) -> Int { x }")
 	f.Add("fn main() ->\n  Int { 1 }")
 	f.Add("fn f(x: Bol) {}")
+	// Types and constructors: E0302 for a type and for a constructor, E0406 with
+	// its edit on a declared type, the attributes on a type (E0304 and E0305
+	// delete one on a single line), and a type that the parser could not read,
+	// whose name and constructors are used afterwards.
+	f.Add("type S { A }\ntype S { A }\nfn f(s: Ss) { A }")
+	f.Add("#[extern(\"k\")] type T { A }\n#[inline] type U = Int")
+	f.Add("type S { A(, B }\nfn f(s: S) { A\n B }")
 	f.Fuzz(func(t *testing.T, src string) {
 		p := testsupport.Analyze(t, src)
 		sm := &p.Session.Sources

@@ -294,9 +294,11 @@ func (p *parser) syncStatement() {
 	}
 }
 
-// isItemStart reports whether a token of kind k can start an item: `fn`, `pub`
-// and `#` start the only kind of item there is so far, and `type`, `trait`,
-// `impl`, `effect` and `import` those of later parts of the book.
+// isItemStart reports whether a token of kind k can start an item: `fn`, `pub`,
+// `#` and `type` start the kinds of item there are so far (`type` is read since
+// chapter 11), and `trait`, `impl`, `effect` and `import` those of later parts
+// of the book. A broken `type` is skipped up to the next of them like a broken
+// function, so the item after it is read (see typeItem).
 func isItemStart(k TokenKind) bool {
 	switch k {
 	case KwFn, KwPub, Hash, KwType, KwTrait, KwImpl, KwEffect, KwImport:

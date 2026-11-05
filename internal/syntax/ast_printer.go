@@ -13,6 +13,9 @@ import (
 // prints as the empty string. The forms are
 //
 //	([pub ]fn NAME [(attrs (NAME "arg"...)...)] (params (NAME T|_)...) (ret T|_) BODY|none)
+//	([pub ]type NAME [(attrs ...)] (sum (NAME (FNAME T)...)...))
+//	([pub ]type NAME [(attrs ...)] (record (FNAME T)...))
+//	([pub ]type NAME [(attrs ...)] (alias T))
 //	(block S... [tail])      (let NAME T|_ E)      (expr E)
 //	(if C T [E])             (OP L R)              (neg E)    (not E)
 //	(call F ARGS...)         42    true    ()      NAME       (error)
@@ -21,6 +24,11 @@ import (
 // where T is a type (`Int`, `()`, `(error)`) and `_` stands for a type that the
 // program did not write. The arguments of an attribute are quoted as
 // strconv.Quote does. An attribute list that is empty is left out.
+//
+// A type lists its variants, each with its fields, or its fields, or the type
+// it stands for. A field is `(FNAME T)`, and FNAME is `_` for a positional one:
+// `type Option { None, Some(Int) }` is `(type Option (sum (None) (Some (_ Int))))`
+// and `type Point { x: Float }` is `(type Point (record (x Float)))`.
 //
 // Parse produces every one of these forms; the printer's own tests build their
 // trees by hand, so that they do not depend on the parser.
@@ -62,18 +70,7 @@ func (pr *printer) item(it Item) {
 		}
 		pr.str("fn ")
 		pr.sym(it.Name)
-		if it.Attrs.Count > 0 {
-			pr.str(" (attrs")
-			for _, a := range pr.m.Attrs(it.Attrs) {
-				pr.str(" (")
-				pr.sym(a.Name)
-				for _, arg := range a.Args {
-					pr.str(" " + strconv.Quote(arg))
-				}
-				pr.str(")")
-			}
-			pr.str(")")
-		}
+		pr.attrs(it.Attrs)
 		pr.str(" (params")
 		for _, par := range pr.m.Params(it.Params) {
 			pr.str(" (")
@@ -91,10 +88,74 @@ func (pr *printer) item(it Item) {
 			pr.str("none")
 		}
 		pr.str(")")
+	case ItemType:
+		pr.str("(")
+		if it.Pub {
+			pr.str("pub ")
+		}
+		pr.str("type ")
+		pr.sym(it.Name)
+		pr.attrs(it.Attrs)
+		switch it.Form {
+		case TypeFormSum:
+			pr.str(" (sum")
+			for _, v := range pr.m.Variants(it.Variants) {
+				pr.str(" (")
+				pr.sym(v.Name)
+				pr.fields(v.Fields)
+				pr.str(")")
+			}
+			pr.str(")")
+		case TypeFormRecord:
+			pr.str(" (record")
+			pr.fields(it.Fields)
+			pr.str(")")
+		case TypeFormAlias:
+			pr.str(" (alias ")
+			pr.optType(it.Alias, true)
+			pr.str(")")
+		default:
+			panic("unreachable")
+		}
+		pr.str(")")
 	case ItemError:
 		pr.str("(error)")
 	default:
 		panic("unreachable")
+	}
+}
+
+// attrs appends the attribute list r, ` (attrs (NAME "arg"...)...)`, or nothing
+// if it is empty.
+func (pr *printer) attrs(r base.ListRange) {
+	if r.Count == 0 {
+		return
+	}
+	pr.str(" (attrs")
+	for _, a := range pr.m.Attrs(r) {
+		pr.str(" (")
+		pr.sym(a.Name)
+		for _, arg := range a.Args {
+			pr.str(" " + strconv.Quote(arg))
+		}
+		pr.str(")")
+	}
+	pr.str(")")
+}
+
+// fields appends the fields in r, each as ` (NAME T)`, with `_` for the name of
+// a positional field.
+func (pr *printer) fields(r base.ListRange) {
+	for _, f := range pr.m.Fields(r) {
+		pr.str(" (")
+		if f.HasName {
+			pr.sym(f.Name)
+		} else {
+			pr.str("_")
+		}
+		pr.str(" ")
+		pr.optType(f.Type, true)
+		pr.str(")")
 	}
 }
 

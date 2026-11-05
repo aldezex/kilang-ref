@@ -238,4 +238,50 @@ func TestPrinter(t *testing.T) {
 			t.Errorf("error item: printed\n%s\nwant\n%s", got, want)
 		}
 	})
+
+	t.Run("type_items", func(t *testing.T) {
+		// The three forms of `type`, built by hand: a sum whose variants have no
+		// fields, positional fields and named ones, a record, and an alias; and
+		// the prefix `pub` and the attribute list. A positional field prints `_`
+		// where a named one prints its name, and a type that is an error prints
+		// in place.
+		b := newTree()
+		float := b.named("Float")
+		unit := b.m.Types.Push(syntax.TypeExpr{Kind: syntax.TypeUnit})
+		bad := b.m.Types.Push(syntax.TypeExpr{Kind: syntax.TypeError})
+		// The fields of the three variants, one list after the other.
+		b.m.FieldPool = []syntax.Field{
+			{Name: b.sym("radius"), HasName: true, Type: float},
+			{Type: unit},
+			{Type: bad},
+		}
+		b.m.VariantPool = []syntax.Variant{
+			{Name: b.sym("Circle"), Fields: base.ListRange{First: 0, Count: 1}},
+			{Name: b.sym("Wrap"), Fields: base.ListRange{First: 1, Count: 2}},
+			{Name: b.sym("None")},
+		}
+		b.m.FieldPool = append(b.m.FieldPool, syntax.Field{Name: b.sym("x"), HasName: true, Type: float})
+		b.m.AttrPool = []syntax.Attr{{Name: b.sym("a"), Args: []string{"q"}}}
+		sum := b.m.ItemNodes.Push(syntax.Item{Kind: syntax.ItemType, Name: b.sym("Shape"), Form: syntax.TypeFormSum,
+			Variants: base.ListRange{First: 0, Count: 3}})
+		record := b.m.ItemNodes.Push(syntax.Item{Kind: syntax.ItemType, Name: b.sym("Point"), Form: syntax.TypeFormRecord, Pub: true,
+			Fields: base.ListRange{First: 3, Count: 1}, Attrs: base.ListRange{First: 0, Count: 1}})
+		alias := b.m.ItemNodes.Push(syntax.Item{Kind: syntax.ItemType, Name: b.sym("Meters"), Form: syntax.TypeFormAlias, Alias: float})
+		b.m.Items = []syntax.ItemID{sum, record, alias}
+		want := "(type Shape (sum (Circle (radius Float)) (Wrap (_ ()) (_ (error))) (None)))\n" +
+			"(pub type Point (attrs (a \"q\")) (record (x Float)))\n" +
+			"(type Meters (alias Float))\n"
+		if got := syntax.PrintModule(&b.m, b.in); got != want {
+			t.Errorf("type items: printed\n%s\nwant\n%s", got, want)
+		}
+
+		// A form that no ItemType has is a bug of whoever built the tree.
+		b.m.ItemNodes.Ptr(sum).Form = syntax.TypeFormAlias + 1
+		defer func() {
+			if r := recover(); r != "unreachable" {
+				t.Errorf("an unknown form made PrintModule panic with %#v, want \"unreachable\"", r)
+			}
+		}()
+		syntax.PrintModule(&b.m, b.in)
+	})
 }

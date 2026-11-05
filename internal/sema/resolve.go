@@ -37,18 +37,35 @@ const (
 	DefExternFn
 )
 
-// Def is a top-level definition: today, a function.
+// The kinds of Part II come after DefExternFn, in the order the chapters add
+// them, so that no kind of Part I changes its value.
+const (
+	// DefType is a `type` declaration. It lives in the name space of the types,
+	// which only a type annotation looks in: no expression stands for one.
+	DefType DefKind = DefExternFn + 1 + iota
+	// DefCtor is a variant of a sum type. It lives in the name space of the
+	// values, with the functions: `Circle(1.0)` and `None` are names of it. Its
+	// Item is the item of the type that declares it (what else it holds, the
+	// fields, is in the tree, for the pass that makes the types of the
+	// declarations), and its Pub is the type's.
+	DefCtor
+)
+
+// Def is a top-level definition: a function, a type or a constructor.
 type Def struct {
 	Name base.Symbol
 	Kind DefKind
-	// Module is the module that defines it. Item is the function's item in
-	// that module's tree.
+	// Module is the module that defines it. Item is the item in that module's
+	// tree: the function's, the type's or, for a constructor, the type that
+	// declares it.
 	Module ModuleIdx
 	Item   syntax.ItemID
-	// Span is the span of the name where it is defined (`fib` in `fn fib`).
+	// Span is the span of the name where it is defined (`fib` in `fn fib`,
+	// `Circle` in the variant `Circle(r: Float)`).
 	Span base.Span
-	// Pub says whether it was written with `pub`: the prelude's `pub`
-	// definitions are the ones that other modules can see.
+	// Pub says whether it was written with `pub` (a constructor takes its
+	// type's): the prelude's `pub` definitions are the ones that other modules
+	// can see.
 	Pub bool
 	// ExternName is the name that DefExternFn functions go by in the
 	// interpreter: the first argument of the attribute (`ki_print_int`). It is
@@ -136,6 +153,35 @@ type ResolvedProgram struct {
 	// name resolution (`ki run` reports it).
 	Main    DefID
 	HasMain bool
+
+	// types[m] maps each name declared as a type at the top level of module m to
+	// its first definition, and brokenTypes holds the types that the parser could
+	// not read after their name; LookupType is the only reader.
+	types       []map[base.Symbol]DefID
+	brokenTypes map[moduleName]bool
+}
+
+// LookupType says what the type name written in module mod stands for among the
+// types that programs declare, and whether it stands for any: the module's own
+// definition first; failing that a type of the module that the parser could not
+// read, which is a Res of kind ResError (the parser has reported the mistake,
+// and nothing more is said about what has that type); and failing that a `pub`
+// type of the prelude, as lookupDef does for values. The builtin types are not
+// here: a name that is not found is for the caller to look up among them, so a
+// type that a module declares wins over a builtin and over the prelude.
+func (rp *ResolvedProgram) LookupType(mod ModuleIdx, name base.Symbol) (Res, bool) {
+	if def, ok := rp.types[mod][name]; ok {
+		return Res{Kind: ResDef, Def: def}, true
+	}
+	if rp.brokenTypes[moduleName{mod, name}] {
+		return Res{Kind: ResError}, true
+	}
+	if mod != PreludeModule {
+		if def, ok := rp.types[PreludeModule][name]; ok && rp.Defs.Get(def).Pub {
+			return Res{Kind: ResDef, Def: def}, true
+		}
+	}
+	return Res{}, false
 }
 
 // Resolve finds what the names of a program stand for. mods are its modules,
@@ -163,8 +209,10 @@ type ResolvedProgram struct {
 // line "did you mean `fib`?" and the fix-it that writes `fib` if a variable or
 // definition it could have stood for is spelled almost like it, and with a
 // label on the `let` and a note if the name is the one that `let` binds;
-// E0302 for a function defined twice in a module, E0304 for `#[extern]` in the
-// user's module and E0305 for any other attribute, in any module. The last two
+// E0302 for a function, a type or a constructor defined twice in a module (a
+// type and a constructor of one name are not a repeat: types and values are two
+// name spaces), E0304 for `#[extern]` in the user's module and E0305 for any
+// other attribute, in any module, a `type` included. The last two
 // have the fix-it that removes the attribute when it is on one line, except
 // E0304 on a function with no body (the edit alone would leave a function
 // without a body), and E0305 in the standard library has the one that fixes the
@@ -176,8 +224,15 @@ type ResolvedProgram struct {
 // ResError wherever the module uses it, and Resolve reports nothing for it (the
 // parser has reported the signature), so a call to it does not add an E0301 to
 // that error. It is not a definition (it has no Def), a definition of the same
-// name in the module wins over it and a variable hides it. Resolve does not
-// change the modules.
+// name in the module wins over it and a variable hides it. A `type` that the
+// parser could not read after its name is the same for the name of the type, in
+// the space of the types (LookupType), and for the constructors that the parser
+// read before the mistake, in the space of the values. Resolve does not change
+// the modules.
+//
+// What a name in a type annotation stands for is not decided here: Check asks
+// LookupType, because the annotation is an E0406 only when the builtin types do
+// not have the name either.
 //
 // The second pass recurses once per level of the tree. Parse bounds that depth
 // (MaxNesting levels, and the operators and calls of one statement, MaxChain,
@@ -188,6 +243,8 @@ func Resolve(mods []*syntax.Module, user ModuleIdx, in *base.Interner, sink *dia
 	r.rp.Modules = make([]ModuleRes, len(mods))
 	r.tops = make([]map[base.Symbol]DefID, len(mods))
 	r.broken = make(map[moduleName]bool)
+	r.rp.types = make([]map[base.Symbol]DefID, len(mods))
+	r.rp.brokenTypes = make(map[moduleName]bool)
 	for i, m := range mods {
 		r.rp.Modules[i] = ModuleRes{
 			ExprRes:     make([]Res, m.Exprs.Len()),
@@ -195,6 +252,7 @@ func Resolve(mods []*syntax.Module, user ModuleIdx, in *base.Interner, sink *dia
 			ParamLocals: make([][]LocalID, m.ItemNodes.Len()),
 		}
 		r.tops[i] = make(map[base.Symbol]DefID)
+		r.rp.types[i] = make(map[base.Symbol]DefID)
 	}
 	r.collect()
 	r.bodies()
@@ -209,14 +267,16 @@ type resolver struct {
 	sink *diag.Sink
 	rp   *ResolvedProgram
 
-	// tops[m] maps each name defined at the top level of module m to its first
-	// definition. The maps are only ever looked up, never iterated, so nothing
-	// depends on the order of a map.
+	// tops[m] maps each name defined at the top level of module m, in the space
+	// of the values (functions and constructors), to its first definition. The
+	// types are in the other space: rp.types. The maps are only ever looked up,
+	// never iterated, so nothing depends on the order of a map.
 	tops []map[base.Symbol]DefID
 
 	// broken holds the functions whose signature the parser could not read
-	// (error items that kept their name). They are not definitions, but they
-	// exist: see lookupDef. None is the zero value.
+	// (error items that kept their name) and the constructors of the types that
+	// it could not read, the ones it read before the mistake. They are not
+	// definitions, but they exist: see lookupDef. None is the zero value.
 	broken map[moduleName]bool
 
 	// The module whose function bodies the second pass is walking, its tree
@@ -250,7 +310,8 @@ type letName struct {
 	span base.Span
 }
 
-// collect is the first pass: it makes a Def for every function of every module.
+// collect is the first pass: it makes a Def for every function and type of every
+// module, and for every constructor, which follow their type.
 func (r *resolver) collect() {
 	for i, m := range r.mods {
 		mod := ModuleIdx(i)
@@ -259,15 +320,10 @@ func (r *resolver) collect() {
 			switch it.Kind {
 			case syntax.ItemFn:
 				r.define(mod, id, it)
+			case syntax.ItemType:
+				r.defineType(mod, id, it)
 			case syntax.ItemError:
-				// The parser could not read it and has reported that. If it
-				// had read the name of a function before the signature went
-				// wrong, the function exists, only without a signature that
-				// anything can use: remember the name, so that a call to it
-				// is not an unknown name (see lookupDef).
-				if it.Name != base.NoSymbol {
-					r.broken[moduleName{mod, it.Name}] = true
-				}
+				r.markBroken(mod, it)
 			default:
 				panic("unreachable")
 			}
@@ -278,32 +334,82 @@ func (r *resolver) collect() {
 	}
 }
 
+// markBroken records what an item that the parser could not read leaves
+// behind: its name, if the parser read it before the item went wrong. The
+// function or the type exists, only without anything that can be used: the name
+// is remembered so that a use of it is not an unknown name (see lookupDef and
+// LookupType), the parser having reported the mistake. For a type that includes
+// the constructors the parser read: the ones before the mistake, the one it is
+// in and the ones after it, since a mistake in a sum's body ends one variant and
+// not the rest of the body. Only where the body itself stops making sense (an
+// item that starts in the middle of it, the end of the file) are the constructors
+// that remain lost.
+func (r *resolver) markBroken(mod ModuleIdx, it syntax.Item) {
+	if it.Name == base.NoSymbol {
+		return
+	}
+	if it.ErrorOf != syntax.ItemType {
+		r.broken[moduleName{mod, it.Name}] = true
+		return
+	}
+	r.rp.brokenTypes[moduleName{mod, it.Name}] = true
+	for _, v := range r.mods[mod].Variants(it.Variants) {
+		r.broken[moduleName{mod, v.Name}] = true
+	}
+}
+
 // define adds the function it, the item id of module mod, to the program. A
 // name that the module already defines is E0302, and the Def is added all the
 // same, so the item has one and the name keeps standing for the first.
 func (r *resolver) define(mod ModuleIdx, id syntax.ItemID, it syntax.Item) {
 	kind, externName := r.attributes(mod, r.mods[mod], it)
-	def := r.rp.Defs.Push(Def{
+	r.add(r.tops[mod], Def{
 		Name: it.Name, Kind: kind, Module: mod, Item: id, Span: it.NameSpan, Pub: it.Pub, ExternName: externName,
 	})
-	first, dup := r.tops[mod][it.Name]
+}
+
+// defineType adds the type it, the item id of module mod, to the program, and
+// after it a constructor for each variant of a sum, in source order: the Defs of
+// the item are one after the other, and a record or an alias has no
+// constructor. The type is in the space of the types and its constructors in the
+// space of the values, so `type Circle { Circle(r: Float) }` defines two names
+// and no repeat. The attributes are checked as a function's are; what kind they
+// would make it does not matter, a type is a type (`#[extern]` is E0304 in the
+// user's module and nothing in the standard library, where it does nothing).
+func (r *resolver) defineType(mod ModuleIdx, id syntax.ItemID, it syntax.Item) {
+	r.attributes(mod, r.mods[mod], it)
+	r.add(r.rp.types[mod], Def{Name: it.Name, Kind: DefType, Module: mod, Item: id, Span: it.NameSpan, Pub: it.Pub})
+	for _, v := range r.mods[mod].Variants(it.Variants) {
+		r.add(r.tops[mod], Def{Name: v.Name, Kind: DefCtor, Module: mod, Item: id, Span: v.NameSpan, Pub: it.Pub})
+	}
+}
+
+// add pushes def to the program and makes its name stand for it in space, one of
+// the maps that say what each name of a module stands for: unless the module
+// already has a definition of that name in it, which is E0302 at the new one,
+// with the first as the secondary label. The Def is added all the same, so the
+// item has one and the name keeps standing for the first. No fix-it: which of
+// the two stays is not for the compiler to say.
+func (r *resolver) add(space map[base.Symbol]DefID, def Def) {
+	id := r.rp.Defs.Push(def)
+	first, dup := space[def.Name]
 	if !dup {
-		r.tops[mod][it.Name] = def
+		space[def.Name] = id
 		return
 	}
-	// No fix-it: which of the two stays is not for the compiler to say.
-	r.sink.Report(diag.NewError(diag.E(302), "`"+r.in.String(it.Name)+"` is defined more than once",
-		diag.Label{Span: it.NameSpan, Message: "redefined here"}).
+	r.sink.Report(diag.NewError(diag.E(302), "`"+r.in.String(def.Name)+"` is defined more than once",
+		diag.Label{Span: def.Span, Message: "redefined here"}).
 		WithSecondary(diag.Label{Span: r.rp.Defs.Get(first).Span, Message: "first defined here"}).
 		WithHelp("rename one of them, or delete the second"))
 }
 
-// attributes checks the attributes of the function it of module m and says what
-// kind of function it is. In Part I the only attribute is `extern`, which marks
+// attributes checks the attributes of the function or type it of module m and
+// says what kind of function it is. The only attribute is `extern`, which marks
 // a function of the standard library whose code the interpreter supplies. The
 // user's module may not use it (E0304: the function is a plain DefFn then), and
 // no module may use any other (E0305). If a function has several `extern`
-// attributes the first gives the name.
+// attributes the first gives the name. A type takes the same attributes and
+// uses none of the answer.
 func (r *resolver) attributes(mod ModuleIdx, m *syntax.Module, it syntax.Item) (kind DefKind, externName string) {
 	for _, a := range m.Attrs(it.Attrs) {
 		name := string(r.in.Bytes(a.Name))
@@ -314,7 +420,9 @@ func (r *resolver) attributes(mod ModuleIdx, m *syntax.Module, it syntax.Item) (
 			d := diag.NewError(diag.E(304), "`#[extern]` is only allowed in the standard library",
 				diag.Label{Span: a.Span, Message: "not allowed outside the standard library"}).
 				WithNote("extern functions are declared by the standard library and implemented by the runtime; a program calls them through the prelude")
-			if it.HasBody {
+			if it.HasBody || it.Kind == syntax.ItemType {
+				// A type has no body to write, so removing the attribute is the
+				// whole fix.
 				d = removable(d, a, "remove the attribute")
 			} else {
 				// An extern function has no body, and removing the attribute
@@ -393,7 +501,9 @@ func (r *resolver) lookupDef(mod ModuleIdx, name base.Symbol) (Res, bool) {
 
 // bodies is the second pass: it goes through the definitions, which are in the
 // order of the modules and, within one, of the source, binds the parameters of
-// each function and walks the body of those that have one.
+// each function and walks the body of those that have one. A type and a
+// constructor have no parameters and no body (the item of a constructor is its
+// type's), so there is nothing for this pass to bind or walk in them.
 func (r *resolver) bodies() {
 	for id, def := range r.rp.Defs.All() {
 		r.mod, r.m, r.res = def.Module, r.mods[def.Module], &r.rp.Modules[def.Module]

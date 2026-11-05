@@ -13,8 +13,8 @@ import (
 // FuzzParse feeds the parser the tokens of arbitrary bytes and checks what
 // every later pass relies on: Parse does not panic, every span it produces lies
 // within the file, and PrintModule can walk the tree it built. The spans are
-// those of the tree (items, attributes, parameters, types, statements and
-// expressions, with their name and operator spans) and those of the labels of
+// those of the tree (items, attributes, parameters, variants and fields, types,
+// statements and expressions, with their name and operator spans) and those of the labels of
 // the diagnostics, fix-its included, and every diagnostic can be rendered in
 // the three formats: RenderHuman panics for a fix-it that crosses a line break
 // or that is in another file, and no input may make the lexer or the parser
@@ -37,6 +37,11 @@ func FuzzParse(f *testing.F) {
 	f.Add("fn main() {}")
 	f.Add("fn f() { (1 }")
 	f.Add("fn f() -> Int { 1 + }")
+	// The three forms of `type`, a sum with every kind of variant, and the ones
+	// that stop in the middle of a body or of a field list.
+	f.Add("pub type Shape {\n  Circle(radius: Float)\n  Rect(Float, h: Float); Unit,\n}\ntype P { x: Int, y: () }\ntype M = ()")
+	f.Add("type S { A(, B }")
+	f.Add("type S { A(Int\ntype T { x:")
 	// The text of the golden test of `ki emit ast`, so that the seeds include a
 	// program that parses cleanly with every kind of node in it.
 	golden, err := os.ReadFile(filepath.Join("..", "..", "tests", "golden", "ch06", "fib_ast.ki"))
@@ -79,6 +84,14 @@ func FuzzParse(f *testing.F) {
 		}
 		for i, p := range m.ParamPool {
 			check("parameter", i, p.Span)
+		}
+		for i, v := range m.VariantPool {
+			check("variant", i, v.Span)
+			check("variant name", i, v.NameSpan)
+		}
+		for i, fl := range m.FieldPool {
+			check("field", i, fl.Span)
+			check("field name", i, fl.NameSpan)
 		}
 		for i, ty := range m.Types.All() {
 			check("type", int(i), ty.Span)

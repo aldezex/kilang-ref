@@ -1,0 +1,16 @@
+// test: T11.64
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0406]: unknown type `Shap`
+// |   --> tests/errors/ch11/unknown_type_render.ki:15:9
+// |    |
+// | 15 | fn f(s: Shap) {}
+// |    |         ^^^^ not a type in this scope
+// |    = help: did you mean `Shape`?
+// |    |
+// | 15 - fn f(s: Shap) {}
+// | 15 + fn f(s: Shape) {}
+type Shape { Circle(r: Float) }
+fn f(s: Shap) {}
+fn main() {}

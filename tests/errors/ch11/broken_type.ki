@@ -1,0 +1,6 @@
+// test: T11.65
+// run: check
+type Shape { Circle( }  // ERROR(E0201) @22
+fn f(s: Shape) {}
+fn g() { Circle }
+fn main() {}

@@ -91,11 +91,12 @@ func mainError(at base.Span, label, help string, fixits ...diag.FixIt) diag.Diag
 	return d
 }
 
-// unknownType is the E0406 for the type name that is written at. If best is not
-// empty, the help asks whether that type was meant and the fix-it writes it.
+// unknownType is the E0406 for the type name that is written at: no note, since
+// the types in scope are the builtins and the ones the program declares. If best
+// is not empty, the help asks whether that type was meant and the fix-it writes
+// it.
 func unknownType(at base.Span, name, best string) diag.Diagnostic {
-	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
-		WithNote("the types Ki knows: `Int`, `Float`, `Bool` and `()`")
+	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type in this scope"})
 	if best != "" {
 		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
 	}

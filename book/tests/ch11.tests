@@ -114,8 +114,8 @@ ref:     TestFloatCheck/equality_takes_floats
 kind:    unit (go test)      file: internal/sema/float_test.go
 case:    `Float` ya es un tipo, así que un nombre cercano lo sugiere y uno lejano no sugiere nada
 input:   `Flot`, `Floot` y `Double` como tipo de un parámetro
-expect:  un E0406 cada uno, con la nota «the types Ki knows: `Int`, `Float`, `Bool` and `()`»; en `Flot` y `Floot` la ayuda «did you mean `Float`?» con la edición que lo escribe, y en `Double` ninguna
-why:     la nota y las sugerencias eran verdad con tres tipos; con cuatro, un `Flot` sin ayuda sería peor que el `Bol` de antes.
+expect:  un E0406 cada uno, con «not a type in this scope» y sin nota; en `Flot` y `Floot` la ayuda «did you mean `Float`?» con la edición que lo escribe, y en `Double` ninguna
+why:     con cuatro tipos, un `Flot` sin ayuda sería peor que el `Bol` de antes.
 ref:     TestFloatCheck/unknown_type_names_float
 
 [T11.16] core.float_operators_map_to_float_prims           level: core
@@ -261,3 +261,259 @@ input:   `let zero = 0.0`, `print(truncate(3.99))`, `print(truncate(1.0 / zero))
 expect:  sale con 101, stdout exactamente `3` y un salto de línea, y stderr `panic: Float out of range at tests/golden/ch11/truncate_panic.ki:9:9`
 why:     es el panic de un extern de punta a punta: lo impreso antes sale, la posición es la de la llamada y nada corre después.
 ref:     tests/golden/ch11/truncate_panic.ki
+
+[T11.34] parser.type_three_forms_three_separators          level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    un `type` es una suma, un record o un alias, y en las dos primeras los elementos se separan con un salto de línea, un `;` o una `,`
+input:   once fuentes: una suma y un record con cada uno de los tres separadores, una suma con la coma al final de cada línea y otra con `;` y salto, y un alias a `Float`, a `()` y con el tipo en la línea siguiente
+expect:  el volcado de `emit ast` es el mismo con los tres separadores: `(type Shape (sum (Circle (radius Float)) (Rect (w Float) (h Float))))`, `(type Point (record (x Float) (y Float)))` y `(type Meters (alias Float))`, y los alias, `(type Nothing (alias ()))`
+why:     si el separador cambiara el árbol, el mismo tipo escrito en líneas, con `;` o con `,` serían tres tipos distintos.
+ref:     TestParseType/three_forms_three_separators
+
+[T11.35] parser.type_one_field_record                      level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    la forma la decide el primer token del cuerpo: un record de un solo campo sigue siendo un record, y una suma de una sola variante, una suma
+input:   `type Wrapper { value: Int }`, `type Wrapper { Wrapper(Int) }` y `type Only { Only }`
+expect:  `(type Wrapper (record (value Int)))`, `(type Wrapper (sum (Wrapper (_ Int))))` y `(type Only (sum (Only)))`
+why:     si la forma dependiera de cuántos elementos hay, el tipo más pequeño, de un solo campo o una sola variante, se leería como el otro.
+ref:     TestParseType/a_record_may_have_one_field
+
+[T11.36] parser.type_variants                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    una variante puede ir sin paréntesis (`None`), con campos sin nombre (`Some(Int)`), con nombre (`Rect(w: Float, h: Float)`) o mezclados, y su lista de campos puede ocupar varias líneas
+input:   ocho fuentes: `None, Some(Int)`; `Pair(Int, Bool)`; `Rect(w: Float, h: Float)`; `Mix(a: Int, Bool)`; `Wrap(())`; `Holds(Shape)`; tres variantes de tres clases; y una con los campos en cuatro líneas
+expect:  el volcado exacto de cada fuente: un campo sin nombre sale como `(_ T)`, uno con nombre como `(nombre T)` y una variante sin campos como `(None)`
+why:     la variante sin paréntesis y el campo sin nombre son los casos que olvida un parser pensado para `Rect(w: Float)`.
+ref:     TestParseType/variants_with_and_without_fields
+
+[T11.37] parser.type_trailing_separator                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    tras el último elemento puede haber un solo separador, una `,` o un `;`, antes de la `}`; dos seguidos son un error
+input:   `type S { A, B, }`, `type S { A; B; }`, `type P { x: Int, y: Int, }`, ese mismo record en líneas, `type S { A,, B }` y `type P { x: Int,, y: Int }`
+expect:  los cuatro primeros dan el árbol de siempre y ningún diagnóstico; los dos últimos, un único E0201 «expected identifier, found `,`» sobre la segunda coma y el volcado `(error)`
+why:     quien viene de Rust escribe la coma final en cada línea: rechazarla daría un error en la `}` que no dice qué sobra.
+ref:     TestParseType/a_separator_may_end_the_body
+
+[T11.38] parser.type_pub_and_attributes                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    un `type` admite `pub` y atributos delante, como una función, y puede ir entre dos funciones
+input:   `pub type T = Int`; `#[a("x")] type T { A }`; un atributo en su línea y `pub type T { x: Int }` debajo; y `fn f`, `type T` y `fn g` seguidas
+expect:  `(pub type T (alias Int))`, `(type T (attrs (a "x")) (sum (A)))`, `(pub type T (attrs (a)) (record (x Int)))` y los tres items en su orden
+why:     si `item` solo esperara `fn` tras `pub` o un atributo, un `pub type` daría «expected item» en una palabra que sí empieza un item.
+ref:     TestParseType/pub_and_attributes
+
+[T11.39] parser.type_tree_shape                            level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    el árbol de un `type` guarda lo que el volcado oculta: los spans del item, de cada variante y de cada campo, qué campo tiene nombre, y que las listas de dos items no se mezclan en su pool
+input:   `#[a]` y `pub type Shape` con `Circle(radius: Float)`, `Rect(Float)` y `Unit`; un record `P { x: Int }` y un alias `M = ()`
+expect:  `Shape` va de la `#` a la `}`; sus tres variantes tienen su nombre y su span; `radius` tiene nombre y el campo de `Rect` no (`Name` es `NoSymbol` y `NameSpan` está vacío); los campos de `P` son el tercero de un pool de tres; el alias es el `()` con su span
+why:     sin los spans exactos, los errores de después apuntarían a otro sitio; sin listas contiguas, un tipo leería los campos del vecino.
+ref:     TestParseType/tree_shape
+
+[T11.40] parser.type_body_first_token                      level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    la forma del cuerpo la decide su primer token: una mayúscula es una suma, una minúscula un record, y cualquier otro, el `}` de un cuerpo vacío incluido, es E0201 `identifier`
+input:   `type A {}`, `type A {` y `}` en dos líneas, `type A { 1 }`, `type A { , }`, `type A { = }` y `type A { let }`; después `type A { circle }`, `type A { circle(r: Float) }`, `type Color { red, green, blue }` y `type P { x Int }`
+expect:  en los seis primeros, un único E0201 «expected identifier, found `X`» sobre ese token y un item `(error)` que conserva el nombre `A` de un tipo; en los cuatro últimos, un único E0201 «expected `:`, found `}`», `(`, `,` o `Int`, con la ayuda «a field is written `name: Type`, and a variant starts with an uppercase letter» y sin edición, y en los dos primeros el volcado `(error)`
+why:     un cuerpo vacío es lo primero que escribes al declarar un tipo: debe dar un solo error sobre la `}` y conservar el nombre.
+ref:     TestParseType/form_is_the_first_token_of_the_body
+
+[T11.41] parser.type_mistakes                              level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    cada error de un `type` da exactamente un diagnóstico, en el token donde la gramática falla, y el item es un `(error)` que conserva el nombre cuando se leyó
+input:   veintiséis fuentes rotas: sin nombre, con el nombre en minúsculas o con un guion bajo, sin cuerpo (al final del fichero, ante un número, ante `<` y con la `{` en la línea siguiente), una `{` sola, un alias sin tipo o con uno en minúsculas, campos y paréntesis rotos, dos variantes o dos campos en una línea, un campo con mayúscula en una suma, un campo en una suma y una variante en un record, y cuerpos y listas sin cerrar
+expect:  un diagnóstico exacto por fuente, con su mensaje y su etiqueta: E0201 (el de `newline` con la ayuda de los tres separadores, o con la de campos y variantes si lo que sigue es un `:`; el del nombre en minúsculas con la ayuda «a type name starts with an uppercase letter» y, salvo con el guion bajo, la edición que lo escribe con mayúscula; el del `)` con la de cerrarlo y su edición) o E0202 sobre la `{` o la `(` sin cerrar; el volcado es `(error)` y el item conserva el nombre salvo en las tres primeras fuentes
+why:     sin saltar lo que queda del tipo roto, el parser leería su basura como items `(error)` de más, aunque el error siga siendo uno.
+ref:     TestParseType/mistakes_in_a_type_are_one_error_each
+
+[T11.42] parser.broken_type_keeps_names                    level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    un `type` roto conserva su nombre y los de sus variantes, las de antes del error, la del error (sin campos) y las de después, con sus spans, porque el error de una variante termina esa variante y no el tipo; una función rota no guarda variantes
+input:   `type Shape { Circle(r: Float), Rect( }`; las fuentes de una tabla con un error en una variante o entre dos y variantes detrás (tras un salto de línea, un `,` o un `;`; con más campos tras el error, también uno sin tipo; con un nombre que no es de variante; con una `}` que cierra una `{` abierta en lo saltado; la última de la fuente; y dos variantes en una línea); tres con el error en la cabecera y el cuerpo detrás (la `{` en la línea de abajo, tras líneas en blanco o tras una palabra de más); `type P { x: Int, y: }`, `type A = 1` y `fn f(x y) {}`
+expect:  el item de `Shape` es un error de tipo que cubre hasta su `}`, con las variantes `Circle` (entera) y `Rect` (solo su nombre) una sola vez en el pool y los campos de `Circle` como único campo, sin campos ni alias propios; en cada fuente de la tabla, un único diagnóstico, el volcado `(error)` y todos los nombres de variante que se escribieron: `Circle Rect Tri` en la de `Circle`, `A B C` en la de dos variantes en una línea y `A B` en las demás, también en las tres de la cabecera rota; el record roto no deja nada en los pools; el alias roto cubre `type A =` y conserva `A`; el de `f`, un error de función sin variantes
+why:     sin esos nombres, cada uso de una variante que sí escribiste, antes o después del error, sería otro error de nombre desconocido.
+ref:     TestParseType/a_broken_type_keeps_what_was_read
+
+[T11.43] parser.item_after_broken_type                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    tras un `type` roto el parser salta hasta el siguiente item fuera de los delimitadores que abrió lo saltado, y lo lee como siempre
+input:   trece fuentes: `Circle( }` y una función; `Circle(` y otro `type`; un error en el cuerpo en tres líneas y una función; un alias roto, una función y un record; `type A` sin cuerpo y un `pub fn`; tres en que lo saltado abre un `(` o un `{` que contiene un `type` o un `fn`, dos en el cuerpo de una suma y una tras un alias roto; y cinco con la cabecera rota: `type A` y una función, `type A x` y una función, `type A fn f() {}` en una línea, el cuerpo en la línea de abajo con una función detrás y un comentario entre el nombre y la `{`
+expect:  exactamente un diagnóstico por fuente y el volcado `(error)` seguido de los items siguientes, bien leídos: un tipo sin cuerpo no se lleva ni la `{` ni la línea de la función que le sigue
+why:     lo que sigue a un tipo roto es lo que quieres seguir viendo: sin parar en `type`, el error se comería el item de después.
+ref:     TestParseType/the_item_after_a_broken_type_is_read
+
+[T11.44] parser.type_after_garbage                         level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    `type` detiene el salto de un item roto como lo hace `fn`, y se lee como item: antes era un error propio
+input:   `1 2 3 4 type A { B } fn g() {}`
+expect:  un único E0201 «expected item, found `1`» y el volcado `(error)`, `(type A (sum (B)))` y `fn g`
+why:     `type` ya se sabe leer: el salto tras un error debe parar en él y leerlo, no contarlo como un error más.
+ref:     TestParseType/a_type_is_read_as_a_type_after_garbage
+
+[T11.45] parser.type_big                                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    un tipo con 10 000 variantes y un record de 10 000 campos se leen sin diagnósticos, con la pila de Go limitada a 1 MiB
+input:   `type Big` con `V0(Int, x: Bool)` hasta `V9999`, y `type Wide` con `f0: Int` hasta `f9999`
+expect:  ningún diagnóstico; `Big` tiene 10 000 variantes de `V0` a `V9999`, la última con 2 campos; el pool tiene 30 000 campos; `Wide` tiene 10 000 campos hasta `f9999`; el volcado son dos líneas
+why:     el tamaño de un tipo lo decide el programa: un parser que recursara por cada variante agotaría la pila con un fichero generado.
+ref:     TestParseType/big_declarations_are_read_without_recursion
+
+[T11.46] printer.type_items                                level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_test.go
+case:    `PrintModule` escribe los tres items `type`, con `pub`, atributos, variantes y campos, y se niega a escribir una forma que no existe
+input:   un árbol hecho a mano: una suma con una variante de un campo con nombre, otra con un campo `()` y uno de tipo error, y otra sin campos; un record `pub` con un atributo; un alias; y después una forma inventada
+expect:  `(type Shape (sum (Circle (radius Float)) (Wrap (_ ()) (_ (error))) (None)))`, `(pub type Point (attrs (a "q")) (record (x Float)))` y `(type Meters (alias Float))`; la forma inventada es el pánico `unreachable`
+why:     el volcado es el formato que fija `emit ast`, y el árbol hecho a mano lo prueba sin depender del parser.
+ref:     TestPrinter/type_items
+
+[T11.47] resolve.types_and_constructors_are_definitions    level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    un `type` es una definición y cada variante de una suma es otra a continuación, con el span de su nombre; un record y un alias no tienen constructor, y una variante es `pub` si lo es su tipo
+input:   `Shape` (con `Circle`, `Rect` y `Unit`), `pub type Point { x: Float }`, `type Meters = Float`, `pub type Flag { On, Off }` y `main`
+expect:  diez definiciones en orden: cada tipo como `DefType`, sus constructores como `DefCtor` con el item de su tipo y su `Pub`, y `main` como `DefFn`, todos con el span del nombre donde se declara; tipos y constructores tienen el tipo de error y `main`, `() -> ()`
+why:     si un constructor se colocara en otro sitio, la numeración de las definiciones, que Core reutiliza, ya no seguiría el fichero.
+ref:     TestTypeNames/types_and_constructors_are_definitions
+
+[T11.48] resolve.type_and_constructor_share_a_name         level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    tipos y constructores están en espacios de nombres distintos: `Circle` puede ser un tipo y un constructor sin repetirse, y en una expresión es el constructor y en una anotación el tipo
+input:   `type Shape { Circle(r: Float) }`, `type Circle { x: Float }`, `fn f(c: Circle) {}` y `fn main() { Circle }`
+expect:  ningún diagnóstico; `Circle` en `main` resuelve a una `DefCtor`, y `LookupType` da para `Circle` una `DefType` y encuentra `Shape`
+why:     `struct Circle` junto a `enum Shape { Circle(Circle) }` es normal en Rust: con un solo espacio, el segundo `Circle` sería un E0302 sin repetición.
+ref:     TestTypeNames/a_type_and_a_constructor_may_share_a_name
+
+[T11.49] resolve.type_is_not_a_value                       level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    un tipo no es un valor y un constructor no es un tipo: `Shape` en una expresión es un nombre desconocido, y `A` en una anotación, un tipo desconocido
+input:   `type Shape { A }` con `fn main() { Shape }`, y con `fn f(a: A) {}`; y un preludio cuya primera definición es `pub type Maybe`, con un `main` que escribe `Mayb`
+expect:  en el primero, un E0301 «unknown name `Shape`» sobre el nombre, sin ayuda; en el segundo, un E0406 «unknown type `A`» sobre la anotación, sin ayuda; en el último, un E0301 sin ayuda ni edición: un tipo no es candidato de un nombre, ni siquiera el de la definición 0
+why:     si los dos espacios se mezclaran, `let x = Shape` y `fn f(a: A)` compilarían sin error, y un nombre de tipo valdría como valor.
+ref:     TestTypeNames/a_type_is_not_a_value_and_a_constructor_is_not_a_type
+
+[T11.50] resolve.duplicate_type_E0302                      level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    dos tipos con el mismo nombre, sea cual sea su forma, son un E0302 sobre el segundo con el primero como secundaria; las dos definiciones existen y un uso del nombre es el primero
+input:   dos sumas `Shape`, una suma y un record, un record y un alias; y `type Shape { A }` con `type Shape { B }`, `fn f(s: Shape) { B }` y `main`; y la búsqueda de `Shape` como tipo en ese último fichero
+expect:  un E0302 «`Shape` is defined more than once» con «redefined here», la secundaria «first defined here» y la ayuda de renombrar, igual campo por campo, en cada fuente; la última tiene 6 definiciones, `B` y `Shape` no dan nada más y `Shape` como tipo es la primera definición
+why:     si la segunda declaración se descartara, su `B` sería un nombre desconocido: un error de más por un solo descuido.
+ref:     TestTypeNames/duplicate_type_E0302
+
+[T11.51] resolve.duplicate_constructor_E0302               level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    una variante repetida, en un tipo o en dos, es un E0302 sobre la segunda, con la primera como secundaria
+input:   `type S { A, B, A }`, `type S { A }` con `type T { A }`, y `type S { A(Int) }` con `type T { A }`
+expect:  un E0302 «`A` is defined more than once» por fuente, sobre la segunda `A`, con «first defined here» sobre la primera
+why:     los constructores comparten espacio con las funciones del módulo y no con su tipo: dos `A` de tipos distintos serían ambiguas en toda expresión.
+ref:     TestTypeNames/duplicate_constructor_E0302
+
+[T11.52] check.unknown_type_E0406                          level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    un tipo desconocido es un E0406 con «not a type in this scope» y sin nota; si un tipo en alcance (predefinido, declarado o `pub` del preludio) está a una edición, lleva la ayuda y la edición que lo escribe
+input:   el ejemplo `fn f(s: Shap)` con `type Shape`; siete nombres con dos tipos declarados (`Flot`, `Bol`, `Shap`, `Shapes`, `Blob`, `Inty`, `Print`); un preludio con un `pub type Maybe` y uno privado, usados con `Mayb`, `Hidden` y `Hiden`; y un preludio con `fn f(x: Mayb)` junto a un fichero con `pub type Maybe`
+expect:  `Shap` da «did you mean `Shape`?» con una edición que aplicada deja el programa sin diagnósticos; `Flot`, `Bol`, `Shapes` e `Inty` sugieren `Float`, `Bool`, `Shape` e `Int` (en el empate gana el primero por orden alfabético) y `Blob` y `Print`, que está a una letra de la función `print`, nada; `Mayb` sugiere `Maybe`, y `Hidden` y `Hiden` nada; el `Mayb` del preludio, nada: no ve los tipos del fichero
+why:     los candidatos dependen del programa: sin los tipos declarados, `Shap` no tendría ayuda, y un tipo privado del preludio se sugeriría sin poder usarse.
+ref:     TestTypeNames/unknown_type_E0406
+
+[T11.53] resolve.declared_type_shadows                     level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    el tipo que declara un módulo gana al del preludio y al predefinido, como su función gana a la del preludio
+input:   un preludio con `pub type Maybe` y un fichero con `type Maybe` y `type Bool`; y un preludio con un `pub type Maybe` y un `type Hidden` privado, y un fichero sin tipos
+expect:  `LookupType` da la definición del fichero para los dos nombres, la del preludio para `Maybe` visto desde el preludio y nada para `Bool` desde él; el fichero sin tipos ve `Maybe`, del preludio, y no `Hidden`; con `type Bool`, `fn f(b: Bool) -> Bool` tiene el tipo `({error}) -> {error}`, y sin él `(Bool) -> Bool`
+why:     si ganara el predefinido, declarar `Bool` no cambiaría nada y el programa usaría el tipo equivocado sin avisar.
+ref:     TestTypeNames/a_declared_type_shadows_a_builtin_and_the_prelude
+
+[T11.54] check.declared_type_error_type                    level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    hasta que `Declare` hace los tipos de las declaraciones, un tipo declarado tiene el tipo de error: nada se compara con él y lo que lo tiene no da error
+input:   `type Shape { A }`, `type Meters = Float`, una función que devuelve como `Int` un `Shape`, otra que devuelve como `Bool` un `Meters`, `f(true)` y `let y: Meters = 1`
+expect:  ningún diagnóstico; `f` tiene el tipo `({error}) -> Int` y `g`, `({error}) -> Bool`
+why:     es el límite de esta sesión, escrito en un test para que la siguiente lo cambie a propósito y no por accidente.
+ref:     TestTypeNames/a_declared_type_has_the_error_type_until_declare
+
+[T11.55] check.constructor_error_type                      level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    hasta que `Declare` hace sus tipos, un constructor en una expresión tiene el tipo de error: llamarlo con cualquier argumento, usarlo donde se espera cualquier tipo o escribirlo solo no es un error
+input:   `Circle(1.0)`, `let b: Int = None`, `let c: Bool = Circle(true, 2)` y `let d = Circle`
+expect:  ningún diagnóstico, y `Circle` resuelve a su definición `DefCtor`
+why:     como el test anterior, fija a propósito lo que la sesión siguiente reemplaza.
+ref:     TestTypeNames/a_constructor_in_an_expression_has_the_error_type_until_declare
+
+[T11.56] resolve.broken_type_is_one_error                  level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    un `type` que el parser no pudo leer da el error del parser y ninguno más por su nombre, por sus variantes, las de antes y las de después del error, ni por lo que tiene ese tipo
+input:   siete fuentes: un uso del tipo y de una variante; la variante leída antes del error; un tipo con una variante rota entre otras dos, y las tres usadas en `main`; un alias roto; un tipo sin cuerpo; un tipo roto seguido de otro bueno con su mismo nombre; y un `type Shape` con la `{` en la línea de abajo y sus variantes usadas; y la búsqueda de `Shape` como tipo con el roto antes y después del bueno
+expect:  exactamente un E0201 en las siete, y en la penúltima el tipo bueno gana, sin E0302; `Shape` como tipo es la definición buena en los dos órdenes
+why:     sin el nombre del tipo roto, el uso del tipo daría un E0406 y el de una variante un error de nombre: tres errores por uno.
+ref:     TestTypeNames/a_broken_type_is_one_error
+
+[T11.57] resolve.attributes_on_a_type                      level: core
+kind:    unit (go test)      file: internal/sema/type_names_test.go
+case:    ningún atributo se aplica a un tipo: uno desconocido es E0305 y `#[extern]` es E0304, y borrarlo es todo el arreglo, porque un tipo no tiene un cuerpo que escribir
+input:   `#[derive("Eq")] type T { A }` y `#[extern("x")] type T { A }`
+expect:  E0305 «unknown attribute `derive`» con su nota, la ayuda «remove it» y la edición que lo borra; E0304 con la ayuda «remove the attribute», no la de escribir un cuerpo, y esa edición, que aplicada deja ` type T { A }`; el tipo, `A` y `main` siguen definidos
+why:     la ayuda del E0304 de una función manda escribir un cuerpo: para un tipo sería un consejo imposible.
+ref:     TestTypeNames/attributes_on_a_type
+
+[T11.58] elaborate.type_filler_funs                        level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    cada tipo y cada constructor tiene su `Fun` en el `Program`, con el id de su `Def`: de relleno, con cuerpo `()`, sin parámetros y sin marco
+input:   `Shape` con `Circle` y `None`, un record `Point`, un alias `Meters` y `main`
+expect:  11 funciones para 11 definiciones; las de tipos y constructores con su nombre, `UserModule`, el span de su nombre, cuerpo `()`, sin nombre extern, 0 parámetros y 0 slots, en el orden `Shape Circle None Point Meters main`
+why:     sin cuerpo, Lint los tomaría por externs sin nombre y todo programa con un `type` acabaría en un ICE.
+ref:     TestElaborate/types_and_constructors_are_filler_funs
+
+[T11.59] elaborate.constructor_is_unit                     level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    hasta que los constructores construyan valores, un constructor en una expresión es `()`, y una llamada evalúa sus argumentos en orden, cada uno en un slot suyo, y da `()`
+input:   `None`, `Circle(1.0)`, `Circle(print(7), None)`, `Circle(Circle(print(1)))` y `let f = Circle`
+expect:  `()`; `let _@0 = 1.0; ()`; `let _@0 = @print(7); let _@1 = (); ()` con un marco de 2 slots; `let _@0 = let _@1 = @print(1); (); ()`; `let f@0 = (); ()`; el `()` cubre el nombre o la llamada, y el `Let` y su variable, el argumento
+why:     Lint rechaza llamar a una `Fun` con otra aridad: sin este caso, `Circle(1.0)` sería un ICE antes de que existan los constructores.
+ref:     TestElaborate/a_constructor_is_unit_until_the_constructors_exist
+
+[T11.60] elaborate.big_type                                level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    un tipo de 10 000 variantes pasa por el parser, los nombres, el comprobador, la elaboración y Lint con la pila de Go limitada a 1 MiB, y cada variante es una `Fun` en su sitio
+input:   `type Big` con `V0(Int, Bool)` hasta `V9999`, `fn f(b: Big) -> Int` y un `main` que llama a `V9999(1, true)`
+expect:  5 + 1 + 10 000 + 2 funciones para otras tantas definiciones; las `Fun` de `V0` y de `V9999` son las posiciones 6 y 10 005, con cuerpo `()`
+why:     un paso que recorriera las variantes con recursión se vería aquí, con la pila limitada, y no con un fichero real.
+ref:     TestElaborate/big_type_declaration_is_elaborated_without_recursion
+
+[T11.61] run.constructors_evaluate_as_unit                 level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    `ki run` de un programa con un `type` corre, y un constructor, que aún no construye nada, evalúa sus argumentos y da `()`
+input:   `type Shape` con `Circle(r: Float)` y `None`, un alias, y un `main` con `Circle(print(7))`, `Circle(print(8), None)` y `None`
+expect:  sale con 0, stdout `7` y `8` en dos líneas y stderr vacío
+why:     un constructor sin valor sigue evaluando sus argumentos: si no, `Circle(print(7))` se tragaría el `7` en silencio.
+ref:     TestRun/constructors_evaluate_as_unit
+
+[T11.62] run.type_declarations_golden                      level: core
+kind:    run                 file: tests/golden/ch11/type_declarations.ki
+case:    `ki run` de un programa con una suma, un record `pub` y un alias, y una función que los usa en su firma
+input:   `Shape` con tres variantes, `pub type Point`, `type Meters = Float`, `fn area(s: Shape, p: Point, m: Meters) -> Int { 42 }` y un `main` que imprime `42`
+expect:  sale con 0, stderr vacío y stdout exactamente `42`
+why:     es el primer programa con `type` de punta a punta, con el binario: sin las `Fun` de relleno, el Lint de `ki run` lo rechazaría.
+ref:     tests/golden/ch11/type_declarations.ki
+
+[T11.63] check.type_redefined                              level: core
+kind:    diag                file: tests/errors/ch11/type_redefined.ki
+case:    `ki check` sobre un fichero con un tipo y una variante repetidos da dos E0302, en la línea 4, columna 6 y en la 5, columna 14
+input:   `type Shape` dos veces y una variante `Circle` que otro tipo repite
+expect:  sale con 1 y los diagnósticos son exactamente dos E0302: en 4:6, el segundo `Shape`, y en 5:14, el segundo `Circle`; ninguno más
+why:     los dos espacios de nombres en un fichero, con el binario: un tipo y un constructor repetidos dan cada uno su error.
+ref:     tests/errors/ch11/type_redefined.ki
+
+[T11.64] check.unknown_type_render                         level: core
+kind:    diag                file: tests/errors/ch11/unknown_type_render.ki
+case:    `ki check` sobre `fn f(s: Shap)` con `type Shape` dibuja el E0406 con su ayuda y su edición
+input:   `type Shape { Circle(r: Float) }`, `fn f(s: Shap) {}` y `fn main() {}`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 9 líneas: «unknown type `Shap`», la etiqueta «not a type in this scope» bajo `Shap`, la ayuda «did you mean `Shape`?» y el diff de la edición, sin nota
+why:     es la prueba de cómo se ve el E0406 que cambia: ya no hay nota, y la ayuda sugiere un tipo que declaraste tú.
+ref:     tests/errors/ch11/unknown_type_render.ki
+
+[T11.65] check.broken_type                                 level: core
+kind:    diag                file: tests/errors/ch11/broken_type.ki
+case:    `ki check` sobre `type Shape { Circle( }`, seguido de usos del tipo y de `Circle`, da un solo E0201
+input:   `type Shape { Circle( }`, `fn f(s: Shape) {}`, `fn g() { Circle }` y `fn main() {}`
+expect:  sale con 1 y el único diagnóstico es el E0201 en 3:22, el `}`; ni un E0406 por el tipo ni un E0301 por `Circle`
+why:     es «un error, un mensaje» para un tipo roto, de punta a punta: la recuperación del parser y los nombres juntos.
+ref:     tests/errors/ch11/broken_type.ki

@@ -1,0 +1,13 @@
+// test: T11.62
+// run: run
+// expect-stdout:
+// | 42
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+  Unit
+}
+pub type Point { x: Float, y: Float }
+type Meters = Float
+fn area(s: Shape, p: Point, m: Meters) -> Int { 42 }
+fn main() { print(42) }

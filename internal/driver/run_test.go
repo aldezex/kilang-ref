@@ -153,6 +153,20 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	t.Run("constructors_evaluate_as_unit", func(t *testing.T) {
+		// A program with a `type` runs, which takes a Fun for each type and each
+		// constructor (a program without bodies for them would be an ICE of Lint),
+		// and until constructors build values a constructor in an expression is
+		// `()`: the arguments of a call are still evaluated, in order, and what
+		// comes out is the unit that `main` ends with.
+		const src = "type Shape {\n  Circle(r: Float)\n  None\n}\ntype Meters = Float\n" +
+			"fn main() {\n  Circle(print(7))\n  Circle(print(8), None)\n  None\n}\n"
+		code, stdout, stderr := runCLI(t, "run", writeKi(t, src))
+		if code != 0 || stdout != "7\n8\n" || stderr != "" {
+			t.Errorf("got %d, stdout %q, stderr %q, want 0, \"7\\n8\\n\" and nothing on stderr", code, stdout, stderr)
+		}
+	})
+
 	t.Run("unknown_backend_is_usage_error", func(t *testing.T) {
 		path := writeKi(t, "fn main() { print(7) }\n")
 		const unknownVM = "ki run: unknown backend \"vm\"\n" + runUsage

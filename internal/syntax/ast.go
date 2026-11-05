@@ -73,14 +73,60 @@ type ItemKind uint8
 const (
 	ItemFn ItemKind = iota
 	// ItemError stands for tokens that could not be read as an item. Its Span
-	// is set. If the tokens began a function and its name was read before they
-	// stopped making sense, Name and NameSpan are set too; otherwise Name is
-	// base.NoSymbol and NameSpan is the zero Span. The function is known to
-	// exist then, although nothing of its signature is.
+	// is set. If the tokens began a function or a type and its name was read
+	// before they stopped making sense, Name and NameSpan are set too, and
+	// ErrorOf says which of the two; otherwise Name is base.NoSymbol and
+	// NameSpan is the zero Span. The function or the type is known to exist
+	// then, although nothing of its signature or its body is.
 	ItemError
+
+	// The kinds of Part II come after ItemError, in the order the chapters add
+	// them, so that no kind of Part I changes its value. ItemTrait, ItemImpl,
+	// ItemConst and ItemImport follow in theirs.
+
+	// ItemType is a `type` declaration: a sum, a record or an alias (see Form).
+	ItemType
 )
 
-// Item is a top-level definition. Only functions exist so far.
+// TypeForm says which of the three forms of `type` an ItemType is. The parser
+// tells them apart by the first token of what follows the name: an `=` is an
+// alias, and in a `{ … }` an uppercase name starts a sum and a lowercase one a
+// record (see typeItem).
+type TypeForm uint8
+
+// The forms of a type declaration.
+const (
+	// TypeFormSum is `type Shape { Circle(radius: Float) Rect(w: Float, h: Float) }`:
+	// Item.Variants is its list.
+	TypeFormSum TypeForm = iota
+	// TypeFormRecord is `type Point { x: Float, y: Float }`: Item.Fields.
+	TypeFormRecord
+	// TypeFormAlias is `type Meters = Float`: Item.Alias.
+	TypeFormAlias
+)
+
+// Variant is one case of a sum type: `None`, `Some(A)` or `Circle(radius: Float)`.
+// Span runs from the name to the `)` that closes its fields, or is the name when
+// it has none. Fields is a range over Module.FieldPool; read it with
+// Module.Fields.
+type Variant struct {
+	Name           base.Symbol
+	Span, NameSpan base.Span
+	Fields         base.ListRange
+}
+
+// Field is a field of a variant or of a record: `radius: Float`, or `Float` in
+// `Some(Float)`. Span runs from the name, or from the type if there is no name,
+// to the end of the type. HasName is false for a positional field: Name is
+// base.NoSymbol and NameSpan the zero Span then.
+type Field struct {
+	Name           base.Symbol
+	Span, NameSpan base.Span
+	Type           TypeExprID
+	HasName        bool
+}
+
+// Item is a top-level definition: a function or a type.
 type Item struct {
 	Kind ItemKind
 	// Span covers everything the item consists of: from the `#` of its first
@@ -116,6 +162,24 @@ type Item struct {
 	// `#[extern("ki_print_int")] pub fn print(x: Int)`.
 	Body    ExprID
 	HasBody bool
+
+	// The fields of an ItemType (Name, NameSpan, Pub and Attrs are its own too).
+	// Form says which of the three it is: Variants means something for a sum,
+	// Fields for a record and Alias for an alias, and the others are zero. They
+	// are ranges over Module.VariantPool and Module.FieldPool (read them with
+	// Module.Variants and Module.Fields); the fields of a variant are a range of
+	// their own in the same FieldPool.
+	Form     TypeForm
+	Variants base.ListRange
+	Fields   base.ListRange
+	Alias    TypeExprID
+
+	// ErrorOf is the kind of item that an ItemError that kept its name began:
+	// ItemFn (the zero value) or ItemType. An ItemError that began a type keeps
+	// in Variants the variants whose name the parser read before it gave up, the
+	// one that the mistake is in included and with no fields, so that name
+	// resolution knows they exist.
+	ErrorOf ItemKind
 }
 
 // TypeExprKind says what a TypeExpr is.
@@ -306,10 +370,12 @@ type Module struct {
 	Types     base.IdVec[TypeExprID, TypeExpr]
 
 	// The pools that the ListRanges of the nodes point into.
-	ExprPool  []ExprID
-	StmtPool  []StmtID
-	ParamPool []Param
-	AttrPool  []Attr
+	ExprPool    []ExprID
+	StmtPool    []StmtID
+	ParamPool   []Param
+	AttrPool    []Attr
+	VariantPool []Variant
+	FieldPool   []Field
 }
 
 // ExprList returns the expressions that r selects in ExprPool. The caller must
@@ -325,3 +391,10 @@ func (m *Module) Params(r base.ListRange) []Param { return base.Slice(m.ParamPoo
 
 // Attrs returns the attributes that r selects in AttrPool.
 func (m *Module) Attrs(r base.ListRange) []Attr { return base.Slice(m.AttrPool, r) }
+
+// Variants returns the variants that r selects in VariantPool. Fields does the
+// same for FieldPool.
+func (m *Module) Variants(r base.ListRange) []Variant { return base.Slice(m.VariantPool, r) }
+
+// Fields returns the fields that r selects in FieldPool.
+func (m *Module) Fields(r base.ListRange) []Field { return base.Slice(m.FieldPool, r) }

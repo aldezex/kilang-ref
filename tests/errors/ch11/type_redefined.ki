@@ -1,0 +1,6 @@
+// test: T11.63
+// run: check
+type Shape { Circle(r: Float) }
+type Shape { Square(side: Float) }  // ERROR(E0302) @6
+type Other { Circle }  // ERROR(E0302) @14
+fn main() {}

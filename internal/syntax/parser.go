@@ -10,9 +10,10 @@ import (
 //
 // The parser is recursive descent. Parse reads the top-level functions:
 // attributes, `pub`, the name, the parameters, the return type and a body, which
-// is a block, or is absent in a function marked `#[extern]`. The expressions are
-// read by parser_expr.go, the blocks, `let` and `if` by parser_stmt.go, and
-// recover.go says what the parser does when the tokens stop making sense.
+// is a block, or is absent in a function marked `#[extern]`; and the `type`
+// declarations (parser_type.go). The expressions are read by parser_expr.go, the
+// blocks, `let` and `if` by parser_stmt.go, and recover.go says what the parser
+// does when the tokens stop making sense.
 //
 // Where they do, Parse reports E0201 to sink, at the token it found instead of
 // the one it needed (see expected), and goes on: the place becomes an error node
@@ -254,8 +255,10 @@ func (p *parser) namedErrorItem(start base.Span, name Token) ItemID {
 
 // item reads one item and always consumes at least one token. The grammar is
 //
-//	item = { attr } [ 'pub' ] 'fn' lower '(' [ param { ',' param } ] ')'
-//	       [ '->' type ] [ block ]
+//	item = { attr } [ 'pub' ] ( fn | type )
+//	fn   = 'fn' lower '(' [ param { ',' param } ] ')' [ '->' type ] [ block ]
+//
+// and a type is read by typeItem (parser_type.go).
 //
 // A function has a body exactly when a `{` follows its signature on the same
 // line; the line rule puts a Newline in front of a `{` on the next one. Only a
@@ -269,7 +272,7 @@ func (p *parser) namedErrorItem(start base.Span, name Token) ItemID {
 // name (see namedErrorItem).
 func (p *parser) item() ItemID {
 	start := p.tok().Span
-	if !p.at(Hash) && !p.at(KwPub) && !p.at(KwFn) {
+	if !p.at(Hash) && !p.at(KwPub) && !p.at(KwFn) && !p.at(KwType) {
 		p.expected("item")
 		p.advance()
 		return p.errorItem(start)
@@ -281,8 +284,11 @@ func (p *parser) item() ItemID {
 		return p.errorItem(start)
 	}
 	_, it.Pub = p.eat(KwPub)
-	// After attributes or `pub` an item is what is needed, and `fn` is the only
-	// kind there is so far.
+	// After attributes or `pub` an item is what is needed: `fn` or `type`.
+	if p.at(KwType) {
+		it.Kind = ItemType
+		return p.typeItem(start, it)
+	}
 	if _, ok = p.expect(KwFn, "item"); !ok {
 		return p.errorItem(start)
 	}

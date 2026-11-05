@@ -469,8 +469,10 @@ func TestRecover(t *testing.T) {
 		}
 		// The words that start an item in a later part stop the skip too. The
 		// parser cannot read such an item yet, so each one is an error of its
-		// own: the one at the word, four tokens after the first.
-		for _, word := range []string{"type", "trait", "impl", "effect", "import"} {
+		// own: the one at the word, four tokens after the first. (`type` is not
+		// among them since chapter 11: it is read, and stops the skip as `fn`
+		// does, see TestParseType/a_type_is_read_as_a_type_after_garbage.)
+		for _, word := range []string{"trait", "impl", "effect", "import"} {
 			src := "1 2 3 4 " + word + " 5 6"
 			r := recParse(t, src)
 			r.wantDiags(t, word,

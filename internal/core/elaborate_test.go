@@ -736,6 +736,111 @@ fn last() {}
 		}
 	})
 
+	t.Run("types_and_constructors_are_filler_funs", func(t *testing.T) {
+		// A type and a constructor are definitions, and a definition is a Fun with
+		// the id of its Def, so each of them is a Fun too: one whose body is `()`
+		// and that takes nothing and uses no slot. Without a body the Lint would
+		// call it an extern with no name. The record and the alias have the Fun
+		// of their type and none of a constructor.
+		c := testsupport.Compile(t, "type Shape {\n  Circle(r: Float)\n  None\n}\ntype Point { x: Float }\ntype Meters = Float\nfn main() {}\n")
+		rp, p := c.Frontend.Resolved, c.Core
+		if p.Funs.Len() != rp.Defs.Len() || p.Funs.Len() != 11 {
+			t.Fatalf("%d functions for %d definitions, want 11 of each (the prelude's five, three types, two constructors and main)", p.Funs.Len(), rp.Defs.Len())
+		}
+		var names []string
+		for id, def := range rp.Defs.All() {
+			if def.Module == 0 {
+				continue
+			}
+			f := p.Funs.Get(core.FunID(id))
+			name := c.Session.Interner.String(def.Name)
+			names = append(names, name)
+			if def.Kind == sema.DefFn {
+				continue
+			}
+			if f.Name != def.Name || !f.UserModule || f.Span != def.Span || elabText(c, f.Span) != name {
+				t.Errorf("%s: the Fun is %+v, want its name, the user's module and the name's span", name, f)
+			}
+			if !f.HasBody || f.ExternName != "" || len(f.Params) != 0 || f.FrameSize != 0 {
+				t.Errorf("%s: the Fun is %+v, want a body, no extern name, no parameters and an empty frame", name, f)
+			}
+			if got := elabShape(c, f.Body); got != "()" {
+				t.Errorf("%s: the body is %s, want ()", name, got)
+			}
+		}
+		if got := strings.Join(names, " "); got != "Shape Circle None Point Meters main" {
+			t.Errorf("the file's definitions are %q, want the types and constructors in source order and main", got)
+		}
+	})
+
+	t.Run("a_constructor_is_unit_until_the_constructors_exist", func(t *testing.T) {
+		// The checker gives a constructor the error type and says nothing, and the
+		// elaboration makes it `()`: alone, and called, where the arguments are
+		// still evaluated, in order, each in a slot of its own, and their value
+		// dropped. The Tarea that makes constructors build values replaces this.
+		c := testsupport.Compile(t, `type Shape {
+  Circle(r: Float)
+  None
+}
+fn alone() { None }
+fn called() { Circle(1.0) }
+fn effects() { Circle(print(7), None) }
+fn nested() { Circle(Circle(print(1))) }
+fn bare() { let f = Circle }
+`)
+		elabWant(t, c, "alone", "()")
+		elabWant(t, c, "called", "let _@0 = 1.0; ()")
+		elabWant(t, c, "effects", "let _@0 = @print(7); let _@1 = (); ()")
+		elabWant(t, c, "nested", "let _@0 = let _@1 = @print(1); (); ()")
+		elabWant(t, c, "bare", "let f@0 = (); ()")
+		if got := elabFun(t, c, "effects").FrameSize; got != 2 {
+			t.Errorf("effects has a frame of %d slots, want 2", got)
+		}
+		// The `()` of a name covers the name, and the one that ends a call covers
+		// the call, after the Let of its argument, which covers the argument.
+		p := c.Core
+		if got := elabText(c, p.Exprs.Get(elabFun(t, c, "alone").Body).Span); got != "None" {
+			t.Errorf("alone: the `()` covers %q, want None", got)
+		}
+		let := p.Exprs.Get(elabFun(t, c, "called").Body)
+		if got := elabText(c, let.Span); got != "1.0" {
+			t.Errorf("called: the Let covers %q, want its argument, 1.0", got)
+		}
+		if got := elabText(c, p.Exprs.Get(let.Body).Span); got != "Circle(1.0)" {
+			t.Errorf("called: the `()` covers %q, want Circle(1.0)", got)
+		}
+		// The variable is bound at the argument, as the `_` of a statement is.
+		if got := elabText(c, p.Vars.Get(let.Var).Span); got != "1.0" {
+			t.Errorf("called: the variable is bound at %q, want its argument, 1.0", got)
+		}
+	})
+
+	t.Run("big_type_declaration_is_elaborated_without_recursion", func(t *testing.T) {
+		// Review Focus 2: a type with 10 000 variants goes through the parser,
+		// name resolution, the checker, the elaboration and Lint with the stack of
+		// Go capped (see elabCompileCapped), and each variant is a Fun of the
+		// Program in its place.
+		const variants = 10_000
+		var src strings.Builder
+		src.WriteString("type Big {\n")
+		for i := range variants {
+			fmt.Fprintf(&src, "  V%d(Int, Bool)\n", i)
+		}
+		src.WriteString("}\nfn f(b: Big) -> Int { 1 }\nfn main() { print(f(V9999(1, true))) }\n")
+		c := elabCompileCapped(t, src.String())
+		rp, p := c.Frontend.Resolved, c.Core
+		if want := 5 + 1 + variants + 2; p.Funs.Len() != want || rp.Defs.Len() != want {
+			t.Fatalf("%d functions for %d definitions, want %d of each", p.Funs.Len(), rp.Defs.Len(), want)
+		}
+		// The Funs of the constructors are the ones after the type, in order.
+		for _, i := range []int{0, variants - 1} {
+			f := p.Funs.Get(core.FunID(5 + 1 + i))
+			if name := c.Session.Interner.String(f.Name); name != "V"+strconv.Itoa(i) || elabShape(c, f.Body) != "()" {
+				t.Errorf("function %d is %q with the body %s, want V%d with ()", 6+i, name, elabShape(c, f.Body), i)
+			}
+		}
+	})
+
 	t.Run("error_nodes_panic", func(t *testing.T) {
 		// Elaborate needs a program without errors. What it cannot translate it
 		// does not guess: it panics, with the text that the report of the ICE

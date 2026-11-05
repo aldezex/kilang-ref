@@ -47,6 +47,13 @@ import (
 //   - A name that stands for a definition is a FunRef and one that stands for a
 //     variable is a VarRef, wherever it is: the callee of a Call is elaborated
 //     like any other expression.
+//   - A type and a constructor are definitions too, so each is a Fun, for
+//     FunID(d) to be the Fun of DefID d, and none has code to run: its body is
+//     `()`, a filler. Until constructors build values, a constructor in an
+//     expression is `()`, and a call of one is its arguments, each evaluated in a
+//     slot of its own for what it does and then dropped, followed by `()`. The
+//     checker has given them the error type and said nothing, so no program with
+//     errors gets here with one.
 //
 // Every node has the span of the syntax it comes from, except these: a PrimCall
 // has the span of its operator (OpSpan: that is where the machine reports an
@@ -113,6 +120,12 @@ func (e *elaborator) fun(def sema.Def) Fun {
 	e.rm = &e.res.Modules[def.Module]
 	e.tm = &e.typed.Modules[def.Module]
 	e.slots = 0
+	if def.Kind == sema.DefType || def.Kind == sema.DefCtor {
+		return Fun{
+			Name: def.Name, HasBody: true, Body: e.b.LitUnit(def.Span),
+			Span: def.Span, UserModule: def.Module != sema.PreludeModule,
+		}
+	}
 	it := e.m.ItemNodes.Get(def.Item)
 	f := Fun{
 		Name: def.Name, HasBody: it.HasBody, ExternName: def.ExternName,
@@ -159,6 +172,9 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	case syntax.ExprName:
 		switch r := e.rm.ExprRes[id]; r.Kind {
 		case sema.ResDef:
+			if e.isCtor(id) {
+				return e.b.LitUnit(x.Span)
+			}
 			return e.b.FunRef(x.Span, FunID(r.Def))
 		case sema.ResLocal:
 			return e.b.VarRef(x.Span, e.varOf[r.Local])
@@ -168,6 +184,9 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 			panic("unreachable")
 		}
 	case syntax.ExprCall:
+		if e.isCtor(x.Callee) {
+			return e.ctorCall(x)
+		}
 		callee := e.expr(x.Callee)
 		var args []ExprID
 		for _, a := range e.m.ExprList(x.Args) {
@@ -207,6 +226,37 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	default:
 		panic("unreachable")
 	}
+}
+
+// isCtor reports whether the expression id is a name that stands for a
+// constructor.
+func (e *elaborator) isCtor(id syntax.ExprID) bool {
+	if e.m.Exprs.Get(id).Kind != syntax.ExprName {
+		return false
+	}
+	r := e.rm.ExprRes[id]
+	return r.Kind == sema.ResDef && e.res.Defs.Get(r.Def).Kind == sema.DefCtor
+}
+
+// ctorCall elaborates the call x of a constructor: its arguments, each bound to
+// a variable of its own that nothing reads, in order, and `()` for the value of
+// the call, which has the span of the call. Like a block it takes the slot of
+// each variable before it elaborates the argument, and builds the chain from the
+// last argument to the first, so a call of any number of arguments adds no Go
+// frames of its own.
+func (e *elaborator) ctorCall(x syntax.Expr) ExprID {
+	args := e.m.ExprList(x.Args)
+	vars := make([]VarID, len(args))
+	inits := make([]ExprID, len(args))
+	for i, a := range args {
+		vars[i] = e.newVar(e.underscore, e.m.Exprs.Get(a).Span)
+		inits[i] = e.expr(a)
+	}
+	body := e.b.LitUnit(x.Span)
+	for i := len(args) - 1; i >= 0; i-- {
+		body = e.b.Let(e.m.Exprs.Get(args[i]).Span, vars[i], inits[i], body)
+	}
+	return body
 }
 
 // binary elaborates a binary operator: `&&` and `||` to a Match, the others to
