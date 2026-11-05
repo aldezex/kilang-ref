@@ -1,6 +1,6 @@
 # Prose conventions
 
-Standing instructions for every subagent that writes a chapter of the book in `~/kilang-ref`. Read this file first, then your brief. The brief holds your chapter's task (file, title, hours, milestone, chapter tag title, theory topics, exercises, «Go en el trabajo» topic), the plan's Global Constraints and Conventions, and, verbatim, the **«Plantilla de las tareas de prosa»**. That Spanish template, at the end of `docs/superpowers/plans/2026-10-24-ki-plan-01-part1.md`, is normative; section 4 below restates it in English, and if the two ever differ the Spanish one wins. `book/README.md` documents the book's Markdown dialect.
+Standing instructions for every subagent that writes a chapter of the book in `~/kilang-ref`. Read this file first, then your brief. The brief holds your chapter's task (file, title, hours, milestone, chapter tag title, theory topics, exercises, «Go en el trabajo» topic), the plan's Global Constraints and Conventions, and, verbatim, the **«Plantilla de las tareas de prosa»**. That Spanish template is normative, and it is the current plan's: section 4 below restates the part of it that every plan shares, in English, and where it differs from the template in your brief, the brief's wins. `book/README.md` documents the book's Markdown dialect.
 
 ## 1. The project and the reader
 
@@ -37,7 +37,7 @@ The chapter teaches these as a method, so the prose must model them:
 
 ## 4. The template
 
-**Front matter:** `chapter`, `title` (in Spanish, exactly as the brief gives it), `part: I`, `hours` and `milestone` (the literal milestone of spec 12.5, as the brief quotes it).
+**Front matter:** `chapter`, `title` (in Spanish, exactly as the brief gives it), `part` (the numeral of the part, as the brief gives it), `hours` and `milestone` (the literal milestone of spec 12.5, as the brief quotes it).
 
 **Fixed sections, in this order** (the headings of `book/README.md`):
 
