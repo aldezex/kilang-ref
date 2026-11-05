@@ -128,13 +128,13 @@ func TestCascadePads(t *testing.T) {
 
 func TestParseKiDiagnostics(t *testing.T) {
 	t.Run("errors_of_the_json_lines", func(t *testing.T) {
-		out := `{"severity":"error","code":"E0301","message":"unknown name","path":"x","line":3,"col":9,"labels":[{"primary":true,"line":3,"col":9,"message":"m"},{"primary":false,"line":2,"col":7,"message":"n"}]}
+		out := `{"severity":"error","code":"E0301","message":"unknown name","path":"x","line":3,"col":9,"labels":[{"primary":true,"line":3,"col":9,"message":"m"},{"primary":false,"line":2,"col":7,"message":"n"}],"help":"h"}
 not json
 {"severity":"warning","code":"W1","message":"w","line":4,"col":1}
 {"severity":"error","code":"E0201","message":"other","line":5,"col":1}
 `
 		got := parseKiDiagnostics([]byte(out))
-		if len(got) != 2 || got[0].Code != "E0301" || got[0].Line != 3 || got[0].Col != 9 || got[1].Code != "E0201" || got[1].Line != 5 {
+		if len(got) != 2 || got[0].Code != "E0301" || got[0].Line != 3 || got[0].Col != 9 || got[1].Code != "E0201" || got[1].Line != 5 || got[0].Help != "h" || got[1].Help != "" {
 			t.Errorf("diagnostics %+v", got)
 		}
 	})
@@ -146,6 +146,18 @@ not json
 //	a line with STRAY   gives one error at that line and another at line 1
 //	a line with FAR     gives one error at line 1 and none at that line
 //	after a line with OPEN, each line with bookxPad or bookxLet gives one error
+//	a line with NEXT    gives one error at the next line
+//	a line with BRACE   gives E0202 for a `{` at that line, and each later line that
+//	                    starts with fn, pub or # an E0201 that says what it found
+//	a line with HEADER  does the same but with `expected identifier` on the first
+//	                    such line, as a `let` left before a `fn` does
+//	a line with PAREN   does the same as BRACE for a `(`
+//	a line with NOCLOSE does the same as BRACE, without the E0202
+//	a line with WIDE    does the same as BRACE, and the first statement of each pad
+//	                    gets an error too
+//	a line with ELSE    does the same as BRACE, and line 1 gets another error
+//	a line with ONEPAD  gives one error on the first added function, however many
+//	a line with GROWS   gives, for each added line, one error at line 1
 //	ICE exits with 70, and HANG never ends
 const fakeKi = `#!/bin/sh
 f="$3"
@@ -153,6 +165,24 @@ grep -q ICE "$f" && exit 70
 grep -q HANG "$f" && exec sleep 60
 awk '
 function diag(n) { printf "{\"severity\":\"error\",\"code\":\"E1\",\"message\":\"m\",\"line\":%d,\"col\":1}\n", n; bad = 1 }
+function item(n, what, word) { printf "{\"severity\":\"error\",\"code\":\"E0201\",\"message\":\"expected %s, found \140%s\140\",\"line\":%d,\"col\":1}\n", what, word, n; bad = 1 }
+function closer(n, c) { printf "{\"severity\":\"error\",\"code\":\"E0202\",\"message\":\"unclosed delimiter\",\"line\":%d,\"col\":1,\"help\":\"close it with \140%s\140\"}\n", n, c; bad = 1 }
+/NEXT/ { nextline = NR + 1 }
+NR == nextline { diag(NR) }
+/BRACE|HEADER|ELSE|WIDE/ { closer(NR, "}"); swallow = 1 }
+/HEADER/ { first = 1 }
+/ELSE/ { diag(1) }
+/WIDE/ { wide = 1 }
+/PAREN/ { closer(NR, ")"); swallow = 1 }
+/NOCLOSE/ { swallow = 1 }
+swallow && /^fn / { item(NR, first ? "identifier" : "expression", "fn"); first = 0 }
+swallow && /^pub / { item(NR, "expression", "pub") }
+swallow && /^#/ { item(NR, "expression", "#") }
+wide && /let b = / { diag(NR) }
+/ONEPAD/ { onepad = 1 }
+onepad && /fn bookxPad0\(/ { diag(NR) }
+/GROWS/ { grows = 1 }
+grows && /bookx(Pad|Let)/ { diag(1) }
 /OPEN/ { open = 1 }
 /OOPS/ { diag(NR) }
 /STRAY/ { diag(NR); diag(1) }
@@ -183,7 +213,7 @@ func cascadeRun(t *testing.T, program string, vocabulary ...string) (int, string
 func TestCascadeRun(t *testing.T) {
 	t.Run("nothing_wrong", func(t *testing.T) {
 		code, out, errOut := cascadeRun(t, "a\nb\n", "OOPS")
-		want := "cascade p.ki: 6 mutants, 2 still valid, 4 with errors (1: 4), 0 grow, 0 at correct text, 0 crash\n"
+		want := "cascade p.ki: 6 mutants, 2 still valid, 4 with errors (1: 4), 0 grow, 0 at correct text, 0 far from the edit, 0 on the known limit, 0 crash\n"
 		if code != exitOK || out != want || errOut != "" {
 			t.Errorf("code %d, stdout %q, stderr %q; want 0, %q", code, out, errOut, want)
 		}
@@ -200,7 +230,7 @@ func TestCascadeRun(t *testing.T) {
 		code, out, _ := cascadeRun(t, "a\n", "OPEN")
 		for _, want := range []string{
 			"p.ki:1:1: grows: rep `a` -> `OPEN`: 0 diagnostics, then 8, then 16, with 0, 4 and 8 correct additions after it: E1 m\n",
-			"cascade p.ki: 3 mutants, 3 still valid, 0 with errors (none), 2 grow, 2 at correct text, 0 crash\n",
+			"cascade p.ki: 3 mutants, 3 still valid, 0 with errors (none), 2 grow, 2 at correct text, 0 far from the edit, 0 on the known limit, 0 crash\n",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("want %q in:\n%s", want, out)
@@ -211,24 +241,135 @@ func TestCascadeRun(t *testing.T) {
 		}
 	})
 
-	t.Run("an_error_elsewhere_besides_the_one_at_the_edit", func(t *testing.T) {
+	t.Run("an_error_elsewhere_besides_the_one_at_the_edit_is_listed_and_does_not_fail", func(t *testing.T) {
 		code, out, _ := cascadeRun(t, "a\nb\nc\nd\n", "STRAY")
-		if code != exitFail {
-			t.Errorf("code %d", code)
+		if code != exitOK {
+			t.Errorf("code %d: a line far from the edit is often the mistake's own consequence", code)
 		}
-		if !strings.Contains(out, "p.ki:4:1: correct-text: rep `d` -> `STRAY`: an error at 1:1, and the edit is on line 4\n") {
+		if !strings.Contains(out, "p.ki:4:1: far: rep `d` -> `STRAY`: an error at 1:1, and the edit is on line 4\n") {
 			t.Errorf("stdout:\n%s", out)
 		}
 		// On line 2 the other error is next to the edit: nothing to report.
-		if strings.Contains(out, "p.ki:2:1: correct-text") {
+		if strings.Contains(out, "p.ki:2:1: far") {
 			t.Errorf("an error next to the edit is flagged:\n%s", out)
+		}
+		if !strings.Contains(out, " 0 at correct text, 4 far from the edit, ") {
+			t.Errorf("counts:\n%s", out)
+		}
+	})
+
+	t.Run("an_added_line_next_to_the_edit_is_where_the_mistake_is_noticed", func(t *testing.T) {
+		// A missing `)` is noticed at the next token, and that one may be on an added line.
+		code, out, _ := cascadeRun(t, "a\nb\n", "NEXT")
+		if code != exitOK || strings.Contains(out, "correct-text:") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	// The accepted limit: a missing `}` costs an E0201 for each later line that starts
+	// an item, as internal/syntax/parser_stmt.go documents. A program with an item
+	// after the edit, so the program itself shows it too.
+	const items = "a\nfn g\n"
+
+	t.Run("the_missing_brace_is_counted_apart_and_does_not_fail", func(t *testing.T) {
+		// The item is two lines below the first edit, so it is far from it as well.
+		code, out, _ := cascadeRun(t, "a\nb\nc\nfn g\n", "BRACE", "HEADER")
+		if code != exitOK {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+		for _, kind := range []string{": grows:", ": correct-text:", ": far:"} {
+			if strings.Contains(out, kind) {
+				t.Errorf("%s in:\n%s", kind, out)
+			}
+		}
+		if !strings.Contains(out, " 0 grow, 0 at correct text, 0 far from the edit, 20 on the known limit, 0 crash\n") {
+			t.Errorf("counts:\n%s", out)
+		}
+	})
+
+	for _, row := range []struct{ name, word string }{
+		{"without_an_e0202_it_is_a_cascade_like_any_other", "NOCLOSE"},
+		{"an_unclosed_paren_is_not_that_limit", "PAREN"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			code, out, _ := cascadeRun(t, items, row.word)
+			if code != exitFail || !strings.Contains(out, ": grows: rep `a` -> `"+row.word+"`") || !strings.Contains(out, ": correct-text: rep `a` -> `"+row.word+"`") {
+				t.Errorf("code %d, stdout:\n%s", code, out)
+			}
+		})
+	}
+
+	t.Run("the_mistake_noticed_on_the_next_line_does_not_hide_the_limit", func(t *testing.T) {
+		// `{ x (` hides the line breaks: the `(` is noticed at the next `let`, an added
+		// one, and each item below still costs its E0201.
+		code, out, _ := cascadeRun(t, items, "NEXTBRACE")
+		if code != exitOK || strings.Contains(out, ": grows:") || strings.Contains(out, ": correct-text:") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("an_error_on_an_added_line_fails_by_itself", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\n", "ONEPAD")
+		if code != exitFail || strings.Contains(out, ": grows:") || !strings.Contains(out, ": correct-text: rep `a` -> `ONEPAD`") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("growing_fails_by_itself", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\n", "GROWS")
+		if code != exitFail || strings.Contains(out, ": correct-text:") || !strings.Contains(out, ": grows: rep `a` -> `GROWS`") || !strings.Contains(out, ": none on the added lines\n") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("an_error_on_any_other_added_line_is_no_limit", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, items, "WIDE")
+		if code != exitFail || !strings.Contains(out, ": grows: rep `a` -> `WIDE`") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("the_limit_excuses_only_its_own_lines", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "b\nc\nd\n"+"e\nfn g\n", "ELSE")
+		if !strings.Contains(out, "p.ki:4:1: far: rep `e` -> `ELSE`: an error at 1:1, and the edit is on line 4\n") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+		if !strings.Contains(out, "on the known limit") || strings.Contains(out, ": grows:") {
+			t.Errorf("stdout:\n%s", out)
+		}
+	})
+
+	t.Run("a_line_that_starts_no_item_is_not_excused", func(t *testing.T) {
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "x\nfn f\nlet y\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 3}) {
+			t.Errorf("found `fn` on a line that starts with let")
+		}
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "x\nfn f\n")(kiDiagnostic{Code: "E1", Message: "expected expression, found `fn`", Line: 2}) {
+			t.Errorf("a code that is not E0201")
+		}
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "x\nfn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 9}) {
+			t.Errorf("a line past the end of the text")
+		}
+		if !braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "x\n  fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 2}) {
+			t.Errorf("an indented fn starts an item")
+		}
+		for _, line := range []string{"pub fn f", "#[extern(x)]"} {
+			word := line[:strings.IndexAny(line, " [")]
+			if !braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, line+"\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `" + word + "`", Line: 1}) {
+				t.Errorf("%s starts an item", line)
+			}
+		}
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `)`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 1}) {
+			t.Errorf("an E0202 for a `)`")
+		}
+		if braceLimit([]kiDiagnostic{{Code: "E0201", Help: "close it with `}`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 1}) {
+			t.Errorf("an E0201 whose help names `}` is no E0202")
 		}
 	})
 
 	t.Run("the_only_error_may_be_far_from_the_edit", func(t *testing.T) {
 		// Renaming a function gives its error where it is used: it is the mistake.
 		code, out, _ := cascadeRun(t, "a\nb\nc\nd\n", "FAR")
-		if code != exitOK || strings.Contains(out, "correct-text:") || !strings.Contains(out, "(1: 8)") {
+		if code != exitOK || strings.Contains(out, "correct-text:") || strings.Contains(out, ": far:") || !strings.Contains(out, "(1: 8)") {
 			t.Errorf("code %d, stdout:\n%s", code, out)
 		}
 	})

@@ -25,11 +25,20 @@ import (
 //   - grows: with correct functions and statements added after the edit, the
 //     errors go on growing. One mistake then costs as many errors as the rest of
 //     the file has lines, up to the cap of the sink, which hides all the others.
-//   - correct-text: an error points at text that is not wrong. Certainly so at a
-//     line that was added and that depends on nothing else, and also at a line far
-//     from the edit, when the edit itself got its error too. A lone error far from
-//     the edit is fine: rename a function, and the error is where it is called.
+//   - correct-text: an error at a line that was added and that depends on nothing
+//     else, so it points at text that is not wrong. The added line next to the edit
+//     does not count: a missing token is noticed at the next one, wherever it is.
+//   - far: the edit got its error, and another one is far from it. It may be correct
+//     text or the mistake's own consequence: delete a `fn`, and the error is where it
+//     was called too. Only a person can tell, so it is listed and it fails nothing. A
+//     lone error far from the edit is not even listed: rename a function, and the
+//     error is where it is called.
 //   - crash: ki does not answer with 0 or 1, or the time or the memory ran out.
+//
+// The exit code says whether something grows, points at correct text or crashes, so
+// a program that exits 1 has something new to look at. Not the accepted limit: a
+// missing `}` costs one E0201 for each later line that starts an item (see
+// braceLimit), which is counted apart until the parser ends a block at an item.
 //
 // bookx imports only the standard library, so its tokens are its own: this reads
 // source well enough to choose what to break, and never decides what is valid.
@@ -146,6 +155,7 @@ type kiDiagnostic struct {
 	Message  string `json:"message"`
 	Line     int    `json:"line"`
 	Col      int    `json:"col"`
+	Help     string `json:"help"` // ki writes null when it has none
 }
 
 // parseKiDiagnostics returns the errors in the output of ki. A line that is not
@@ -159,6 +169,29 @@ func parseKiDiagnostics(output []byte) []kiDiagnostic {
 		}
 	}
 	return out
+}
+
+// braceLimit returns what tells apart the errors of the accepted limit, in the
+// diagnostics of one run on text: internal/syntax/parser_stmt.go documents that a
+// block with no `}` reads what follows as statements, so each later line that starts
+// an item is an E0201 that found its first token, and the E0202 comes last. So an
+// error of the limit needs that E0202, and it is an E0201 about the token that starts
+// its line. Past diag.MaxErrors the E0202 is lost and nothing is excused: the program
+// would need a hundred items, and then a failure is the right answer.
+func braceLimit(ds []kiDiagnostic, text string) func(kiDiagnostic) bool {
+	open := slices.ContainsFunc(ds, func(d kiDiagnostic) bool {
+		return d.Code == "E0202" && strings.Contains(d.Help, "`}`")
+	})
+	lines := strings.Split(text, "\n")
+	return func(d kiDiagnostic) bool {
+		if !open || d.Code != "E0201" || d.Line < 1 || d.Line > len(lines) {
+			return false
+		}
+		line := strings.TrimLeft(lines[d.Line-1], " \t")
+		return slices.ContainsFunc([]string{"fn", "pub", "#"}, func(word string) bool {
+			return strings.HasPrefix(line, word) && strings.HasSuffix(d.Message, "found `"+word+"`")
+		})
+	}
 }
 
 // Variables so a test can shorten them. The vocabulary is what breaks a program
@@ -186,6 +219,7 @@ type cascadeFinding struct {
 // cascadeReport is what a hunt found in one program.
 type cascadeReport struct {
 	Mutants, Valid, WithErrors int
+	KnownLimit                 int // mutants that hit the accepted limit of braceLimit
 	Histogram                  map[int]int
 	Findings                   []cascadeFinding
 }
@@ -307,18 +341,17 @@ func (h *cascadeHunt) edit(src string, e cascadeEdit, lastLine int, r *cascadeRe
 		add("crash", "%s: exit %d", e, exit)
 		return nil
 	}
-	flagged := false // one correct-text finding per edit
 	if len(base) == 0 {
 		r.Valid++
 	} else {
 		r.WithErrors++
 		r.Histogram[len(base)]++
+		limit := braceLimit(base, e.Source)
 		if slices.ContainsFunc(base, func(d kiDiagnostic) bool { return nearLine(d.Line, e.Line) }) {
 			// The mistake has its error. Is there another, far from it? Past the last
 			// line is the end of the file, where a delimiter left open belongs.
-			if i := slices.IndexFunc(base, func(d kiDiagnostic) bool { return !nearLine(d.Line, e.Line) && d.Line <= lastLine }); i >= 0 {
-				add("correct-text", "%s: an error at %d:%d, and the edit is on line %d", e, base[i].Line, base[i].Col, e.Line)
-				flagged = true
+			if i := slices.IndexFunc(base, func(d kiDiagnostic) bool { return !nearLine(d.Line, e.Line) && d.Line <= lastLine && !limit(d) }); i >= 0 {
+				add("far", "%s: an error at %d:%d, and the edit is on line %d", e, base[i].Line, base[i].Col, e.Line)
 			}
 		}
 	}
@@ -336,7 +369,15 @@ func (h *cascadeHunt) edit(src string, e cascadeEdit, lastLine int, r *cascadeRe
 		add("crash", "%s with correct text added: exit %d", e, exit)
 		return nil
 	}
-	if i := slices.IndexFunc(first, func(d kiDiagnostic) bool { return isPad(d.Line) }); i >= 0 && !flagged {
+	// A mutant on the limit has it here too: the added functions are items after it.
+	limit := braceLimit(first, text)
+	if slices.ContainsFunc(first, limit) {
+		r.KnownLimit++
+	}
+	wrongOnAdded := func(d kiDiagnostic, limit func(kiDiagnostic) bool) bool {
+		return isPad(d.Line) && !nearLine(d.Line, e.Line) && !limit(d)
+	}
+	if i := slices.IndexFunc(first, func(d kiDiagnostic) bool { return wrongOnAdded(d, limit) }); i >= 0 {
 		add("correct-text", "%s: an error on an added correct line: %s %s", e, first[i].Code, first[i].Message)
 	}
 	if len(first) <= len(base) {
@@ -352,8 +393,13 @@ func (h *cascadeHunt) edit(src string, e cascadeEdit, lastLine int, r *cascadeRe
 		return nil
 	}
 	if len(second) > len(first) {
+		limit := braceLimit(second, text)
+		i := slices.IndexFunc(second, func(d kiDiagnostic) bool { return wrongOnAdded(d, limit) })
+		if i < 0 && slices.ContainsFunc(second, func(d kiDiagnostic) bool { return isPad(d.Line) && limit(d) }) {
+			return nil // what grew is the limit, one error per added item
+		}
 		cause := "none on the added lines"
-		if i := slices.IndexFunc(second, func(d kiDiagnostic) bool { return isPad(d.Line) }); i >= 0 {
+		if i >= 0 {
 			cause = second[i].Code + " " + second[i].Message
 		}
 		add("grows", "%s: %d diagnostics, then %d, then %d, with 0, %d and %d correct additions after it: %s", e, len(base), len(first), len(second), cascadePadsFirst, cascadePadsSecond, cause)
@@ -367,7 +413,8 @@ func nearLine(line, edit int) bool { return line >= edit-1 && line <= edit+1 }
 
 // runCascade is `bookx cascade [--ki BIN] [--limit N] [--top N] <file.ki>...`: it
 // prints up to --top findings of each kind per program and a line of counts. The
-// exit code is 1 when it found anything or could not do its work.
+// exit code is 1 when something grows, points at correct text or crashes, or when it
+// could not do its work; `far` and the accepted limit only get their counts.
 func runCascade(args []string, stdout, stderr io.Writer) int {
 	ki, limit, top := "build/bin/ki", 0, 20
 	_, files, ok := parseArgs("cascade", args, -1, false, stderr, func(f *flag.FlagSet) {
@@ -415,7 +462,7 @@ func runCascade(args []string, stdout, stderr io.Writer) int {
 			code = exitFail
 			continue
 		}
-		for _, kind := range []string{"grows", "correct-text", "crash"} {
+		for _, kind := range []string{"grows", "correct-text", "far", "crash"} {
 			shown := 0
 			for _, finding := range r.Findings {
 				if finding.Kind != kind {
@@ -430,9 +477,9 @@ func runCascade(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "%s: and %s more of %s\n", f, fmt.Sprint(shown-top), kind)
 			}
 		}
-		fmt.Fprintf(stdout, "cascade %s: %d mutants, %d still valid, %d with errors (%s), %d grow, %d at correct text, %d crash\n",
-			f, r.Mutants, r.Valid, r.WithErrors, r.histogramText(), r.count("grows"), r.count("correct-text"), r.count("crash"))
-		if len(r.Findings) > 0 {
+		fmt.Fprintf(stdout, "cascade %s: %d mutants, %d still valid, %d with errors (%s), %d grow, %d at correct text, %d far from the edit, %d on the known limit, %d crash\n",
+			f, r.Mutants, r.Valid, r.WithErrors, r.histogramText(), r.count("grows"), r.count("correct-text"), r.count("far"), r.KnownLimit, r.count("crash"))
+		if r.count("grows")+r.count("correct-text")+r.count("crash") > 0 {
 			code = exitFail
 		}
 	}
