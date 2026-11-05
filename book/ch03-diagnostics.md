@@ -221,7 +221,7 @@ error[E0101]: invalid UTF-8 byte 0xFF
   |             ^ not valid UTF-8
 ```
 
-Llevan sustituto de ancho conocido: un byte inválido, U+FFFD; un control ASCII, una *control picture* (`␁`); uno C1 (U+0080–U+009F) o bidireccional, `<U+202E>`. El bidireccional reordena el texto en pantalla (el ataque *Trojan Source*).
+Sustitutos de ancho conocido: un byte inválido, U+FFFD; un control ASCII, una *control picture* (`␁`); uno C1 (U+0080–U+009F) o bidireccional, `<U+202E>`. El bidireccional reordena el texto en pantalla (el ataque *Trojan Source*).
 
 ## Tests primero
 
@@ -748,7 +748,7 @@ t.Run("labels_on_three_lines", func(t *testing.T) {
 
 Los ayudantes son los de `render_test.go` en `ref/ch03-s2`: `newSource` crea `test.ki`, `unknownName` el E0301, y `spanWithin(t, src, ctx, sub)` busca `sub` dentro de `ctx`, para un texto que se repite.
 
-Primero falla por el golden que falta. Con `-update` se escribe, pero esa misma ejecución ya da rojo: `testdata has 15 golden files, want 14`. La constante `wantGoldens` del test que cuenta los golden pasa a 15. El golden:
+Primero falla por el golden que falta. Con `-update` se escribe, pero el recuento da rojo: `testdata has 15 golden files, want 14`. La constante `wantGoldens` del test que cuenta los golden pasa a 15. El golden:
 
 ```text
 error[E0301]: unknown name `a2`
@@ -785,7 +785,7 @@ $ printf '// test: T03.76\n// run: check\n// args: --diagnostics=short\n// expec
 :::
 
 :::solution
-Cada diagnóstico humano muestra una ventana de la línea, no la línea entera, así que mide unos 350 bytes sea cual sea el fichero. Con el límite de 100, unos 34 KB de stderr. Sin límite, 38 MB en unos 30 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla.
+Cada diagnóstico humano muestra una ventana de la línea, no la línea entera, así que mide unos 350 bytes sea cual sea el fichero. Con el límite de 100, unos 34 KB de stderr. Sin límite, 38 MB en unos 20 s y unos 150 MB de memoria, porque `ReportAll` construye toda la salida en un `strings.Builder` antes de escribirla.
 
 `MaxErrors` protege de cualquier pase que se desboque. `CheckSource` ni llega a él: en un fichero que no es texto basta el primer byte malo.
 :::
