@@ -30,7 +30,7 @@ error[E0401]: mismatched types
   |             ^^^^ expected `Int`, found `Bool`
 ```
 
-La secundaria es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406 y una regla: una equivocación, un error.
+La secundaria es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406 y un objetivo: una equivocación, un error.
 
 ## Teoría
 
@@ -687,7 +687,7 @@ Las reservas casi empatan (101 041 frente a 100 038): con hash-consing, casi tod
 :::
 
 :::answer
-Valdría: con la coma, `[1, 12]` y `[11, 2]` dan `"1,12"` y `"11,2"`. Pero hay que convertir con `strconv`, y desde los ids de cuatro cifras la clave es más larga. Cuatro bytes fijos no necesitan separador: el ancho dice dónde acaba cada id.
+Valdría: con la coma, `[1, 12]` y `[11, 2]` dan `"1,12"` y `"11,2"`. Pero hay que convertir con `strconv`, y con dos ids de cuatro cifras la clave ya es más larga. Cuatro bytes fijos no necesitan separador: el ancho dice dónde acaba cada id.
 :::
 
 :::review
@@ -732,13 +732,13 @@ Porque una palabra que no molesta se queda para siempre: el ejemplo seguiría si
 
 ## Resumen
 
-- Con hash-consing, comparar tipos, resueltas las variables, es comparar ids.
+- Con hash-consing, comparar tipos sin variables ligadas es comparar ids.
 - Sin `const` compuestos, la inmutabilidad es una convención.
 - Las variables son un union-find con compresión de caminos.
 - Unificar es resolver, comparar, ligar con occurs check y bajar por las partes.
 - `check` empuja la expectativa, cuando puede, hacia la expresión que está mal.
 - Un `Reason` elige la secundaria, la nota o la ayuda.
-- El tipo de error unifica en silencio y se propaga: una equivocación, un error.
+- El tipo de error unifica en silencio y se propaga: lo que depende de un error no da otro.
 - `pending=` deja nacer una entrada del catálogo antes de que su código sea alcanzable, y caduca.
 
 ## Go en el trabajo
