@@ -1,0 +1,29 @@
+// test: T11.95
+// run: emit core
+// expect-stdout:
+// | fn Shape() =
+// |   ()
+// | fn Circle(r) =
+// |   Circle(r)
+// | fn Pair(a0, a1) =
+// |   Pair(a0, a1)
+// | fn None() =
+// |   None
+// | fn make(f, x) =
+// |   f(x)
+// | fn main() =
+// |   let a = Pair(1, Pair(2, None));
+// |   let b = make(Circle, 1.0);
+// |   let c = Circle(2.5);
+// |   ()
+type Shape {
+  Circle(r: Float)
+  Pair(Int, Shape)
+  None
+}
+fn make(f, x: Float) -> Shape { f(x) }
+fn main() {
+  let a = Pair(1, Pair(2, None))
+  let b = make(Circle, 1.0)
+  let c = Circle(2.5)
+}

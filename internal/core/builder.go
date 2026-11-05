@@ -55,6 +55,12 @@ func (b *Builder) Call(sp base.Span, callee ExprID, args []ExprID) ExprID {
 	return b.add(Expr{Kind: Call, Span: sp, Callee: callee, Args: base.AppendRange(&b.P.ExprPool, args)})
 }
 
+// Con makes the value of the constructor c built from args, which the Builder
+// copies like Call does. It is not checked against the arity of c: Lint does.
+func (b *Builder) Con(sp base.Span, c CtorID, args []ExprID) ExprID {
+	return b.add(Expr{Kind: Con, Span: sp, Ctor: c, Args: base.AppendRange(&b.P.ExprPool, args)})
+}
+
 // Prim makes a call of the primitive p with args, which the Builder copies like
 // Call does.
 func (b *Builder) Prim(sp base.Span, p Prim, args []ExprID) ExprID {

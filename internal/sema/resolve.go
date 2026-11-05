@@ -208,7 +208,9 @@ func (rp *ResolvedProgram) LookupType(mod ModuleIdx, name base.Symbol) (Res, boo
 // It reports to sink: E0301 for a name that stands for nothing, with the help
 // line "did you mean `fib`?" and the fix-it that writes `fib` if a variable or
 // definition it could have stood for is spelled almost like it, and with a
-// label on the `let` and a note if the name is the one that `let` binds;
+// label on the `let` and a note if the name is the one that `let` binds; E0306
+// instead of it for a name that starts with an uppercase letter, which can only
+// be a constructor (see unknownCtor);
 // E0302 for a function, a type or a constructor defined twice in a module (a
 // type and a constructor of one name are not a repeat: types and values are two
 // name spaces), E0304 for `#[extern]` in the user's module and E0305 for any
@@ -556,6 +558,10 @@ func (r *resolver) name(e syntax.Expr) Res {
 		return res
 	}
 	name := r.in.String(e.Name)
+	if startsUpper(name) {
+		r.unknownCtor(e, name)
+		return Res{Kind: ResError}
+	}
 	d := diag.NewError(diag.E(301), "unknown name `"+name+"`",
 		diag.Label{Span: e.Span, Message: "not found in this scope"})
 	// A `let` is visible only after its own statement, so the name that a `let`
@@ -579,6 +585,34 @@ func (r *resolver) name(e syntax.Expr) Res {
 	}
 	r.sink.Report(d)
 	return Res{Kind: ResError}
+}
+
+// startsUpper reports whether name starts with an uppercase letter, which is what
+// makes it the name of a constructor and not of a variable or a function: the
+// rule of the lexer, which reads such a name as an UpperIdent (`_X` does not
+// start with one).
+func startsUpper(name string) bool {
+	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+}
+
+// unknownCtor reports E0306 for the name written in e, which starts with an
+// uppercase letter and stands for nothing: a name like that can only be a
+// constructor, so it is not said to be an unknown name; the name of a type
+// written as a value is one too, because the types have a name space of their
+// own. It has no secondary label and no note. The help asks whether one of the constructors that are visible was
+// meant, with the edit that writes it, if one is spelled almost like the name
+// (see suggest); a type is not a candidate, and neither is a function or a
+// variable.
+func (r *resolver) unknownCtor(e syntax.Expr, name string) {
+	d := diag.NewError(diag.E(306), "unknown constructor `"+name+"`",
+		diag.Label{Span: e.Span, Message: "not a constructor in this scope"})
+	// Like the help of an unknown name, it costs a pass over the candidates.
+	if !r.sink.Truncated() {
+		if best, ok := suggest(name, r.visibleCtors()); ok {
+			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(e.Span, best))
+		}
+	}
+	r.sink.Report(d)
 }
 
 // expr resolves the names in the expression id and in everything inside it.

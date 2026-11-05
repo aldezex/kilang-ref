@@ -6,8 +6,8 @@
 // running it is a loop over them (Machine.run), not a recursion over the tree.
 //
 // It evaluates all of Core as Part I and chapter 11 have it: literals,
-// variables, `let`, the primitives, `match`, and calls of the program's
-// functions. A program can end in two ways other than returning from `main`: a
+// variables, `let`, the primitives, `match`, calls of the program's functions
+// and the constructors of the declared types. A program can end in two ways other than returning from `main`: a
 // panic (an overflow, a division by zero, or a Float that does not fit in an
 // Int), with Halt{Code: 101}, and a stack that has grown past its limit, with
 // Halt{Code: 103}. A call that is the last thing its function does
@@ -30,8 +30,8 @@ import (
 
 // frame is one frame of the continuation: what the machine must do with the
 // next value it computes. It is a sealed interface like Value, and applyFrame
-// has the type switch over its kinds: letFrame, primFrame, argFrame, matchFrame
-// and retFrame.
+// has the type switch over its kinds: letFrame, primFrame, argFrame, conFrame,
+// matchFrame and retFrame.
 type frame interface{ frame() }
 
 // letFrame waits for the value of the Init of a Let. When it arrives, the value
@@ -65,6 +65,18 @@ type argFrame struct {
 }
 
 func (argFrame) frame() {}
+
+// conFrame waits for the value of an argument of the Con expression con. vals
+// holds the values that have arrived, from left to right, and has room for all of
+// them: when the last arrives it is the Fields of the value that the constructor
+// builds, with no copy. Like an argFrame it counts as its room in slots until
+// then.
+type conFrame struct {
+	con  core.ExprID
+	vals []Value
+}
+
+func (conFrame) frame() {}
 
 // matchFrame waits for the value of the scrutinee of the Match expression
 // match. When it arrives, the arm that fits becomes the control.
@@ -319,8 +331,9 @@ func (m *Machine) env() []Value { return m.envs[len(m.envs)-1] }
 // step evaluates the expression id: a literal, a variable or a function name
 // returns its value; a Let evaluates its Init under a letFrame that remembers
 // what to do next; a PrimCall starts on its first argument under a primFrame; a
-// Call starts on its callee under an argFrame; and a Match starts on its
-// scrutinee under a matchFrame.
+// Call starts on its callee under an argFrame; a Con with no arguments returns
+// its value and one with arguments starts on its first under a conFrame; and a
+// Match starts on its scrutinee under a matchFrame.
 func (m *Machine) step(id core.ExprID) {
 	x := m.prog.Exprs.Get(id)
 	switch x.Kind {
@@ -355,6 +368,17 @@ func (m *Machine) step(id core.ExprID) {
 		m.slots += n
 		m.push(argFrame{call: id, vals: make([]Value, 0, n)})
 		m.eval(x.Callee)
+	case core.Con:
+		args := m.prog.Args(x.Args)
+		if len(args) == 0 {
+			m.ret(ConV{Ctor: x.Ctor})
+			return
+		}
+		// The values wait in a slice that is the value's own Fields in the end, and
+		// that counts as slots meanwhile, like the values of a call.
+		m.slots += len(args)
+		m.push(conFrame{con: id, vals: make([]Value, 0, len(args))})
+		m.eval(args[0])
 	case core.Match:
 		m.push(matchFrame{match: id})
 		m.eval(x.Scrutinee)
@@ -371,7 +395,9 @@ func (m *Machine) step(id core.ExprID) {
 // and its value is returned, or, if it fails, the program panics and the
 // machine halts with the panic. For an argFrame, v is the value of the callee
 // or of an argument: either the next argument is evaluated, or the call is made
-// (see enter). For a matchFrame, v is the scrutinee, and the arm that fits
+// (see enter). For a conFrame, v is the value of an argument: either the next
+// argument is evaluated, or the value that the constructor builds is returned,
+// with the values as its fields. For a matchFrame, v is the scrutinee, and the arm that fits
 // becomes the control, again with nothing pushed, so a call in an arm is still
 // in tail position. For a retFrame, the function that made the call is
 // returning v.
@@ -411,6 +437,16 @@ func (m *Machine) applyFrame(f frame, v Value) {
 			return
 		}
 		m.enter(x, vals)
+	case conFrame:
+		x := m.prog.Exprs.Get(f.con)
+		vals := append(f.vals, v)
+		if args := m.prog.Args(x.Args); len(vals) < len(args) {
+			m.push(conFrame{con: f.con, vals: vals})
+			m.eval(args[len(vals)])
+			return
+		}
+		m.slots -= cap(vals)
+		m.ret(ConV{Ctor: x.Ctor, Fields: vals})
 	case matchFrame:
 		x := m.prog.Exprs.Get(f.match)
 		// The type checker has made the scrutinee a Bool, like the operands of a

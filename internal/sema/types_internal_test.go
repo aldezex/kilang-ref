@@ -770,4 +770,168 @@ func TestTypeTable(t *testing.T) {
 			}
 		}
 	})
+	t.Run("declared_types_hash_cons", func(t *testing.T) {
+		// Data builds each application of a declaration once, as Fun builds each
+		// function type: the same declaration and arguments give the same id, and
+		// any difference gives another one. The ids of the arguments are written
+		// as four bytes each, so [1, 12] and [11, 2] are two types, and the table
+		// keeps its own copy of the arguments.
+		tbl := NewTypeTable()
+		intT, boolT := tbl.Builtin(BuiltinInt), tbl.Builtin(BuiltinBool)
+		x, y := tbl.FreshVar(Origin{}), tbl.FreshVar(Origin{})
+		// An empty list that is not nil, the first time a declaration is asked for,
+		// is the same as nil: the node keeps no list.
+		first := tbl.Data(3, []TypeID{})
+		if n := tbl.Node(first); n.Args != nil || tbl.Data(3, nil) != first {
+			t.Errorf("Data(3, []) is the node %+v and Data(3, nil) is %d, want Args nil and the same id (%d)", n, tbl.Data(3, nil), first)
+		}
+		args := []TypeID{intT, boolT}
+		pair := tbl.Data(2, args)
+		args[0] = boolT // the caller reuses its slice
+		all := []namedType{
+			{"declaration 0", tbl.Data(0, nil)}, {"declaration 1", tbl.Data(1, nil)}, {"declaration 2", tbl.Data(2, nil)},
+			{"2<Int, Bool>", pair}, {"2<Bool, Bool>", tbl.Data(2, []TypeID{boolT, boolT})}, {"2<Bool, Int>", tbl.Data(2, []TypeID{boolT, intT})},
+			{"1<Int>", tbl.Data(1, []TypeID{intT})}, {"2<Int>", tbl.Data(2, []TypeID{intT})},
+			{"2<x, y>", tbl.Data(2, []TypeID{x, y})}, {"2<y, x>", tbl.Data(2, []TypeID{y, x})},
+			{"1<2<Int, Bool>>", tbl.Data(1, []TypeID{pair})},
+			{"the function () -> declaration 0", tbl.Fun(nil, tbl.Data(0, nil), tbl.EmptyRow())},
+		}
+		distinctIDs(t, all)
+		if got := tbl.Data(2, []TypeID{intT, boolT}); got != pair {
+			t.Errorf("Data(2, [Int, Bool]) a second time = %d, want %d: the table copies the arguments it is given", got, pair)
+		}
+		if got := tbl.Data(0, nil); got != all[0].id || tbl.Data(0, []TypeID{}) != got {
+			t.Errorf("Data(0, nil) a second time = %d, and with an empty list %d, want %d for both", got, tbl.Data(0, []TypeID{}), all[0].id)
+		}
+		n := tbl.Node(pair)
+		if n.Kind != TypeData || n.Def != 2 || !slices.Equal(n.Args, []TypeID{intT, boolT}) || n.Params != nil {
+			t.Errorf("the node of 2<Int, Bool> is %+v, want TypeData, declaration 2 and the arguments Int and Bool", n)
+		}
+		if n := tbl.Node(all[0].id); n.Kind != TypeData || n.Args != nil {
+			t.Errorf("the node of declaration 0 is %+v, want TypeData with no arguments (nil)", n)
+		}
+	})
+
+	t.Run("show_declared_types", func(t *testing.T) {
+		// A declared type is shown by the name that Declare gave it, with its
+		// arguments after it, one level inside another; variables in the
+		// arguments are named in order, a type that is cut is cut, and naming a
+		// declaration out of order is a bug of the caller.
+		tbl := NewTypeTable()
+		tbl.nameDef(0, "Shape")
+		tbl.nameDef(1, "Option")
+		tbl.nameDef(2, "Pair")
+		intT, boolT := tbl.Builtin(BuiltinInt), tbl.Builtin(BuiltinBool)
+		fn := funMaker(tbl)
+		x, y := tbl.FreshVar(Origin{}), tbl.FreshVar(Origin{})
+		for _, row := range []struct {
+			name string
+			id   TypeID
+			want string
+		}{
+			{"no arguments", tbl.Data(0, nil), "Shape"},
+			{"one argument", tbl.Data(1, []TypeID{intT}), "Option<Int>"},
+			{"two arguments", tbl.Data(2, []TypeID{intT, boolT}), "Pair<Int, Bool>"},
+			{"nested", tbl.Data(1, []TypeID{tbl.Data(1, []TypeID{tbl.Data(0, nil)})}), "Option<Option<Shape>>"},
+			{"a function inside", tbl.Data(2, []TypeID{fn(boolT, intT), tbl.Data(0, nil)}), "Pair<(Int) -> Bool, Shape>"},
+			{"a declared type in a function", fn(tbl.Data(0, nil), tbl.Data(1, []TypeID{intT})), "(Option<Int>) -> Shape"},
+			{"variables in order", tbl.Data(2, []TypeID{y, x}), "Pair<a, b>"},
+			{"the same variable twice", tbl.Data(2, []TypeID{x, x}), "Pair<a, a>"},
+			{"the error type", tbl.Data(1, []TypeID{tbl.Error()}), "Option<{error}>"},
+		} {
+			if got := tbl.Show(row.id); got != row.want {
+				t.Errorf("%s: Show = %q, want %q", row.name, got, row.want)
+			}
+		}
+		// A bound variable shows what it is bound to.
+		bind(t, tbl, x, boolT)
+		if got := tbl.Show(tbl.Data(1, []TypeID{x})); got != "Option<Bool>" {
+			t.Errorf("Option<x> with x bound to Bool shows as %q, want Option<Bool>", got)
+		}
+		// The cut falls inside the arguments too: a type with more text than
+		// MaxTypeText ends in the cut mark, and the text before it is a start of
+		// the whole.
+		wide := make([]TypeID, 100)
+		for i := range wide {
+			wide[i] = intT
+		}
+		got := tbl.Show(tbl.Data(1, wide))
+		if !strings.HasSuffix(got, cutMark) || len(got) > MaxTypeText+len(cutMark) || !strings.HasPrefix(got, "Option<Int, Int, Int, ") {
+			t.Errorf("Show of a type with 100 arguments is %q (%d bytes), want the start of the text cut with %q at no more than %d bytes",
+				got, len(got), cutMark, MaxTypeText+len(cutMark))
+		}
+		// Declarations are named in the order of their ids.
+		if !panics(func() { tbl.nameDef(5, "Late") }) || !panics(func() { tbl.nameDef(1, "Again") }) {
+			t.Error("nameDef out of order did not panic")
+		}
+		if tbl.defNames.Len() != 3 {
+			t.Errorf("the table has %d names after two refused ones, want 3", tbl.defNames.Len())
+		}
+	})
+
+	t.Run("occurs_through_arguments", func(t *testing.T) {
+		// A variable can be inside the arguments of a declared type, at any depth
+		// and through bindings, and a declared type with no arguments has nothing
+		// inside. Forty levels of a type that holds the same type twice are 40
+		// nodes and 2^40 paths, and are answered as the same for functions.
+		tbl := NewTypeTable()
+		intT := tbl.Builtin(BuiltinInt)
+		fn := funMaker(tbl)
+		a, b := tbl.FreshVar(Origin{}), tbl.FreshVar(Origin{})
+		va, vb := varID(t, tbl, a), varID(t, tbl, b)
+		d := tbl.FreshVar(Origin{})
+		bind(t, tbl, d, tbl.Data(1, []TypeID{a}))
+		for _, row := range []struct {
+			name string
+			v    TypeVarID
+			in   TypeID
+			want bool
+		}{
+			{"no arguments", va, tbl.Data(0, nil), false},
+			{"the argument", va, tbl.Data(1, []TypeID{a}), true},
+			{"another variable", va, tbl.Data(1, []TypeID{b}), false},
+			{"the second of two", va, tbl.Data(2, []TypeID{intT, a}), true},
+			{"the first of two", va, tbl.Data(2, []TypeID{a, intT}), true},
+			{"not in two", va, tbl.Data(2, []TypeID{intT, b}), false},
+			{"nested", va, tbl.Data(1, []TypeID{tbl.Data(1, []TypeID{a})}), true},
+			{"in a function in an argument", va, tbl.Data(1, []TypeID{fn(intT, a)}), true},
+			{"in the result of a function in an argument", va, tbl.Data(1, []TypeID{fn(a, intT)}), true},
+			{"a declared type in a parameter", va, fn(intT, tbl.Data(1, []TypeID{a})), true},
+			{"a declared type in a result", va, fn(tbl.Data(1, []TypeID{a}), intT), true},
+			{"through a binding", va, d, true},
+			{"through a binding, the other variable", vb, d, false},
+			{"in an argument bound to a type that has it", va, tbl.Data(2, []TypeID{intT, d}), true},
+		} {
+			if got := tbl.Occurs(row.v, row.in); got != row.want {
+				t.Errorf("%s: Occurs = %v, want %v", row.name, got, row.want)
+			}
+		}
+		const levels = 40
+		onInt, onVar := intT, b
+		for range levels {
+			onInt = tbl.Data(2, []TypeID{onInt, onInt})
+			onVar = tbl.Data(2, []TypeID{onVar, onVar})
+		}
+		shared := []struct {
+			name string
+			v    TypeVarID
+			in   TypeID
+			want bool
+		}{
+			{"no variable at the bottom", va, onInt, false},
+			{"another variable at the bottom", va, onVar, false},
+			{"the variable at the bottom", vb, onVar, true},
+		}
+		got := make([]bool, len(shared))
+		within.Run(t, "Occurs on the declared types of 40 levels", func() {
+			for i, row := range shared {
+				got[i] = tbl.Occurs(row.v, row.in)
+			}
+		})
+		for i, row := range shared {
+			if got[i] != row.want {
+				t.Errorf("%s: Occurs = %v, want %v", row.name, got[i], row.want)
+			}
+		}
+	})
 }

@@ -270,6 +270,57 @@ fn main() =
 		}
 	})
 
+	t.Run("constructors", func(t *testing.T) {
+		// A type and its constructors print as the functions they are: the type as
+		// a filler and each constructor as its wrapper, which is the Con on its
+		// parameters. A Con is its name and its arguments in parentheses, as a call
+		// is, and its name alone when it has none; an argument that takes several
+		// lines goes on as it does in a call.
+		got := printSource(t, `type Shape {
+  Circle(r: Float)
+  Pair(Int, Shape)
+  None
+}
+fn make(c: Bool) -> Shape { Pair(1, if c { Circle(2.5) } else { None }) }
+fn bare() { let f = Circle
+  let n = None }
+`)
+		want := `fn Shape() =
+  ()
+fn Circle(r) =
+  Circle(r)
+fn Pair(a0, a1) =
+  Pair(a0, a1)
+fn None() =
+  None
+fn make(c) =
+  Pair(1, match c {
+    true => Circle(2.5)
+    false => None
+  })
+fn bare() =
+  let f = Circle;
+  let n = None;
+  ()
+`
+		if got != want {
+			t.Errorf("Print of a program with constructors:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("deep_constructors_no_recursion", func(t *testing.T) {
+		// The printer has a stack of its own: 100 000 constructors, each the
+		// argument of the next, are written with the stack of Go capped.
+		const depth = 100_000
+		p, in, _ := lintDeepCon(depth, 1)
+		want := "fn deep() =\n  " + strings.Repeat("Wrap(", depth) + "1" + strings.Repeat(")", depth) + "\n"
+		withStackCap(func() {
+			if got := core.Print(p, in); got != want {
+				t.Errorf("Print of %d nested constructors wrote %d bytes, want %d; the text differs at byte %d", depth, len(got), len(want), lintFirstDiff(got, want))
+			}
+		})
+	})
+
 	t.Run("repeated_names_allocation_bound", func(t *testing.T) {
 		// Each `print(1)` but the last (the tail) binds a `_`, and Print gives
 		// the n-1 of them different names. A Print that looked for a free name

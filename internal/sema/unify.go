@@ -31,7 +31,9 @@ type Unifier struct {
 // Function types are unified part by part, the parameters from the first and
 // then the result, and the first part that does not match is the mistake: it
 // is reported once, with the two types in the label, and the rest is not looked
-// at. The variables that were bound before that stay bound, and the
+// at. Two applications of the same declared type are unified argument by
+// argument in the same way; two of different declarations, or a declared type
+// and any other kind, do not match. The variables that were bound before that stay bound, and the
 // label shows them as what they are bound to. Function types with different
 // numbers of parameters do not match. The effect rows of two function types
 // are not compared: in Part I every function has the empty row (EmptyRow).
@@ -67,9 +69,10 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 	// pair is two types that have to become the same.
 	type pair struct{ expected, found TypeID }
 	todo := []pair{{expected, found}}
-	// expanded holds the pairs of function types whose parts are already on the
-	// stack or done. Only function types have parts, so only they can be met by
-	// many paths; a builtin or a variable is answered on the spot.
+	// expanded holds the pairs of function types, and of applications of one
+	// declared type, whose parts are already on the stack or done. Only they have
+	// parts, so only they can be met by many paths; a builtin or a variable is
+	// answered on the spot.
 	var expanded map[pair]struct{}
 	for len(todo) > 0 {
 		p := todo[len(todo)-1]
@@ -116,8 +119,25 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 			for i := len(en.Params) - 1; i >= 0; i-- {
 				todo = append(todo, pair{en.Params[i], fn.Params[i]})
 			}
+		case en.Kind == TypeData && fn.Kind == TypeData && en.Def == fn.Def && len(en.Args) == len(fn.Args):
+			// The same declaration applied to arguments that are not the same
+			// types, so far as the ids tell: the arguments are what is compared. The
+			// pair is looked at once, as a pair of function types is.
+			key := pair{e, f}
+			if _, done := expanded[key]; done {
+				continue
+			}
+			if expanded == nil {
+				expanded = make(map[pair]struct{})
+			}
+			expanded[key] = struct{}{}
+			for i := len(en.Args) - 1; i >= 0; i-- {
+				todo = append(todo, pair{en.Args[i], fn.Args[i]})
+			}
 		default:
-			// Two different builtin types, or a builtin and a function.
+			// Two different builtin types, a builtin and a function, or any other
+			// two kinds that are not the same: two different declared types, a
+			// declared type and a function.
 			u.mismatch(expected, found, foundAt, r)
 			return false
 		}
@@ -185,6 +205,8 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		because("expected because of the return type")
 	case ReasonArgument:
 		because("the parameter is declared here")
+	case ReasonCtorArg:
+		because("the field is declared here")
 	case ReasonIfBranches:
 		because("the other branch has type `" + shown[0] + "`")
 	case ReasonIfCondition:
@@ -200,6 +222,22 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		}
 	default:
 		panic("unreachable")
+	}
+	// Two types that are written alike and are not the same type, and a message
+	// that says expected `Int`, found `Int` tells nothing without the reason. It is
+	// one of two: a `type` of the program has the name of a builtin one (`type Int
+	// { A }`) and hides it, or a type is declared twice (E0302), and the name
+	// stands for the first while the constructors of the second give its own type.
+	// The note blames the hiding only if the program has a type named like a
+	// builtin one, since saying that a builtin is hidden when it is not would be
+	// false. A text that Show cut short (it ends with `…`) is no proof that the two
+	// are written alike: only their beginnings are.
+	if shown[0] == shown[1] && !strings.HasSuffix(shown[0], "…") {
+		why := "the program declares a type with that name more than once"
+		if t.hidesBuiltin {
+			why = "a `type` of the program hides the type that had that name"
+		}
+		d = d.WithNote("these are two different types with the same name: " + why)
 	}
 	// A body whose result is `()` and whose tail has a value: the value is
 	// not wanted, which the reader may not see when the tail is the last line

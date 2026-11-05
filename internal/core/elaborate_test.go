@@ -3,6 +3,7 @@ package core_test
 import (
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,7 +43,8 @@ func elabVar(c *testsupport.Compiled, v core.VarID) string {
 
 // elabShape writes the expression id on one line, with the fields that decide
 // what it does and no spans: a literal as its value, a variable as name@slot, a
-// function as @name, a call as callee(args), a primitive as name(args), a Let as
+// function as @name, a call as callee(args), a primitive as name(args), a
+// constructor as Name(args), or Name alone when it has no arguments, a Let as
 // `let v = init; body` and a Match as `match s { pattern => body; … }`. A test
 // compares the whole line, so a node of the wrong kind, a swapped pair of
 // children or a slot out of place shows as a different text. It recurses over
@@ -74,6 +76,12 @@ func elabShape(c *testsupport.Compiled, id core.ExprID) string {
 		return elabShape(c, e.Callee) + "(" + args(e.Args) + ")"
 	case core.PrimCall:
 		return e.Prim.String() + "(" + args(e.Args) + ")"
+	case core.Con:
+		name := c.Session.Interner.String(p.Ctors.Get(e.Ctor).Name)
+		if e.Args.Count == 0 {
+			return name
+		}
+		return name + "(" + args(e.Args) + ")"
 	case core.Let:
 		return "let " + elabVar(c, e.Var) + " = " + elabShape(c, e.Init) + "; " + elabShape(c, e.Body)
 	case core.Match:
@@ -736,16 +744,29 @@ fn last() {}
 		}
 	})
 
-	t.Run("types_and_constructors_are_filler_funs", func(t *testing.T) {
+	t.Run("types_are_fillers_and_constructors_are_wrappers", func(t *testing.T) {
 		// A type and a constructor are definitions, and a definition is a Fun with
-		// the id of its Def, so each of them is a Fun too: one whose body is `()`
-		// and that takes nothing and uses no slot. Without a body the Lint would
-		// call it an extern with no name. The record and the alias have the Fun
-		// of their type and none of a constructor.
-		c := testsupport.Compile(t, "type Shape {\n  Circle(r: Float)\n  None\n}\ntype Point { x: Float }\ntype Meters = Float\nfn main() {}\n")
+		// the id of its Def. The Fun of a type has nothing to run: its body is `()`
+		// and it takes nothing, so that Lint does not call it an extern with no
+		// name; the record and the alias have the Fun of their type and none of a
+		// constructor. The Fun of a constructor is the function that it is when it
+		// is not called: a parameter for each field, in a slot each and named as the
+		// field is, or a0, a1… by position when it has no name, and the Con of the
+		// constructor on them as its body.
+		c := testsupport.Compile(t, "type Shape {\n  Circle(r: Float)\n  None\n  Pair(Int, Bool)\n  Mixed(a: Int, Bool)\n}\n"+
+			"type Point { x: Float }\ntype Meters = Float\nfn main() {}\n")
 		rp, p := c.Frontend.Resolved, c.Core
-		if p.Funs.Len() != rp.Defs.Len() || p.Funs.Len() != 11 {
-			t.Fatalf("%d functions for %d definitions, want 11 of each (the prelude's five, three types, two constructors and main)", p.Funs.Len(), rp.Defs.Len())
+		if p.Funs.Len() != rp.Defs.Len() || p.Funs.Len() != 13 {
+			t.Fatalf("%d functions for %d definitions, want 13 of each (the prelude's five, three types, four constructors and main)", p.Funs.Len(), rp.Defs.Len())
+		}
+		want := map[string]struct {
+			params []string
+			body   string
+		}{
+			"Shape": {nil, "()"}, "Point": {nil, "()"}, "Meters": {nil, "()"},
+			"Circle": {[]string{"r@0"}, "Circle(r@0)"}, "None": {nil, "None"},
+			"Pair":  {[]string{"a0@0", "a1@1"}, "Pair(a0@0, a1@1)"},
+			"Mixed": {[]string{"a@0", "a1@1"}, "Mixed(a@0, a1@1)"},
 		}
 		var names []string
 		for id, def := range rp.Defs.All() {
@@ -761,65 +782,115 @@ fn last() {}
 			if f.Name != def.Name || !f.UserModule || f.Span != def.Span || elabText(c, f.Span) != name {
 				t.Errorf("%s: the Fun is %+v, want its name, the user's module and the name's span", name, f)
 			}
-			if !f.HasBody || f.ExternName != "" || len(f.Params) != 0 || f.FrameSize != 0 {
-				t.Errorf("%s: the Fun is %+v, want a body, no extern name, no parameters and an empty frame", name, f)
+			w := want[name]
+			var params []string
+			for _, v := range f.Params {
+				params = append(params, elabVar(c, v))
 			}
-			if got := elabShape(c, f.Body); got != "()" {
-				t.Errorf("%s: the body is %s, want ()", name, got)
+			if !f.HasBody || f.ExternName != "" || !slices.Equal(params, w.params) || f.FrameSize != uint32(len(w.params)) {
+				t.Errorf("%s: the Fun is %+v with the parameters %v, want a body, no extern name, the parameters %v and a frame of that many slots", name, f, params, w.params)
+			}
+			if got := elabShape(c, f.Body); got != w.body {
+				t.Errorf("%s: the body is %s, want %s", name, got, w.body)
+			}
+			// Everything in the Fun of a constructor is at its name.
+			for sub := range p.Subexprs(f.Body) {
+				if got := p.Exprs.Get(sub).Span; got != def.Span {
+					t.Errorf("%s: an expression of its Fun is at %q, want the name %q", name, elabText(c, got), name)
+				}
+			}
+			for _, v := range f.Params {
+				if got := p.Vars.Get(v).Span; got != def.Span {
+					t.Errorf("%s: a parameter is bound at %q, want the name", name, elabText(c, got))
+				}
 			}
 		}
-		if got := strings.Join(names, " "); got != "Shape Circle None Point Meters main" {
+		if got := strings.Join(names, " "); got != "Shape Circle None Pair Mixed Point Meters main" {
 			t.Errorf("the file's definitions are %q, want the types and constructors in source order and main", got)
+		}
+
+		// The constructors of the declarations, in order, one Ctor each.
+		in := c.Session.Interner
+		sym := func(s string) base.Symbol { return in.InternString(s) }
+		wantCtors := []core.Ctor{
+			{Name: sym("Circle"), Tag: 0, Arity: 1, Fields: []base.Symbol{sym("r")}},
+			{Name: sym("None"), Tag: 1, Arity: 0},
+			{Name: sym("Pair"), Tag: 2, Arity: 2},
+			{Name: sym("Mixed"), Tag: 3, Arity: 2, Fields: []base.Symbol{sym("a"), base.NoSymbol}},
+		}
+		if p.Ctors.Len() != len(wantCtors) {
+			t.Fatalf("the Program has %d constructors, want %d", p.Ctors.Len(), len(wantCtors))
+		}
+		for i, w := range wantCtors {
+			if got := p.Ctors.Get(core.CtorID(i)); got.Name != w.Name || got.Tag != w.Tag || got.Arity != w.Arity || got.Tuple ||
+				!slices.Equal(got.Fields, w.Fields) || (got.Fields == nil) != (w.Fields == nil) {
+				t.Errorf("constructor %d is %+v, want %+v", i, got, w)
+			}
+		}
+		// The first Fun of the constructors is the Con of the first Ctor, and the
+		// Con of each wrapper names its own.
+		for i, name := range []string{"Circle", "None", "Pair", "Mixed"} {
+			f := elabFun(t, c, name)
+			if got := p.Exprs.Get(f.Body).Ctor; got != core.CtorID(i) {
+				t.Errorf("%s: the body builds constructor %d, want %d", name, got, i)
+			}
 		}
 	})
 
-	t.Run("a_constructor_is_unit_until_the_constructors_exist", func(t *testing.T) {
-		// The checker gives a constructor the error type and says nothing, and the
-		// elaboration makes it `()`: alone, and called, where the arguments are
-		// still evaluated, in order, each in a slot of its own, and their value
-		// dropped. The Tarea that makes constructors build values replaces this.
+	t.Run("constructors_elaborate_to_con", func(t *testing.T) {
+		// A call of a constructor is a Con of its arguments, in order; one with no
+		// fields is a Con with none wherever it is written, and one with fields that
+		// is not called is a reference to its wrapper, as a function's name is.
 		c := testsupport.Compile(t, `type Shape {
   Circle(r: Float)
+  Pair(Int, Shape)
   None
 }
-fn alone() { None }
-fn called() { Circle(1.0) }
-fn effects() { Circle(print(7), None) }
-fn nested() { Circle(Circle(print(1))) }
+fn side() -> Int { 1 }
+fn alone() -> Shape { None }
+fn called() -> Shape { Circle(1.0) }
+fn nested() -> Shape { Pair(1, Pair(2, None)) }
+fn order() -> Shape { Pair(side(), Pair(side(), None)) }
 fn bare() { let f = Circle }
+fn viaLet() -> Shape { let n = None
+  n }
 `)
-		elabWant(t, c, "alone", "()")
-		elabWant(t, c, "called", "let _@0 = 1.0; ()")
-		elabWant(t, c, "effects", "let _@0 = @print(7); let _@1 = (); ()")
-		elabWant(t, c, "nested", "let _@0 = let _@1 = @print(1); (); ()")
-		elabWant(t, c, "bare", "let f@0 = (); ()")
-		if got := elabFun(t, c, "effects").FrameSize; got != 2 {
-			t.Errorf("effects has a frame of %d slots, want 2", got)
-		}
-		// The `()` of a name covers the name, and the one that ends a call covers
-		// the call, after the Let of its argument, which covers the argument.
+		elabWant(t, c, "alone", "None")
+		elabWant(t, c, "called", "Circle(1.0)")
+		elabWant(t, c, "nested", "Pair(1, Pair(2, None))")
+		elabWant(t, c, "order", "Pair(@side(), Pair(@side(), None))")
+		elabWant(t, c, "bare", "let f@0 = @Circle; ()")
+		elabWant(t, c, "viaLet", "let n@0 = None; n@0")
+		// The Con of a call covers the call, and that of a name the name, and the
+		// reference to a wrapper covers the name.
 		p := c.Core
-		if got := elabText(c, p.Exprs.Get(elabFun(t, c, "alone").Body).Span); got != "None" {
-			t.Errorf("alone: the `()` covers %q, want None", got)
+		for name, want := range map[string]string{"alone": "None", "called": "Circle(1.0)", "nested": "Pair(1, Pair(2, None))"} {
+			if got := elabText(c, p.Exprs.Get(elabFun(t, c, name).Body).Span); got != want {
+				t.Errorf("%s: the Con covers %q, want %q", name, got, want)
+			}
 		}
-		let := p.Exprs.Get(elabFun(t, c, "called").Body)
-		if got := elabText(c, let.Span); got != "1.0" {
-			t.Errorf("called: the Let covers %q, want its argument, 1.0", got)
+		outer := p.Exprs.Get(elabFun(t, c, "nested").Body)
+		if got := elabText(c, p.Exprs.Get(p.Args(outer.Args)[1]).Span); got != "Pair(2, None)" {
+			t.Errorf("nested: the inner Con covers %q, want Pair(2, None)", got)
 		}
-		if got := elabText(c, p.Exprs.Get(let.Body).Span); got != "Circle(1.0)" {
-			t.Errorf("called: the `()` covers %q, want Circle(1.0)", got)
+		if got := elabText(c, p.Exprs.Get(p.Args(p.Exprs.Get(p.Args(outer.Args)[1]).Args)[1]).Span); got != "None" {
+			t.Errorf("nested: the innermost Con covers %q, want None", got)
 		}
-		// The variable is bound at the argument, as the `_` of a statement is.
-		if got := elabText(c, p.Vars.Get(let.Var).Span); got != "1.0" {
-			t.Errorf("called: the variable is bound at %q, want its argument, 1.0", got)
+		bare := p.Exprs.Get(elabFun(t, c, "bare").Body)
+		if got := elabText(c, p.Exprs.Get(bare.Init).Span); got != "Circle" {
+			t.Errorf("bare: the reference covers %q, want Circle", got)
+		}
+		// The Con of a call names the constructor that is called.
+		if ctor := p.Ctors.Get(outer.Ctor); c.Session.Interner.String(ctor.Name) != "Pair" || ctor.Arity != 2 {
+			t.Errorf("nested: the outer Con builds %+v, want Pair with arity 2", ctor)
 		}
 	})
 
 	t.Run("big_type_declaration_is_elaborated_without_recursion", func(t *testing.T) {
 		// Review Focus 2: a type with 10 000 variants goes through the parser,
-		// name resolution, the checker, the elaboration and Lint with the stack of
-		// Go capped (see elabCompileCapped), and each variant is a Fun of the
-		// Program in its place.
+		// name resolution, the declarations, the checker, the elaboration and Lint
+		// with the stack of Go capped (see elabCompileCapped), and each variant is a
+		// Fun of the Program in its place, with its Ctor.
 		const variants = 10_000
 		var src strings.Builder
 		src.WriteString("type Big {\n")
@@ -832,11 +903,15 @@ fn bare() { let f = Circle }
 		if want := 5 + 1 + variants + 2; p.Funs.Len() != want || rp.Defs.Len() != want {
 			t.Fatalf("%d functions for %d definitions, want %d of each", p.Funs.Len(), rp.Defs.Len(), want)
 		}
+		if p.Ctors.Len() != variants {
+			t.Fatalf("%d constructors, want %d", p.Ctors.Len(), variants)
+		}
 		// The Funs of the constructors are the ones after the type, in order.
 		for _, i := range []int{0, variants - 1} {
 			f := p.Funs.Get(core.FunID(5 + 1 + i))
-			if name := c.Session.Interner.String(f.Name); name != "V"+strconv.Itoa(i) || elabShape(c, f.Body) != "()" {
-				t.Errorf("function %d is %q with the body %s, want V%d with ()", 6+i, name, elabShape(c, f.Body), i)
+			name, want := c.Session.Interner.String(f.Name), "V"+strconv.Itoa(i)
+			if ctor := p.Ctors.Get(core.CtorID(i)); name != want || elabShape(c, f.Body) != want+"(a0@0, a1@1)" || ctor.Tag != uint32(i) || ctor.Arity != 2 {
+				t.Errorf("function %d is %q with the body %s and the constructor %+v, want %s(a0@0, a1@1), tag %d and arity 2", 6+i, name, elabShape(c, f.Body), ctor, want, i)
 			}
 		}
 	})

@@ -1,6 +1,9 @@
 package core
 
 import (
+	"slices"
+	"strconv"
+
 	"github.com/aldezex/kilang/internal/base"
 	"github.com/aldezex/kilang/internal/sema"
 	"github.com/aldezex/kilang/internal/syntax"
@@ -48,12 +51,19 @@ import (
 //     variable is a VarRef, wherever it is: the callee of a Call is elaborated
 //     like any other expression.
 //   - A type and a constructor are definitions too, so each is a Fun, for
-//     FunID(d) to be the Fun of DefID d, and none has code to run: its body is
-//     `()`, a filler. Until constructors build values, a constructor in an
-//     expression is `()`, and a call of one is its arguments, each evaluated in a
-//     slot of its own for what it does and then dropped, followed by `()`. The
-//     checker has given them the error type and said nothing, so no program with
-//     errors gets here with one.
+//     FunID(d) to be the Fun of DefID d. The Fun of a type has no code to run: its
+//     body is `()`, a filler. The Fun of a constructor is its wrapper, the
+//     function that `Circle` is when it is written without a call: it takes one
+//     parameter for each field, named as the field is (`a0`, `a1`… for a field
+//     with no name), and its body is the Con of the constructor on those
+//     parameters.
+//   - A call of a constructor is a Con of its arguments, which the machine
+//     evaluates from left to right. A constructor with no fields is a Con with no
+//     arguments wherever it is written, because it is a value and not a function;
+//     one with fields that is written without a call is a FunRef to its wrapper,
+//     as a function's name is. Program.Ctors has one Ctor for each constructor of
+//     the declarations, in their order, so CtorID(c) is sema.CtorID(c): its Arity
+//     is the number of fields.
 //
 // Every node has the span of the syntax it comes from, except these: a PrimCall
 // has the span of its operator (OpSpan: that is where the machine reports an
@@ -61,7 +71,9 @@ import (
 // expression of its statement; the nodes that the elaboration adds (the `()` of
 // a missing `else` or of a block with no tail, the `true` or `false` of `&&` and
 // `||`) have the span of the `if`, the block or the operator expression they
-// complete; and a Fun has the span of its name.
+// complete; a Fun has the span of its name; and everything in the Fun of a
+// constructor (its parameters, their reads and the Con) has the span of the
+// constructor's name, the only place it has.
 //
 // The statements of a block are walked with a loop, from the first to elaborate
 // the initializers and from the last to the first to build the Let, so a block of
@@ -74,18 +86,23 @@ import (
 //
 // It only reads mods, res and typed, apart from this: TypeTable.Resolve
 // compresses the paths of the type variables it follows, which changes how the
-// table is stored. It does add `_` to in.
+// table is stored. It does add `_` to in, and `a0`, `a1`… when a constructor has a
+// field with no name.
 func Elaborate(mods []*syntax.Module, res *sema.ResolvedProgram, typed *sema.TypedProgram, in *base.Interner) *Program {
 	e := &elaborator{
-		mods: mods, res: res, typed: typed,
+		mods: mods, res: res, typed: typed, in: in,
 		underscore: in.InternString("_"),
 		p:          &Program{},
 		varOf:      make([]VarID, res.Locals.Len()),
 	}
 	e.b = Builder{P: e.p}
+	// The constructors first, so that every Con the functions build has its Ctor.
+	for _, c := range typed.Decls.Ctors.All() {
+		e.p.Ctors.Push(Ctor{Name: c.Name, Tag: c.Tag, Arity: uint32(len(c.Args)), Fields: slices.Clone(c.Fields)})
+	}
 	// The Defs are in DefID order, so each Push gives the id of its Def.
-	for _, def := range res.Defs.All() {
-		e.p.Funs.Push(e.fun(def))
+	for id, def := range res.Defs.All() {
+		e.p.Funs.Push(e.fun(id, def))
 	}
 	e.p.Main, e.p.HasMain = FunID(res.Main), res.HasMain
 	return e.p
@@ -96,6 +113,7 @@ type elaborator struct {
 	mods  []*syntax.Module
 	res   *sema.ResolvedProgram
 	typed *sema.TypedProgram
+	in    *base.Interner
 	// underscore is the name of the variable that an expression statement binds.
 	underscore base.Symbol
 
@@ -113,18 +131,21 @@ type elaborator struct {
 	slots uint32
 }
 
-// fun makes the Fun of def: its parameters first, so that they have the first
-// slots, and then its body, if it has one.
-func (e *elaborator) fun(def sema.Def) Fun {
+// fun makes the Fun of def, the definition id: its parameters first, so that they
+// have the first slots, and then its body, if it has one.
+func (e *elaborator) fun(id sema.DefID, def sema.Def) Fun {
 	e.m = e.mods[def.Module]
 	e.rm = &e.res.Modules[def.Module]
 	e.tm = &e.typed.Modules[def.Module]
 	e.slots = 0
-	if def.Kind == sema.DefType || def.Kind == sema.DefCtor {
+	switch def.Kind {
+	case sema.DefType:
 		return Fun{
 			Name: def.Name, HasBody: true, Body: e.b.LitUnit(def.Span),
 			Span: def.Span, UserModule: def.Module != sema.PreludeModule,
 		}
+	case sema.DefCtor:
+		return e.wrapper(id, def)
 	}
 	it := e.m.ItemNodes.Get(def.Item)
 	f := Fun{
@@ -137,6 +158,29 @@ func (e *elaborator) fun(def sema.Def) Fun {
 	if it.HasBody {
 		f.Body = e.expr(it.Body)
 	}
+	f.FrameSize = e.slots
+	return f
+}
+
+// wrapper makes the Fun of the constructor that the definition id is: the
+// function that the constructor is when it is not called, with a parameter for
+// each field and the Con of the constructor on them as its body. A parameter is
+// bound at the name of the constructor, which is the only place the Fun has.
+func (e *elaborator) wrapper(id sema.DefID, def sema.Def) Fun {
+	c, _ := e.typed.Decls.CtorOf(id)
+	ctor := e.typed.Decls.Ctors.Get(c)
+	f := Fun{Name: def.Name, HasBody: true, Span: def.Span, UserModule: def.Module != sema.PreludeModule}
+	args := make([]ExprID, len(ctor.Args))
+	for i := range ctor.Args {
+		name := e.in.InternString("a" + strconv.Itoa(i))
+		if ctor.Fields != nil && ctor.Fields[i] != base.NoSymbol {
+			name = ctor.Fields[i]
+		}
+		v := e.newVar(name, def.Span)
+		f.Params = append(f.Params, v)
+		args[i] = e.b.VarRef(def.Span, v)
+	}
+	f.Body = e.b.Con(def.Span, CtorID(c), args)
 	f.FrameSize = e.slots
 	return f
 }
@@ -172,8 +216,9 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	case syntax.ExprName:
 		switch r := e.rm.ExprRes[id]; r.Kind {
 		case sema.ResDef:
-			if e.isCtor(id) {
-				return e.b.LitUnit(x.Span)
+			// A constructor with no fields is a value and not a function.
+			if c, ok := e.ctorOf(id); ok && e.p.Ctors.Get(c).Arity == 0 {
+				return e.b.Con(x.Span, c, nil)
 			}
 			return e.b.FunRef(x.Span, FunID(r.Def))
 		case sema.ResLocal:
@@ -184,13 +229,17 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 			panic("unreachable")
 		}
 	case syntax.ExprCall:
-		if e.isCtor(x.Callee) {
-			return e.ctorCall(x)
+		c, isCtor := e.ctorOf(x.Callee)
+		var callee ExprID
+		if !isCtor {
+			callee = e.expr(x.Callee)
 		}
-		callee := e.expr(x.Callee)
 		var args []ExprID
 		for _, a := range e.m.ExprList(x.Args) {
 			args = append(args, e.expr(a))
+		}
+		if isCtor {
+			return e.b.Con(x.Span, c, args)
 		}
 		return e.b.Call(x.Span, callee, args)
 	case syntax.ExprBinary:
@@ -228,35 +277,18 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	}
 }
 
-// isCtor reports whether the expression id is a name that stands for a
-// constructor.
-func (e *elaborator) isCtor(id syntax.ExprID) bool {
+// ctorOf returns the constructor that the expression id is the name of, and
+// whether it is one.
+func (e *elaborator) ctorOf(id syntax.ExprID) (CtorID, bool) {
 	if e.m.Exprs.Get(id).Kind != syntax.ExprName {
-		return false
+		return 0, false
 	}
 	r := e.rm.ExprRes[id]
-	return r.Kind == sema.ResDef && e.res.Defs.Get(r.Def).Kind == sema.DefCtor
-}
-
-// ctorCall elaborates the call x of a constructor: its arguments, each bound to
-// a variable of its own that nothing reads, in order, and `()` for the value of
-// the call, which has the span of the call. Like a block it takes the slot of
-// each variable before it elaborates the argument, and builds the chain from the
-// last argument to the first, so a call of any number of arguments adds no Go
-// frames of its own.
-func (e *elaborator) ctorCall(x syntax.Expr) ExprID {
-	args := e.m.ExprList(x.Args)
-	vars := make([]VarID, len(args))
-	inits := make([]ExprID, len(args))
-	for i, a := range args {
-		vars[i] = e.newVar(e.underscore, e.m.Exprs.Get(a).Span)
-		inits[i] = e.expr(a)
+	if r.Kind != sema.ResDef {
+		return 0, false
 	}
-	body := e.b.LitUnit(x.Span)
-	for i := len(args) - 1; i >= 0; i-- {
-		body = e.b.Let(e.m.Exprs.Get(args[i]).Span, vars[i], inits[i], body)
-	}
-	return body
+	c, ok := e.typed.Decls.CtorOf(r.Def)
+	return CtorID(c), ok
 }
 
 // binary elaborates a binary operator: `&&` and `||` to a Match, the others to

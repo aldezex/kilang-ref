@@ -690,4 +690,105 @@ func TestUnify(t *testing.T) {
 		noHelp("a function expected, Int at the tail", e.fn(u), i, tail)
 		noHelp("Int expected, Bool at a tail that cannot be returned", i, b, bindOnly)
 	})
+	t.Run("declared_types", func(t *testing.T) {
+		// A declared type is the same type as itself and as no other. When it is
+		// applied to arguments, two applications of one declaration are unified
+		// argument by argument, so a variable among them is bound; applications of
+		// different declarations, or of one declaration with arguments that cannot
+		// be the same, are a mismatch whose label writes the types whole.
+		e := newUnifyEnv()
+		e.tbl.nameDef(0, "Shape")
+		e.tbl.nameDef(1, "Option")
+		e.tbl.nameDef(2, "Pair")
+		i, b, bad := e.intT, e.boolT, e.tbl.Error()
+		shape, other := e.tbl.Data(0, nil), e.tbl.Data(1, nil)
+		opt := func(arg TypeID) TypeID { return e.tbl.Data(1, []TypeID{arg}) }
+		pair := func(x, y TypeID) TypeID { return e.tbl.Data(2, []TypeID{x, y}) }
+
+		e.check(t, "Shape ~ Shape", shape, shape, annotated, true)
+		e.check(t, "Option<Int> ~ Option<Int>", opt(i), opt(i), annotated, true)
+		e.badAnnotated(t, "Shape ~ Option", shape, other, "expected `Shape`, found `Option`")
+		e.badAnnotated(t, "Int ~ Shape", i, shape, "expected `Int`, found `Shape`")
+		e.badAnnotated(t, "Shape ~ Int", shape, i, "expected `Shape`, found `Int`")
+		e.badAnnotated(t, "Shape ~ a function", shape, e.fn(i), "expected `Shape`, found `() -> Int`")
+		e.badAnnotated(t, "a function ~ Shape", e.fn(i), shape, "expected `() -> Int`, found `Shape`")
+		e.badAnnotated(t, "Option<Int> ~ Option<Bool>", opt(i), opt(b), "expected `Option<Int>`, found `Option<Bool>`")
+		e.badAnnotated(t, "Pair<Int, Bool> ~ Pair<Int, Int>", pair(i, b), pair(i, i), "expected `Pair<Int, Bool>`, found `Pair<Int, Int>`")
+		e.badAnnotated(t, "Pair<Int, Bool> ~ Pair<Bool, Bool>", pair(i, b), pair(b, b), "expected `Pair<Int, Bool>`, found `Pair<Bool, Bool>`")
+		e.badAnnotated(t, "Option<Int> ~ Pair<Int, Int>", opt(i), pair(i, i), "expected `Option<Int>`, found `Pair<Int, Int>`")
+		// The same declaration with another number of arguments cannot be told by
+		// the checker, which writes none, but a table can hold it.
+		e.badAnnotated(t, "Option<Int> ~ Option", opt(i), other, "expected `Option<Int>`, found `Option`")
+
+		// A variable among the arguments is bound by the argument at its place.
+		x, y := e.fresh(), e.fresh()
+		e.check(t, "Option<a> ~ Option<Int>", opt(x), opt(i), annotated, true)
+		if got := e.tbl.Resolve(x); got != i {
+			t.Errorf("Option<a> ~ Option<Int>: a is %d, want Int (%d)", got, i)
+		}
+		x, y = e.fresh(), e.fresh()
+		e.check(t, "Pair<Int, b> ~ Pair<a, Bool>", pair(i, y), pair(x, b), annotated, true)
+		if e.tbl.Resolve(x) != i || e.tbl.Resolve(y) != b {
+			t.Errorf("Pair<Int, b> ~ Pair<a, Bool>: a is %d and b is %d, want Int (%d) and Bool (%d)", e.tbl.Resolve(x), e.tbl.Resolve(y), i, b)
+		}
+		// The first part that does not match is the mistake, and what was bound
+		// before it stays bound, as with a function.
+		x = e.fresh()
+		e.badAnnotated(t, "Pair<a, Int> ~ Pair<Bool, Bool>", pair(x, i), pair(b, b), "expected `Pair<Bool, Int>`, found `Pair<Bool, Bool>`")
+		if e.tbl.Resolve(x) != b {
+			t.Errorf("Pair<a, Int> ~ Pair<Bool, Bool>: a is %d afterwards, want Bool (%d), bound before the mismatch", e.tbl.Resolve(x), b)
+		}
+		// A variable is bound to a declared type as to any other.
+		x = e.fresh()
+		e.check(t, "a ~ Option<Int>", x, opt(i), annotated, true)
+		if got := e.tbl.Show(x); got != "Option<Int>" {
+			t.Errorf("a ~ Option<Int>: a shows as %q, want Option<Int>", got)
+		}
+		// The error type inside is silent and binds nothing; a variable inside
+		// that cannot hold itself is E0405.
+		e.check(t, "Option<{error}> ~ Option<Int>", opt(bad), opt(i), annotated, true)
+		x = e.fresh()
+		e.check(t, "a ~ Option<a>", x, opt(x), annotated, false,
+			wantInfinite("`a` would have to be `Option<a>`, which has no finite size"))
+		if !e.isUnbound(x) {
+			t.Error("a ~ Option<a>: a is bound afterwards, want it unbound")
+		}
+
+		// The reason of an argument of a constructor says the field.
+		ctorArg := Reason{Kind: ReasonCtorArg, Because: unifyBecause}
+		e.check(t, "a field", i, b, ctorArg, false, withBecause(wantMismatch("expected `Int`, found `Bool`"), "the field is declared here"))
+		noPlace := Reason{Kind: ReasonCtorArg}
+		e.check(t, "a field with no place", i, b, noPlace, false, wantMismatch("expected `Int`, found `Bool`"))
+
+		// Two pairs of one declaration that share a side are two pairs: the
+		// arguments of each are compared, so the variable of the second is bound
+		// too. A memo that took the same side twice for its key (`Option<Int>` and
+		// `Option<Int>`) would find the second pair already done and leave it
+		// unbound.
+		x, y = e.fresh(), e.fresh()
+		e.check(t, "Pair<Option<a>, Option<b>> ~ Pair<Option<Int>, Option<Int>>", pair(opt(x), opt(y)), pair(opt(i), opt(i)), annotated, true)
+		if e.tbl.Resolve(x) != i || e.tbl.Resolve(y) != i {
+			t.Errorf("Pair<Option<a>, Option<b>> ~ Pair<Option<Int>, Option<Int>>: a is %d and b is %d, want Int (%d) for both", e.tbl.Resolve(x), e.tbl.Resolve(y), i)
+		}
+		x, y = e.fresh(), e.fresh()
+		e.check(t, "Pair<Option<Int>, Option<Int>> ~ Pair<Option<a>, Option<b>>", pair(opt(i), opt(i)), pair(opt(x), opt(y)), annotated, true)
+		if e.tbl.Resolve(x) != i || e.tbl.Resolve(y) != i {
+			t.Errorf("Pair<Option<Int>, Option<Int>> ~ Pair<Option<a>, Option<b>>: a is %d and b is %d, want Int (%d) for both", e.tbl.Resolve(x), e.tbl.Resolve(y), i)
+		}
+
+		// Forty levels of a declared type that holds the same type twice, as
+		// forty lines of a program make them, unify with themselves in the time of
+		// forty nodes and not of 2^40 paths: the two sides are built apart, so
+		// their ids differ until the arguments are compared.
+		left, right := i, x
+		for range 40 {
+			left = pair(left, left)
+			right = pair(right, right)
+		}
+		var ok bool
+		within.Run(t, "Unify of declared types of 40 levels", func() { ok, _ = e.unify(left, right, annotated) })
+		if !ok || e.tbl.Resolve(x) != i {
+			t.Errorf("40 levels: Unify returned %v and the variable at the bottom is %d, want true and Int (%d)", ok, e.tbl.Resolve(x), i)
+		}
+	})
 }

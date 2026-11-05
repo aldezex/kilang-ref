@@ -20,7 +20,9 @@ import (
 //   - a Match is `match S {`, one line for each arm two spaces further in
 //     (`true => …`, `false => …`, `_ => …`) and a `}`;
 //   - a call or a primitive is `callee(a, b)` or `add_int(a, b)`, all in one
-//     line unless an operand takes several;
+//     line unless an operand takes several; a constructor is written the same
+//     way, with its name and its arguments (`Circle(1.0)`), and `None` with no
+//     parentheses when it has no arguments;
 //   - a Float literal is written as kirt/fmtnum writes it (`1.0`, `0.1`,
 //     `1e21`), so that it is never taken for an Int.
 //
@@ -209,6 +211,13 @@ func (pr *printer) node(t printTask) {
 		pr.out.WriteString(pr.name(e.Var))
 	case FunRef:
 		pr.out.WriteString(pr.in.String(pr.p.Funs.Get(e.Fun).Name))
+	case Con:
+		// The name of the constructor, and its arguments as a call has them; a
+		// constructor with none is the name alone, as the program writes it.
+		pr.out.WriteString(pr.in.String(pr.p.Ctors.Get(e.Ctor).Name))
+		if e.Args.Count > 0 {
+			pr.args(e.Args, t.ind)
+		}
 	case Call:
 		pr.addExpr(e.Callee, t.ind, false)
 		pr.args(e.Args, t.ind)

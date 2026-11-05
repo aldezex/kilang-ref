@@ -75,6 +75,24 @@ func (r *resolver) candidates() []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
+// visibleCtors returns the names of the constructors that the unknown name being
+// resolved could have meant, for the help line of E0306: those of the module
+// being walked and the `pub` ones of the prelude, and no function, variable or
+// type. They come sorted and each one once, for the reason candidates gives. A
+// repeated definition is skipped: the name stands for the first one.
+func (r *resolver) visibleCtors() []string {
+	set := make(map[string]bool)
+	for id, def := range r.rp.Defs.All() {
+		if def.Kind != DefCtor || r.tops[def.Module][def.Name] != id {
+			continue
+		}
+		if def.Module == r.mod || (def.Module == PreludeModule && def.Pub) {
+			set[r.in.String(def.Name)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
 // visibleTypes returns the names of the types that a type annotation in module
 // mod can name, for the help line of an unknown type: the types that mod
 // declares and the `pub` types of the prelude, and not the builtins, which the

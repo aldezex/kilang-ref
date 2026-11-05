@@ -1,0 +1,22 @@
+// test: T11.94
+// run: run
+// expect-stdout:
+// | 7
+// | 8
+// | 9
+type Shape {
+  Circle(r: Float)
+  Pair(Int, Shape)
+  None
+}
+fn p(n: Int) -> Int {
+  print(n)
+  n
+}
+fn make(f, x: Float) -> Shape { f(x) }
+fn main() {
+  let a = Pair(p(7), Pair(p(8), None))
+  let b = make(Circle, 1.0)
+  let c = Pair(p(9), b)
+  let d = None
+}

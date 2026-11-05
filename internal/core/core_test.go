@@ -160,6 +160,39 @@ func TestBuilder(t *testing.T) {
 		}
 	})
 
+	t.Run("creates_con", func(t *testing.T) {
+		// A Con holds its constructor and its arguments, which the builder copies
+		// into the pool as it does for a call; one with no arguments has an empty
+		// list, and the Builder does not check the arity (Lint does).
+		b, p := newBuilder()
+		one := b.LitInt(span(0, 1), 1)
+		two := b.LitInt(span(2, 3), 2)
+		args := []core.ExprID{one, two}
+		pair := b.Con(span(0, 8), 7, args)
+		args[0], args[1] = two, two // the caller reuses its slice
+		none := b.Con(span(9, 13), 3, nil)
+		wrong := b.Con(span(14, 20), 7, []core.ExprID{one})
+		for _, row := range []struct {
+			name string
+			id   core.ExprID
+			want core.Expr
+		}{
+			{"two arguments", pair, core.Expr{Kind: core.Con, Span: span(0, 8), Ctor: 7, Args: base.ListRange{First: 0, Count: 2}}},
+			{"no arguments", none, core.Expr{Kind: core.Con, Span: span(9, 13), Ctor: 3, Args: base.ListRange{First: 2, Count: 0}}},
+			{"an arity that no constructor has", wrong, core.Expr{Kind: core.Con, Span: span(14, 20), Ctor: 7, Args: base.ListRange{First: 2, Count: 1}}},
+		} {
+			if got := p.Exprs.Get(row.id); got != row.want {
+				t.Errorf("%s: %+v, want %+v", row.name, got, row.want)
+			}
+		}
+		if got := p.Args(p.Exprs.Get(pair).Args); !slices.Equal(got, []core.ExprID{one, two}) || cap(got) != len(got) {
+			t.Errorf("Args of the pair is %v (cap %d) after the caller changed its slice, want [%d %d] with the capacity clipped", got, cap(got), one, two)
+		}
+		if want := []core.ExprID{one, two, one}; !slices.Equal(p.ExprPool, want) {
+			t.Errorf("ExprPool is %v, want %v", p.ExprPool, want)
+		}
+	})
+
 	t.Run("creates_match", func(t *testing.T) {
 		b, p := newBuilder()
 		// The condition is not the first expression, so its id is not the 0 that

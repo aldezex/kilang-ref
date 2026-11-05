@@ -310,6 +310,75 @@ func TestLint(t *testing.T) {
 		}
 	})
 
+	t.Run("constructors", func(t *testing.T) {
+		// A Con has as many arguments as its constructor has fields, whatever
+		// they are, and Lint reads inside them: the constructor is named in the
+		// violation as the source names it, and a wrong arity inside the argument
+		// of another Con or of a call is found as well.
+		lit := func(l *lintProg, n int) []core.ExprID {
+			args := make([]core.ExprID, n)
+			for i := range args {
+				args[i] = l.LitInt(span(0, 1), int64(i))
+			}
+			return args
+		}
+		for _, row := range []struct {
+			name  string
+			build func(l *lintProg, none, pair core.CtorID) core.ExprID
+			want  string // the violation, or empty when the Core is valid
+		}{
+			{"no arguments for no fields", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), none, nil)
+			}, ""},
+			{"two arguments for two fields", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, lit(l, 2))
+			}, ""},
+			{"nested and correct", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, []core.ExprID{l.Con(span(0, 1), none, nil), l.Con(span(0, 1), none, nil)})
+			}, ""},
+			{"one argument too few", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, lit(l, 1))
+			}, "constructor `Pair` with 1 argument(s), but it takes 2"},
+			{"one argument too many", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, lit(l, 3))
+			}, "constructor `Pair` with 3 argument(s), but it takes 2"},
+			{"an argument for no field", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), none, lit(l, 1))
+			}, "constructor `None` with 1 argument(s), but it takes 0"},
+			{"no arguments for two fields", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, nil)
+			}, "constructor `Pair` with 0 argument(s), but it takes 2"},
+			{"in an argument of a Con", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, []core.ExprID{l.LitInt(span(0, 1), 1), l.Con(span(0, 1), pair, lit(l, 1))})
+			}, "constructor `Pair` with 1 argument(s), but it takes 2"},
+			{"in the argument of a call", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Call(span(0, 1), l.FunRef(span(0, 1), 0), []core.ExprID{l.Con(span(0, 1), none, lit(l, 2))})
+			}, "constructor `None` with 2 argument(s), but it takes 0"},
+			{"in the init of a Let", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				x := l.variable(0)
+				return l.Let(span(0, 1), x, l.Con(span(0, 1), pair, lit(l, 3)), l.LitUnit(span(0, 1)))
+			}, "constructor `Pair` with 3 argument(s), but it takes 2"},
+			{"an unbound variable in an argument", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Con(span(0, 1), pair, []core.ExprID{l.VarRef(span(0, 1), l.variable(0)), l.LitInt(span(0, 1), 1)})
+			}, "unbound variable `v1`"},
+			{"a variable of the Fun in an argument", func(l *lintProg, none, pair core.CtorID) core.ExprID {
+				return l.Let(span(0, 1), l.variable(0), l.LitInt(span(0, 1), 1),
+					l.Con(span(0, 1), pair, []core.ExprID{l.VarRef(span(0, 1), core.VarID(1)), l.LitInt(span(0, 1), 1)}))
+			}, ""},
+		} {
+			l := newLintProg()
+			l.extern("ki_print_int", []core.VarID{l.variable(0)}) // f0, which the call row names
+			none := l.P.Ctors.Push(core.Ctor{Name: l.in.InternString("None"), Tag: 0, Arity: 0})
+			pair := l.P.Ctors.Push(core.Ctor{Name: l.in.InternString("Pair"), Tag: 1, Arity: 2})
+			f := l.fn(2, nil, row.build(l, none, pair))
+			if row.want == "" {
+				lintCheck(t, row.name, l.P, l.in)
+			} else {
+				lintCheck(t, row.name, l.P, l.in, lintFun(f)+": "+row.want)
+			}
+		}
+	})
+
 	t.Run("rejects_slot_out_of_frame", func(t *testing.T) {
 		const slotsOf = ", outside a frame of "
 		for _, row := range []struct {
@@ -513,6 +582,35 @@ func TestLint(t *testing.T) {
 		})
 	})
 
+	t.Run("deep_constructors_no_recursion", func(t *testing.T) {
+		// Lint and the walk of Subexprs cross a Con with their own stack, so 100 000
+		// constructors, each the argument of the next, add no frames of Go. The
+		// printer's half of this is in TestPrint.
+		const depth = 100_000
+		p, in, e := lintDeepCon(depth, 1)
+		withStackCap(func() {
+			if got := core.Lint(p, in); len(got) != 0 {
+				t.Errorf("Lint of %d nested constructors returned %d violations, the first is %q, want none", depth, len(got), got[0])
+			}
+			n := 0
+			for range p.Subexprs(e) {
+				n++
+			}
+			// The constructors, and the literal at the bottom.
+			if n != depth+1 {
+				t.Errorf("Subexprs of %d nested constructors visited %d expressions, want %d", depth, n, depth+1)
+			}
+		})
+		// The same depth with a wrong arity at the very bottom is found there.
+		p, in, _ = lintDeepCon(depth, 2)
+		withStackCap(func() {
+			want := []string{"fun deep: constructor `Wrap` with 2 argument(s), but it takes 1"}
+			if got := core.Lint(p, in); !slices.Equal(got, want) {
+				t.Errorf("Lint of %d nested constructors with two arguments at the bottom returned %q, want %q", depth, got, want)
+			}
+		})
+	})
+
 	t.Run("deep_nesting_no_recursion", func(t *testing.T) {
 		// The same for an expression that is deep and not long: 100 000
 		// primitive calls, each the argument of the next. The parser bounds the
@@ -546,6 +644,26 @@ func TestLint(t *testing.T) {
 	})
 }
 
+// lintDeepCon is the Con of depth nested constructors with one field each, the
+// last holding literals: `Wrap(Wrap(… 1))`. The parser bounds how deep a source
+// goes, and a Program built by hand does not. The innermost Con is given
+// `innermost` literals instead of one, which is a wrong arity if it is not one.
+func lintDeepCon(depth, innermost int) (*core.Program, *base.Interner, core.ExprID) {
+	in := base.NewInterner()
+	b, p := newBuilder()
+	wrap := p.Ctors.Push(core.Ctor{Name: in.InternString("Wrap"), Arity: 1})
+	bottom := make([]core.ExprID, innermost)
+	for i := range bottom {
+		bottom[i] = b.LitInt(span(0, 1), 1)
+	}
+	e := b.Con(span(0, 1), wrap, bottom)
+	for i := 1; i < depth; i++ {
+		e = b.Con(span(0, 1), wrap, []core.ExprID{e})
+	}
+	p.Funs.Push(core.Fun{Name: in.InternString("deep"), Body: e, HasBody: true, UserModule: true})
+	return p, in, e
+}
+
 // lintMatch makes a Match on `true` with one arm for each pattern in pats, each
 // with a literal for body.
 func lintMatch(l *lintProg, pats ...core.PatKind) core.ExprID {
@@ -569,6 +687,25 @@ func lintFirstDiff(a, b string) int {
 }
 
 func TestSubexprs(t *testing.T) {
+	t.Run("a_con_visits_its_arguments", func(t *testing.T) {
+		// A Con is a node with its arguments as children, in order, like a call
+		// without a callee: `Pair(1, Pair(2, 3))` is the Con, 1, the inner Con, 2
+		// and 3.
+		b, p := newBuilder()
+		one := b.LitInt(span(0, 1), 1)
+		two := b.LitInt(span(2, 3), 2)
+		three := b.LitInt(span(4, 5), 3)
+		inner := b.Con(span(2, 5), 1, []core.ExprID{two, three})
+		outer := b.Con(span(0, 5), 1, []core.ExprID{one, inner})
+		empty := b.Con(span(6, 7), 0, nil)
+		if got, want := slices.Collect(p.Subexprs(outer)), []core.ExprID{outer, one, inner, two, three}; !slices.Equal(got, want) {
+			t.Errorf("Subexprs of the Con visited %v, want %v", got, want)
+		}
+		if got := slices.Collect(p.Subexprs(empty)); !slices.Equal(got, []core.ExprID{empty}) {
+			t.Errorf("Subexprs of a Con with no arguments visited %v, want just the Con", got)
+		}
+	})
+
 	t.Run("preorder_visits_every_node", func(t *testing.T) {
 		// let x = add_int(1, 2); x
 		b, p := newBuilder()

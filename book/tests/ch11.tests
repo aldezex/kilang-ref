@@ -370,30 +370,30 @@ ref:     TestPrinter/type_items
 kind:    unit (go test)      file: internal/sema/type_names_test.go
 case:    un `type` es una definición y cada variante de una suma es otra a continuación, con el span de su nombre; un record y un alias no tienen constructor, y una variante es `pub` si lo es su tipo
 input:   `Shape` (con `Circle`, `Rect` y `Unit`), `pub type Point { x: Float }`, `type Meters = Float`, `pub type Flag { On, Off }` y `main`
-expect:  diez definiciones en orden: cada tipo como `DefType`, sus constructores como `DefCtor` con el item de su tipo y su `Pub`, y `main` como `DefFn`, todos con el span del nombre donde se declara; tipos y constructores tienen el tipo de error y `main`, `() -> ()`
+expect:  diez definiciones en orden: cada tipo como `DefType`, sus constructores como `DefCtor` con el item de su tipo y su `Pub`, y `main` como `DefFn`, todos con el span del nombre donde se declara; cada tipo tiene el tipo que su nombre nombra (`Shape`, `Point`, `Float` para el alias, `Flag`), cada constructor el de un valor (`(Float) -> Shape`, `(Float, Float) -> Shape`, `Shape` el que no tiene campos) y `main`, `() -> ()`
 why:     si un constructor se colocara en otro sitio, la numeración de las definiciones, que Core reutiliza, ya no seguiría el fichero.
 ref:     TestTypeNames/types_and_constructors_are_definitions
 
 [T11.48] resolve.type_and_constructor_share_a_name         level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
 case:    tipos y constructores están en espacios de nombres distintos: `Circle` puede ser un tipo y un constructor sin repetirse, y en una expresión es el constructor y en una anotación el tipo
-input:   `type Shape { Circle(r: Float) }`, `type Circle { x: Float }`, `fn f(c: Circle) {}` y `fn main() { Circle }`
+input:   `type Shape { Circle(r: Float) }`, `type Circle { x: Float }`, `fn f(c: Circle) {}` y `fn main() { let c = Circle }`
 expect:  ningún diagnóstico; `Circle` en `main` resuelve a una `DefCtor`, y `LookupType` da para `Circle` una `DefType` y encuentra `Shape`
 why:     `struct Circle` junto a `enum Shape { Circle(Circle) }` es normal en Rust: con un solo espacio, el segundo `Circle` sería un E0302 sin repetición.
 ref:     TestTypeNames/a_type_and_a_constructor_may_share_a_name
 
 [T11.49] resolve.type_is_not_a_value                       level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
-case:    un tipo no es un valor y un constructor no es un tipo: `Shape` en una expresión es un nombre desconocido, y `A` en una anotación, un tipo desconocido
-input:   `type Shape { A }` con `fn main() { Shape }`, y con `fn f(a: A) {}`; y un preludio cuya primera definición es `pub type Maybe`, con un `main` que escribe `Mayb`
-expect:  en el primero, un E0301 «unknown name `Shape`» sobre el nombre, sin ayuda; en el segundo, un E0406 «unknown type `A`» sobre la anotación, sin ayuda; en el último, un E0301 sin ayuda ni edición: un tipo no es candidato de un nombre, ni siquiera el de la definición 0
+case:    un tipo no es un valor y un constructor no es un tipo: `Shape` en una expresión es un constructor desconocido, y `A` en una anotación, un tipo desconocido
+input:   `type Shape { A }` con `fn main() { Shape }`, y con `fn f(a: A) {}`; y un preludio cuya primera definición es `pub type Maybe`, con un `main` que escribe `Mayb` y otro que escribe `maybe`
+expect:  en el primero, un E0306 «unknown constructor `Shape`» sobre el nombre, sin ayuda; en el segundo, un E0406 «unknown type `A`» sobre la anotación, sin ayuda; en el último, un E0306 sin ayuda ni edición: un tipo no es candidato de un constructor, ni siquiera el de la definición 0; y con `maybe`, un E0301 sin ayuda ni edición: tampoco lo es de un nombre
 why:     si los dos espacios se mezclaran, `let x = Shape` y `fn f(a: A)` compilarían sin error, y un nombre de tipo valdría como valor.
 ref:     TestTypeNames/a_type_is_not_a_value_and_a_constructor_is_not_a_type
 
 [T11.50] resolve.duplicate_type_E0302                      level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
 case:    dos tipos con el mismo nombre, sea cual sea su forma, son un E0302 sobre el segundo con el primero como secundaria; las dos definiciones existen y un uso del nombre es el primero
-input:   dos sumas `Shape`, una suma y un record, un record y un alias; y `type Shape { A }` con `type Shape { B }`, `fn f(s: Shape) { B }` y `main`; y la búsqueda de `Shape` como tipo en ese último fichero
+input:   dos sumas `Shape`, una suma y un record, un record y un alias; y `type Shape { A }` con `type Shape { B }`, `fn f(s: Shape) { let b = B }` y `main`; y la búsqueda de `Shape` como tipo en ese último fichero
 expect:  un E0302 «`Shape` is defined more than once» con «redefined here», la secundaria «first defined here» y la ayuda de renombrar, igual campo por campo, en cada fuente; la última tiene 6 definiciones, `B` y `Shape` no dan nada más y `Shape` como tipo es la primera definición
 why:     si la segunda declaración se descartara, su `B` sería un nombre desconocido: un error de más por un solo descuido.
 ref:     TestTypeNames/duplicate_type_E0302
@@ -418,25 +418,25 @@ ref:     TestTypeNames/unknown_type_E0406
 kind:    unit (go test)      file: internal/sema/type_names_test.go
 case:    el tipo que declara un módulo gana al del preludio y al predefinido, como su función gana a la del preludio
 input:   un preludio con `pub type Maybe` y un fichero con `type Maybe` y `type Bool`; y un preludio con un `pub type Maybe` y un `type Hidden` privado, y un fichero sin tipos
-expect:  `LookupType` da la definición del fichero para los dos nombres, la del preludio para `Maybe` visto desde el preludio y nada para `Bool` desde él; el fichero sin tipos ve `Maybe`, del preludio, y no `Hidden`; con `type Bool`, `fn f(b: Bool) -> Bool` tiene el tipo `({error}) -> {error}`, y sin él `(Bool) -> Bool`
+expect:  `LookupType` da la definición del fichero para los dos nombres, la del preludio para `Maybe` visto desde el preludio y nada para `Bool` desde él; el fichero sin tipos ve `Maybe`, del preludio, y no `Hidden`; con `type Bool`, el parámetro y el retorno de `fn f(b: Bool) -> Bool` son un `TypeData`, y sin él el `Bool` predefinido
 why:     si ganara el predefinido, declarar `Bool` no cambiaría nada y el programa usaría el tipo equivocado sin avisar.
 ref:     TestTypeNames/a_declared_type_shadows_a_builtin_and_the_prelude
 
-[T11.54] check.declared_type_error_type                    level: core
+[T11.54] check.declared_type_is_its_name                   level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
-case:    hasta que `Declare` hace los tipos de las declaraciones, un tipo declarado tiene el tipo de error: nada se compara con él y lo que lo tiene no da error
-input:   `type Shape { A }`, `type Meters = Float`, una función que devuelve como `Int` un `Shape`, otra que devuelve como `Bool` un `Meters`, `f(true)` y `let y: Meters = 1`
-expect:  ningún diagnóstico; `f` tiene el tipo `({error}) -> Int` y `g`, `({error}) -> Bool`
-why:     es el límite de esta sesión, escrito en un test para que la siguiente lo cambie a propósito y no por accidente.
-ref:     TestTypeNames/a_declared_type_has_the_error_type_until_declare
+case:    un nombre de tipo en una anotación es el tipo que hizo `Declare`: una suma o un record es un tipo propio y un alias es lo que expande, así que `Meters` y `Float` son el mismo tipo y `Shape` y `Float` no; y uno que se llama como un predefinido es otro tipo, y el mensaje lo dice; un tipo repetido tampoco es el que su nombre nombra, y el mensaje culpa a la repetición
+input:   `type Shape { A }`, `type Meters = Float`, `fn f(s: Shape) -> Int`, `fn g(m: Meters) -> Float { m }`, `let y: Meters = 1.5`; `fn f(s: Shape) -> Float { s }`; `type Int { Mk }` con `fn f(x: Int) -> Int { x }` y `print(f(1))`; y dos `type Shape` (con `Circle` y con `Square(side: Float)`) y `let t: Shape = s` con `let s = Square(1.0)`
+expect:  el primer programa sin diagnósticos, con `f: (Shape) -> Int` y `g: (Float) -> Float`; el segundo, un E0401 «expected `Float`, found `Shape`» sobre `s` con «expected because of the return type» sobre `Float`; el tercero, dos E0401 «expected `Int`, found `Int`», el primero con «the parameter is declared here», ambos con la nota «these are two different types with the same name: a `type` of the program hides the type that had that name»; el último, el E0302 y un E0401 «expected `Shape`, found `Shape`» con la nota «these are two different types with the same name: the program declares a type with that name more than once»
+why:     si el alias no se expandiera, `Meters` y `Float` serían tipos distintos, y un programa que los mezcla, como el primero, daría un error falso.
+ref:     TestTypeNames/a_declared_type_is_what_its_name_stands_for
 
-[T11.55] check.constructor_error_type                      level: core
+[T11.55] check.constructor_is_a_value_of_its_type          level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
-case:    hasta que `Declare` hace sus tipos, un constructor en una expresión tiene el tipo de error: llamarlo con cualquier argumento, usarlo donde se espera cualquier tipo o escribirlo solo no es un error
-input:   `Circle(1.0)`, `let b: Int = None`, `let c: Bool = Circle(true, 2)` y `let d = Circle`
-expect:  ningún diagnóstico, y `Circle` resuelve a su definición `DefCtor`
-why:     como el test anterior, fija a propósito lo que la sesión siguiente reemplaza.
-ref:     TestTypeNames/a_constructor_in_an_expression_has_the_error_type_until_declare
+case:    un constructor con campos es una función de ellos a su tipo y uno sin campos es un valor de su tipo, así que cada uno cabe donde se espera su tipo y en ningún otro sitio
+input:   `let a: Shape = Circle(1.0)`, `let b: Shape = None`, `let c = Circle` y `let d: Int = a`
+expect:  un solo E0401 «expected `Int`, found `Shape`» sobre `a`, con «expected because of this annotation» sobre `Int`; `Circle` resuelve a su `DefCtor` y escrito solo tiene el tipo `(Float) -> Shape`
+why:     si el tipo de un constructor fuera el de error, `Circle` escrito solo tendría el tipo `{error}` y cabría donde sea; el test lo ve en `(Float) -> Shape`.
+ref:     TestTypeNames/a_constructor_is_a_value_of_its_type
 
 [T11.56] resolve.broken_type_is_one_error                  level: core
 kind:    unit (go test)      file: internal/sema/type_names_test.go
@@ -454,37 +454,37 @@ expect:  E0305 «unknown attribute `derive`» con su nota, la ayuda «remove it�
 why:     la ayuda del E0304 de una función manda escribir un cuerpo: para un tipo sería un consejo imposible.
 ref:     TestTypeNames/attributes_on_a_type
 
-[T11.58] elaborate.type_filler_funs                        level: core
+[T11.58] elaborate.type_fillers_and_ctor_wrappers          level: core
 kind:    unit (go test)      file: internal/core/elaborate_test.go
-case:    cada tipo y cada constructor tiene su `Fun` en el `Program`, con el id de su `Def`: de relleno, con cuerpo `()`, sin parámetros y sin marco
-input:   `Shape` con `Circle` y `None`, un record `Point`, un alias `Meters` y `main`
-expect:  11 funciones para 11 definiciones; las de tipos y constructores con su nombre, `UserModule`, el span de su nombre, cuerpo `()`, sin nombre extern, 0 parámetros y 0 slots, en el orden `Shape Circle None Point Meters main`
-why:     sin cuerpo, Lint los tomaría por externs sin nombre y todo programa con un `type` acabaría en un ICE.
-ref:     TestElaborate/types_and_constructors_are_filler_funs
+case:    cada definición es una `Fun` con su id: la de un tipo es un relleno `()` y la de un constructor su envoltorio, con un parámetro por campo (con el nombre del campo, o `a0`, `a1`… por posición) y por cuerpo el `Con` del constructor sobre ellos
+input:   `Shape` con `Circle(r: Float)`, `None`, `Pair(Int, Bool)` y `Mixed(a: Int, Bool)`, un record `Point`, un alias `Meters` y `main`
+expect:  13 funciones para 13 definiciones en el orden `Shape Circle None Pair Mixed Point Meters main`; los tipos con cuerpo `()` y sin parámetros; `Circle(r@0)`, `None`, `Pair(a0@0, a1@1)` y `Mixed(a@0, a1@1)` con un marco del tamaño de sus parámetros y todo en el span del nombre; `Program.Ctors` con cuatro `Ctor` de tag, aridad y campos exactos, sin `Tuple`
+why:     el envoltorio es lo que vale `let f = Circle`: sin sus parámetros su cuerpo usaría variables sin ligar y Lint daría un ICE en todo programa con un constructor con campos.
+ref:     TestElaborate/types_are_fillers_and_constructors_are_wrappers
 
-[T11.59] elaborate.constructor_is_unit                     level: core
+[T11.59] elaborate.constructors_to_con                     level: core
 kind:    unit (go test)      file: internal/core/elaborate_test.go
-case:    hasta que los constructores construyan valores, un constructor en una expresión es `()`, y una llamada evalúa sus argumentos en orden, cada uno en un slot suyo, y da `()`
-input:   `None`, `Circle(1.0)`, `Circle(print(7), None)`, `Circle(Circle(print(1)))` y `let f = Circle`
-expect:  `()`; `let _@0 = 1.0; ()`; `let _@0 = @print(7); let _@1 = (); ()` con un marco de 2 slots; `let _@0 = let _@1 = @print(1); (); ()`; `let f@0 = (); ()`; el `()` cubre el nombre o la llamada, y el `Let` y su variable, el argumento
-why:     Lint rechaza llamar a una `Fun` con otra aridad: sin este caso, `Circle(1.0)` sería un ICE antes de que existan los constructores.
-ref:     TestElaborate/a_constructor_is_unit_until_the_constructors_exist
+case:    la llamada de un constructor es un `Con` de sus argumentos en orden, uno sin campos es un `Con` sin argumentos donde se escriba, y uno con campos que no se llama es una referencia a su envoltorio
+input:   `None`, `Circle(1.0)`, `Pair(1, Pair(2, None))`, `Pair(side(), Pair(side(), None))`, `let f = Circle` y `let n = None` con `n`
+expect:  `None`; `Circle(1.0)`; `Pair(1, Pair(2, None))`; `Pair(@side(), Pair(@side(), None))`; `let f@0 = @Circle; ()`; `let n@0 = None; n@0`; el `Con` cubre la llamada o el nombre, el interior cubre su propia llamada, y el `Con` de la llamada lleva el `Ctor` de `Pair` con aridad 2
+why:     si un constructor sin campos fuera una referencia a su función, `None` sería un valor que no se puede usar donde se espera un `Shape`.
+ref:     TestElaborate/constructors_elaborate_to_con
 
 [T11.60] elaborate.big_type                                level: core
 kind:    unit (go test)      file: internal/core/elaborate_test.go
-case:    un tipo de 10 000 variantes pasa por el parser, los nombres, el comprobador, la elaboración y Lint con la pila de Go limitada a 1 MiB, y cada variante es una `Fun` en su sitio
+case:    un tipo de 10 000 variantes pasa por el parser, los nombres, las declaraciones, el comprobador, la elaboración y Lint con la pila de Go limitada a 1 MiB, y cada variante es una `Fun` en su sitio
 input:   `type Big` con `V0(Int, Bool)` hasta `V9999`, `fn f(b: Big) -> Int` y un `main` que llama a `V9999(1, true)`
-expect:  5 + 1 + 10 000 + 2 funciones para otras tantas definiciones; las `Fun` de `V0` y de `V9999` son las posiciones 6 y 10 005, con cuerpo `()`
+expect:  5 + 1 + 10 000 + 2 funciones para otras tantas definiciones y 10 000 `Ctor`; las `Fun` de `V0` y de `V9999` son las posiciones 6 y 10 005, con cuerpo `V0(a0@0, a1@1)` y `V9999(a0@0, a1@1)`, y sus `Ctor` de tag 0 y 9999 y aridad 2
 why:     un paso que recorriera las variantes con recursión se vería aquí, con la pila limitada, y no con un fichero real.
 ref:     TestElaborate/big_type_declaration_is_elaborated_without_recursion
 
-[T11.61] run.constructors_evaluate_as_unit                 level: core
+[T11.61] run.constructors_build_values                     level: core
 kind:    unit (go test)      file: internal/driver/run_test.go
-case:    `ki run` de un programa con un `type` corre, y un constructor, que aún no construye nada, evalúa sus argumentos y da `()`
-input:   `type Shape` con `Circle(r: Float)` y `None`, un alias, y un `main` con `Circle(print(7))`, `Circle(print(8), None)` y `None`
+case:    `ki run` de un programa con un `type` corre de punta a punta: los constructores construyen valores, uno pasado como función también, y sus argumentos se evalúan una vez y en orden
+input:   `Shape` con `Circle`, `Pair(Int, Shape)` y `None`, un alias, `Pair(p(7), Pair(p(8), None))`, `make(Circle, 1.0)`, `Circle(2.0)` y `None` en `main`, con `p` que imprime su argumento
 expect:  sale con 0, stdout `7` y `8` en dos líneas y stderr vacío
-why:     un constructor sin valor sigue evaluando sus argumentos: si no, `Circle(print(7))` se tragaría el `7` en silencio.
-ref:     TestRun/constructors_evaluate_as_unit
+why:     es la primera vez que un valor de tu tipo se construye con el binario: un argumento repetido o desordenado se vería en la salida.
+ref:     TestRun/constructors_build_values
 
 [T11.62] run.type_declarations_golden                      level: core
 kind:    run                 file: tests/golden/ch11/type_declarations.ki
@@ -514,6 +514,270 @@ ref:     tests/errors/ch11/unknown_type_render.ki
 kind:    diag                file: tests/errors/ch11/broken_type.ki
 case:    `ki check` sobre `type Shape { Circle( }`, seguido de usos del tipo y de `Circle`, da un solo E0201
 input:   `type Shape { Circle( }`, `fn f(s: Shape) {}`, `fn g() { Circle }` y `fn main() {}`
-expect:  sale con 1 y el único diagnóstico es el E0201 en 3:22, el `}`; ni un E0406 por el tipo ni un E0301 por `Circle`
+expect:  sale con 1 y el único diagnóstico es el E0201 en 3:22, el `}`; ni un E0406 por el tipo ni un E0306 por `Circle`
 why:     es «un error, un mensaje» para un tipo roto, de punta a punta: la recuperación del parser y los nombres juntos.
 ref:     tests/errors/ch11/broken_type.ki
+
+[T11.66] declare.the_three_forms                          level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    `Declare` lee una suma, un record y un alias: los tipos, los constructores con su tag y los tipos de sus campos, los nombres de los campos y lo que expande el alias
+input:   `Shape` con `Circle(r: Float)`, `Rect(w: Float, h: Float)`, `Pair(Int, Bool)`, `Mixed(a: Int, Bool)` y `None`; `Point { x: Float, y: Int }` y `type Meters = Float`
+expect:  3 tipos y 5 constructores; `Shape` con `Ctors` 0 a 4, módulo e item, y los constructores con dueño, tag 0 a 4, tipos `(Float) -> Shape` … `Shape`, nombres de campo (`r`; `w`, `h`; ninguno; `a` y uno sin nombre; ninguno); el record con sus dos campos y span `x: Float`; el alias expande a `Float`; `TypeDefOf` y `CtorOf` encuentran cada definición
+why:     de esta tabla cuelga todo lo demás: un tag desplazado o un campo con otro tipo falsearía cada programa con un `type`.
+ref:     TestDeclare/the_three_forms
+
+[T11.67] declare.independent_of_the_order                 level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un campo puede nombrar un tipo declarado después, dos tipos pueden nombrarse entre sí y un alias declarado después es lo que expande, estén en el orden que estén
+input:   `Holder { Hold(n: Later, d: Dist) }`, `Later { back: Holder, next: Later }` y `type Dist = Float`, y las mismas declaraciones en orden inverso
+expect:  ningún diagnóstico en las dos; los campos de `Hold` son `Later` y `Float`, los de `Later` son `Holder` y `Later`
+why:     si `Declare` leyera los campos al ver cada tipo, un tipo declarado más abajo sería un tipo desconocido que en Rust no lo es.
+ref:     TestDeclare/declaration_does_not_depend_on_the_order
+
+[T11.68] declare.alias_expands                            level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un alias de un alias es el tipo del último, un alias de un tipo declarado es ese tipo, `()` se puede aliasar, y un campo que nombra un alias tiene la expansión
+input:   `A = B`, `B = C`, `C = Int`, `S = Shape`, `U = ()`, `Shape { Mk(a: A) }`, `D = C` (otro alias del mismo `C`) y `fn f(x: S, u: U) -> A { 1 }`
+expect:  sin diagnósticos; `A`, `B`, `C` y `D` expanden a `Int`, `S` a `Shape` y `U` a `()`; `f` tiene el tipo `(Shape, ()) -> Int` y el campo de `Mk` es `Int`
+why:     un alias que se quedara a medio expandir daría un tipo distinto del que nombra, y el error saldría lejos de la declaración.
+ref:     TestDeclare/an_alias_expands_to_its_end
+
+[T11.69] declare.long_alias_chain                         level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    una cadena de 10 000 alias, escrita de la primera a la última para que el primero arrastre el recorrido de toda ella, se recorre con la pila de Go limitada a 1 MiB y cada alias es el tipo del final
+input:   `type A0 = A1` hasta `A9999 = A10000`, `type A10000 = Bool` y `fn f(x: A0) -> A10000 { x }`
+expect:  sin diagnósticos; `f` tiene el tipo `(Bool) -> Bool` y el primer y el último alias expanden a `Bool`
+why:     la longitud de la cadena es del programa: un recorrido con recursión se vería aquí, con la pila limitada, y no con un fichero real.
+ref:     TestDeclare/a_long_alias_chain_is_followed_without_recursion
+
+[T11.70] declare.alias_cycle_E0801                        level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un ciclo de alias es un solo E0801, sobre el alias que va primero en el fuente y con una secundaria en cada uno de los demás en el orden del ciclo; los alias del ciclo y los que llevan a él tienen el tipo de error
+input:   ciclos de dos, de uno (`type A = A`) y de tres; una entrada por el medio (`R = N`, `M = N`, `N = M`); dos ciclos separados; un ciclo usado en `f(a: A) -> Int { a }`; y un ciclo de 4 000 alias
+expect:  por cada ciclo un E0801 «alias `A` refers to itself» con la primaria «this alias is part of a cycle», las secundarias «through `B`, defined here» y la nota; en la entrada por el medio, `M` primero y `N` de secundaria, y nada para `R`; en el ciclo usado, ese único error; una suma que se nombra a sí misma no es un ciclo; el ciclo largo, un solo error con 3 999 secundarias, de `A1` a `A3999`, que reservó como mucho 64 MiB
+why:     avisar por cada alias daría tres errores por un ciclo de tres; no avisar dejaría un alias sin fin.
+ref:     TestDeclare/alias_cycle_E0801
+
+[T11.71] declare.unknown_type_E0406                       level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un nombre de tipo que nada declara es un E0406 donde está escrito, en un campo, en un record o en un alias, con la misma ayuda que en una anotación, y una sola vez por muchos usos que tenga luego
+input:   `Circle(r: Flot)`, `Pair(Int, Shap)`, `y: Boool` en un record y `type Meters = Shapes`, con `fn f(c: Meters, p: Point)`; y `type A = B`, `type B = Flot`
+expect:  cuatro E0406 (y uno solo en `B = Flot`, aunque `A` llegue a `B` antes de su turno) con «not a type in this scope» y la ayuda `Float`, `Shape`, `Bool` y `Shape`; `f` tiene el tipo `({error}, Point) -> ()` y el campo de `Circle` el tipo de error
+why:     sin esto, un tipo mal escrito dentro de una declaración no se avisaría hasta que algo lo usara, y entonces lo diría cada uso.
+ref:     TestDeclare/unknown_type_in_a_declaration_E0406
+
+[T11.72] declare.duplicates                               level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un tipo repetido se declara de todos modos, con sus constructores, y un nombre en una anotación es el primero
+input:   `type A { X }`, `type A { Y }` y `fn f(a: A) {}`
+expect:  un E0302 y nada más; 2 tipos y 2 constructores; el parámetro de `f` es el tipo 0 y no el 1; `Y` es el primer constructor del tipo 1
+why:     si la segunda declaración se descartara, `Y` no tendría dueño y habría que contar los constructores de otro modo.
+ref:     TestDeclare/duplicates_are_declared_and_the_first_wins
+
+[T11.73] declare.broken_type_not_declared                 level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un `type` que el parser no pudo leer no se declara: ni tipo ni constructores, y ningún mensaje más
+input:   `type Shape { Circle(r: ) }`, `fn f(s: Shape) {}` y `main`; y `type A = Shape`, el `Shape` roto y `type B { M(a: Shape) }`
+expect:  un E0201; 0 tipos y 0 constructores declarados, y `f` con el tipo `({error}) -> ()`; en el segundo, solo el E0201: el alias y el campo tienen el tipo de error y `A` no es un ciclo
+why:     un tipo a medias declarado con campos de tipo error taparía el verdadero fallo con otros que no lo son.
+ref:     TestDeclare/a_type_the_parser_could_not_read_is_not_declared
+
+[T11.74] resolve.unknown_constructor_E0306                level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un nombre que empieza en mayúscula y nada declara es un E0306, con la pregunta y la edición si un constructor visible se le parece; solo los constructores son candidatos
+input:   seis nombres con `Shape { Circle, Square }`, `type Circles`, una variable `y` y `print`; `Circl(1.0)` con su edición aplicada; `circl`, `_Circl`, `x` y `cIRCLE`; `A`, `Z`, `Zebra` y `Zed9`; y un preludio con `pub type Maybe { Just, Nothing }` y `type Hidden { Secret }`, y otro con `Jusst` junto a un `pub type Maybe { Just }` del fichero
+expect:  `Circl`, `Circles` y `Circlh` sugieren `Circle`; `Triangle`, `Print` y `Y` no sugieren nada, aunque `print` e `y` estén a una letra; la edición deja un programa sin diagnósticos; los que empiezan en minúscula o en `_` siguen siendo E0301 y los que empiezan en mayúscula, E0306; `Jusst` sugiere `Just` y `Secrat` nada, porque `Secret` es privado; el preludio no ve los constructores del fichero
+why:     el E0301 diría «nombre desconocido» de algo que solo puede ser un constructor, y sugeriría funciones que no caben en ese sitio.
+ref:     TestDeclare/unknown_constructor_E0306
+
+[T11.75] check.constructor_is_a_function                  level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un constructor con campos es una función que se puede pasar como argumento y llamar desde el parámetro; uno sin campos es un valor
+input:   `fn apply(f, x) -> Shape { f(x) }` con `apply(Circle, 1.0)`, `let c = Circle`, `let n = None` y `Rect(1.0, 2.0)`
+expect:  sin diagnósticos; tipos `Shape`, `(Float) -> Shape`, `Shape` y `Shape`; `apply` queda con `((Float) -> Shape, Float) -> Shape`
+why:     si un constructor no fuera una función, `map(Circle, xs)` no se podría escribir, y los operadores sobre ellos serían un caso aparte.
+ref:     TestDeclare/a_constructor_is_a_function
+
+[T11.76] check.constructor_calls                          level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    una llamada a un constructor da los mismos errores que la de una función, con las etiquetas en la declaración de la variante: el campo, el nombre del constructor y nada para un valor que no se llama
+input:   `Circle(true)`, `Pair(1, 2)`, `Circle(1.0, 2.0)`, `None(1)` y `Pair()`
+expect:  dos E0401 («expected `Float`, found `Bool`» y «expected `Bool`, found `Int`») con la secundaria «the field is declared here» sobre `r: Float` y sobre `Bool`; dos E0402 con «`Circle` is declared here» (y «`Pair` …») sobre el nombre y la nota «`Circle` takes `(Float)`»; un E0403 «cannot call a value of type `Shape`» sin secundaria
+why:     el campo está en la variante, no en un parámetro: sin ese caso `paramSpan` indexaría unos `Params` vacíos y el comprobador caería; con la razón de un argumento, la etiqueta hablaría de un parámetro.
+ref:     TestDeclare/constructor_calls_E0401_E0402_E0403
+
+[T11.77] check.declared_types_in_messages                 level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un tipo declarado se nombra en un E0401 como lo escribe el programa, dos tipos son distintos aunque se parezcan y el alias de uno es el mismo
+input:   `type A { MkA }`, `type B { MkB }`, `type C = A`, `takeA(MkB)`, `takeA(MkA)` y `let c: C = MkA`
+expect:  un único E0401 «expected `A`, found `B`» con «the parameter is declared here» sobre `a: A`
+why:     los mensajes de tipos son lo que lees: un `Show` que escribiera un número de tipo en lugar de su nombre no diría nada.
+ref:     TestDeclare/a_declared_type_is_a_type_in_messages
+
+[T11.78] check.unknown_constructor_one_error              level: core
+kind:    unit (go test)      file: internal/sema/declare_test.go
+case:    un constructor que nada declara tiene el tipo de error, que cabe en todas partes: un solo E0306 por uso y ningún E0401 encima
+input:   `Circl` en una suma, como operando de `==`, de `!` y de `-`, como argumento, como cola de una función y donde se anota un tipo; y `1 + Circl(2.0)` solo
+expect:  siete E0306 y ningún otro código; el último caso, exactamente un E0306 sobre `Circl`
+why:     es el Review Focus 3: un constructor mal escrito no debe sumar un error de tipos por cada sitio donde se usa.
+ref:     TestDeclare/an_unknown_constructor_is_one_error
+
+[T11.79] types.declared_types_hash_cons                   level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Data` construye una vez cada aplicación de una declaración: los mismos argumentos dan el mismo id y cualquier diferencia, otro; la tabla guarda su copia de los argumentos
+input:   las declaraciones 0, 1 y 2 sin argumentos y la 3 pedida primero con una lista vacía; `2<Int, Bool>`, `2<Bool, Bool>`, `2<Bool, Int>`, `1<Int>`, `2<Int>`, `2<x, y>`, `2<y, x>`, `1<2<Int, Bool>>` y una función que devuelve la 0
+expect:  doce ids distintos; `Data(2, [Int, Bool])` por segunda vez da el mismo id aunque quien llamó cambiara su lista; `Data(0, nil)` y `Data(0, [])` son uno y el nodo de `Data(3, [])` tiene `Args` nil; el nodo es `TypeData` con su `Def` y sus `Args`, y `Args` es nil sin argumentos
+why:     si dos tipos distintos tuvieran el mismo id, el unificador los daría por iguales; si el mismo tipo tuviera varios, la tabla crecería con cada uso.
+ref:     TestTypeTable/declared_types_hash_cons
+
+[T11.80] types.show_declared_types                        level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Show` escribe un tipo declarado con el nombre que le dio `Declare` y sus argumentos detrás; las variables van por orden, el texto se corta en `MaxTypeText`, y nombrar fuera de orden es un error de quien llama
+input:   `Shape`, `Option<Int>`, `Pair<Int, Bool>`, `Option<Option<Shape>>`, `Pair<(Int) -> Bool, Shape>`, `(Option<Int>) -> Shape`, `Pair<y, x>`, `Pair<x, x>`, `Option<{error}>`, una variable ligada a `Bool` y 100 argumentos
+expect:  los textos `Shape`, `Option<Int>`, … `Pair<a, b>`, `Pair<a, a>`, `Option<{error}>` y `Option<Bool>`; con 100 argumentos el texto empieza por `Option<Int, Int, Int, `, acaba en `…` y no pasa de `MaxTypeText` más la marca; `nameDef` con un id que no es el siguiente da un pánico y no cambia la tabla
+why:     sin el nombre, cada mensaje escribiría un número en lugar de `Shape`; sin el corte, 100 argumentos llenarían la pantalla.
+ref:     TestTypeTable/show_declared_types
+
+[T11.81] types.occurs_through_arguments                   level: core
+kind:    unit (go test)      file: internal/sema/types_internal_test.go
+case:    `Occurs` mira dentro de los argumentos de un tipo declarado, a cualquier profundidad y a través de ligaduras; uno sin argumentos no tiene nada dentro; y 40 niveles que repiten el mismo tipo dos veces no cuestan 2^40
+input:   catorce filas con variables en el argumento, en el segundo de dos, anidadas, dentro de funciones, en un parámetro y en un resultado, y a través de ligaduras; y tipos de 40 niveles con y sin la variable al fondo
+expect:  cada fila da lo esperado; los de 40 niveles dan false, false y true dentro de `within`, que falla a los diez segundos
+why:     sin esto, `a ~ Option<a>` pasaría la comprobación de ocurrencia y ligaría una variable a un tipo infinito.
+ref:     TestTypeTable/occurs_through_arguments
+
+[T11.82] unify.declared_types                             level: core
+kind:    unit (go test)      file: internal/sema/unify_internal_test.go
+case:    un tipo declarado es igual a sí mismo y a ningún otro; dos aplicaciones de una declaración se unifican argumento a argumento, y la razón de un argumento de constructor dice «the field is declared here»
+input:   filas con `Shape`, `Option`, `Int` y una función; `Option<Int>` con `Option<Bool>`; `Pair<Int, Bool>` con dos `Pair` distintos; `Option<a>` con `Option<Int>`; `Pair<a, Int>` con `Pair<Bool, Bool>`; `Pair<Option<a>, Option<b>>` con `Pair<Option<Int>, Option<Int>>` y al revés; `a` con `Option<a>`; `Option<{error}>`; la razón de un campo con y sin lugar; y 40 niveles de `Pair<x, x>`
+expect:  un E0401 con los dos tipos escritos enteros en cada desajuste; las variables ligadas por el argumento de su sitio, y lo ligado antes del fallo se queda; en los dos pares que comparten un lado, las dos variables quedan ligadas a `Int`; un E0405 con la nota «`a` would have to be `Option<a>`, which has no finite size»; el error en un argumento no dice nada; los 40 niveles unifican dentro de `within`
+why:     sin comparar los argumentos, `Option<Int>` y `Option<Bool>` serían el mismo tipo o, peor, nunca iguales ni a sí mismos.
+ref:     TestUnify/declared_types
+
+[T11.83] core.builder_con                                 level: core
+kind:    unit (go test)      file: internal/core/core_test.go
+case:    `Builder.Con` guarda el constructor y sus argumentos en el pool, con su propia copia, y no comprueba la aridad
+input:   `Con` con dos argumentos, sin argumentos y con un argumento para un constructor de dos
+expect:  los tres `Expr` exactos (tipo, span, `Ctor` y rango de `Args`); la lista del primero no cambia cuando quien llamó cambia la suya y tiene la capacidad recortada; el pool tiene los ids de los argumentos en orden, `[0, 1, 0]`, porque el primer `Expr` de un programa es el 0
+why:     si el constructor compartiera la lista de quien llama, cambiar esa lista después cambiaría el Core ya construido.
+ref:     TestBuilder/creates_con
+
+[T11.84] core.lint_constructors                           level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    Lint exige que un `Con` tenga tantos argumentos como campos su constructor, mira dentro de ellos y nombra el constructor como el fuente
+input:   doce `Con` hechos a mano: sin campos, de dos, anidados y bien; con un argumento de menos, de más, uno para ninguno y ninguno para dos; mal dentro de un `Con`, de una llamada y del `init` de un `Let`; una variable sin ligar y una ligada dentro de un argumento
+expect:  los correctos no dan nada; los incorrectos dan exactamente «constructor `Pair` with 1 argument(s), but it takes 2» (y las otras formas); la variable sin ligar, «unbound variable `v1`»
+why:     un `Con` con la aridad equivocada en Core llegaría al intérprete como un índice fuera de rango en lugar de un ICE con su causa.
+ref:     TestLint/constructors
+
+[T11.85] core.lint_deep_constructors                      level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    Lint y `Subexprs` cruzan 100 000 constructores anidados con la pila de Go limitada, y una aridad mala en el fondo se encuentra
+input:   `Wrap(Wrap(… 1))` de 100 000 niveles, y el mismo con dos argumentos en el más interno
+expect:  sin violaciones y 100 001 expresiones visitadas; en el segundo, exactamente «fun deep: constructor `Wrap` with 2 argument(s), but it takes 1»
+why:     un recorrido de Core con recursión de Go cae con 100 000 niveles si la pila está limitada, como aquí; con la de por defecto no se ve.
+ref:     TestLint/deep_constructors_no_recursion
+
+[T11.86] core.subexprs_con                                level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Subexprs` visita un `Con` y luego sus argumentos en orden; uno sin argumentos es solo él
+input:   `Pair(1, Pair(2, 3))` y un `Con` sin argumentos
+expect:  el orden `Con`, 1, `Con` interior, 2, 3, y para el vacío solo él
+why:     si un `Con` no tuviera hijos, Lint no vería lo que hay dentro de un constructor.
+ref:     TestSubexprs/a_con_visits_its_arguments
+
+[T11.87] core.print_constructors                          level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    el impresor escribe un tipo como relleno y cada constructor como su envoltorio, un `Con` con su nombre y sus argumentos como una llamada, y solo el nombre si no tiene argumentos
+input:   `Shape` con `Circle(r: Float)`, `Pair(Int, Shape)` y `None`; `make` con un `if` como argumento de `Pair`; y `bare` con `let f = Circle` y `let n = None`
+expect:  el texto exacto: `fn Shape() =` con `()`, `fn Circle(r) =` con `Circle(r)`, `fn Pair(a0, a1) =`, `fn None() =` con `None`, el `match` como argumento en varias líneas, y `let f = Circle;` y `let n = None;`
+why:     `None()` se leería como la llamada a una función sin parámetros, y no como el valor que es.
+ref:     TestPrint/constructors
+
+[T11.88] core.print_deep_constructors                     level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    el impresor escribe 100 000 constructores anidados con la pila de Go limitada
+input:   `Wrap(Wrap(… 1))` de 100 000 niveles
+expect:  el texto exacto `fn deep() =` y `Wrap(` cien mil veces, `1` y los paréntesis
+why:     el impresor tiene pila propia por la misma razón que Lint: una lista de 100 000 elementos no debe recorrerse con la de Go.
+ref:     TestPrint/deep_constructors_no_recursion
+
+[T11.89] interp.show_constructors                         level: core
+kind:    unit (go test)      file: internal/interp/value_internal_test.go
+case:    `Show` escribe un valor de un constructor como su nombre, que sale del `Program` y del internador, y sus campos entre paréntesis en orden; sin campos es solo el nombre; y lo hace con 100 000 niveles y la pila limitada
+input:   nueve valores (`None`, `Circle(1.0)`, `Pair(-7, true)`, `Pair((), <fn>)`, anidados en el primero, en el segundo y en los dos, y `-0.0` con `NaN`) y un valor de 100 000 `Wrap`
+expect:  los textos exactos de cada fila; dos `Show` del mismo valor dan lo mismo; el de 100 000 niveles da `Wrap(` cien mil veces, `None` y los paréntesis
+why:     el valor no guarda el nombre de su constructor: sin el programa, `Show` no sabría decir `Circle`.
+ref:     TestValue/show_constructors
+
+[T11.90] interp.constructors_build_values                 level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un constructor construye un valor con los valores de sus argumentos en orden, y uno sin campos un valor sin ellos; llamado por su envoltorio construye lo mismo; `RunMain` de un `main` que construye termina con 0
+input:   `Circle(1.5)`, `None`, `Pair(7, Pair(8, None))`, `Wide(1, true, ())`, `f(2.0)` con `let f = Circle` y un `main` con `Pair(1, None)`
+expect:  `ConV` exactos con el id de cada `Ctor` y sus campos, y los textos `Circle(1.5)`, `None`, `Pair(7, Pair(8, None))`, `Wide(1, true, ())` y `Circle(2.0)`; `RunMain` da `Halt{0}` sin salida
+why:     es el oráculo de todos los backends: un campo en otro orden o un constructor con otro id lo heredaría cada uno.
+ref:     TestMachine/constructors_build_values
+
+[T11.91] interp.constructor_steps                         level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    un `Con` sin argumentos es un paso; con argumentos es el `Con`, cada argumento y un marco aplicado por cada uno
+input:   `None`, `One(1)`, `Pair(1, None)` y `Trio(1, 2, 3)`
+expect:  1, 3, 5 y 7 pasos
+why:     los pasos miden lo que hace la máquina: un marco de más o de menos cambia el comportamiento sin que ninguna salida lo muestre.
+ref:     TestMachine/constructor_steps
+
+[T11.92] interp.constructor_arguments_in_order            level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    los argumentos de un constructor se evalúan una vez cada uno y de izquierda a derecha, y los de dentro de uno antes que el siguiente
+input:   `Trio(p(1), p(2), p(3))`, `Pair(p(4), Pair(p(5), None))` y `Pair(p(6), Pair(p(7), Pair(p(8), None)))`, con `p` que imprime su argumento
+expect:  `RunMain` da `Halt{0}` y stdout es de `1` a `8`, uno por línea
+why:     si un argumento se evaluara dos veces o fuera de orden, la salida de un programa con efectos cambiaría de un backend a otro.
+ref:     TestMachine/constructor_arguments_run_left_to_right
+
+[T11.93] interp.constructor_slots                         level: core
+kind:    unit (go test)      file: internal/interp/machine_test.go
+case:    los valores que esperan a ser campos de un constructor cuentan como espacio de la pila, y dejan de contar cuando el valor está construido
+input:   `M` de 1000 campos cuyo último argumento es la llamada recursiva, con `KI_STACK_MB=1`; y cien `let wN = mk(N)` de un `M` de 1000 campos
+expect:  el primero sale con 103 y `stack overflow` con menos de 1000 marcos; el segundo con 0 y stderr vacío
+why:     sin contarlos, un constructor ancho en una recursión llenaría la memoria sin que ningún límite lo notara; sin soltarlos, habría falsos desbordamientos.
+ref:     TestMachine/constructor_values_count_as_slots
+
+[T11.94] run.constructors_golden                          level: core
+kind:    run                 file: tests/golden/ch11/constructors.ki
+case:    `ki run` de un programa que construye valores, también a través de una función que recibe `Circle`, evalúa los argumentos en orden
+input:   `Shape` con `Circle`, `Pair(Int, Shape)` y `None`, `p` que imprime, `make(f, x)` y un `main` con `Pair(p(7), Pair(p(8), None))`, `make(Circle, 1.0)` y `Pair(p(9), b)`
+expect:  sale con 0, stderr vacío y stdout exactamente `7`, `8` y `9` en tres líneas
+why:     ejecutado con el binario como subproceso, los tres `p` salen una vez y en el orden del fuente, también con un constructor pasado a `make`.
+ref:     tests/golden/ch11/constructors.ki
+
+[T11.95] emit.constructors_core_golden                    level: core
+kind:    golden              file: tests/golden/ch11/constructors_core.ki
+case:    `ki emit core` muestra el `Con` de un `Shape`: las funciones de los tipos y de los constructores y las llamadas del `main` como constructores
+input:   el mismo `Shape`, `make(f, x)` y un `main` con `Pair(1, Pair(2, None))`, `make(Circle, 1.0)` y `Circle(2.5)`
+expect:  stdout exactamente el Core del fichero: el relleno `Shape`, los envoltorios `Circle(r)`, `Pair(a0, a1)` y `None`, `make` y un `main` con los `Con` y `Circle` pasado como función
+why:     es lo que ejecutas en el hito de este capítulo: el `Con` de un `Shape` en la salida real del binario.
+ref:     tests/golden/ch11/constructors_core.ki
+
+[T11.96] check.unknown_constructor_render                 level: core
+kind:    diag                file: tests/errors/ch11/unknown_constructor_render.ki
+case:    `ki check` sobre `Circl(1.0)` con `type Shape { Circle(r: Float) }` dibuja el E0306 con su ayuda y su edición
+input:   `type Shape { Circle(r: Float) }` y un `main` con `let s = Circl(1.0)`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 9 líneas: «unknown constructor `Circl`», la etiqueta «not a constructor in this scope» bajo `Circl`, la ayuda «did you mean `Circle`?» y el diff de la edición, sin nota
+why:     es cómo se ve el E0306, con el binario: una etiqueta o una ayuda cambiadas se notan aquí.
+ref:     tests/errors/ch11/unknown_constructor_render.ki
+
+[T11.97] check.alias_cycle_render                         level: core
+kind:    diag                file: tests/errors/ch11/alias_cycle_render.ki
+case:    `ki check` sobre un ciclo de tres alias dibuja el E0801 con la primaria en el primero, una secundaria en cada uno de los otros y la nota
+input:   `type Meters = Distance`, `type Distance = Length`, `type Length = Meters` y `main`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 10 líneas, con «this alias is part of a cycle» bajo `Meters`, «through `Distance`, defined here» y «through `Length`, defined here» en las líneas siguientes y la nota
+why:     es un caso de varias secundarias en líneas seguidas: aquí se ve que el dibujo las alinea, cada una con el nombre de su alias.
+ref:     tests/errors/ch11/alias_cycle_render.ki
+
+[T11.98] interp.frames_balance_the_slots                   level: core
+kind:    unit (go test)      file: internal/interp/machine_internal_test.go
+case:    el espacio de los valores que esperan en un marco, los de una llamada y los de un constructor, se cobra al apilarlo y se devuelve al acabar, y es el que se hizo: al volver un `Call`, la cuenta es la del entorno de entrada
+input:   un `Con` de 1, 2, 3, 4, 5 y 9 argumentos y una llamada a una función de esa aridad, hechos a mano con el `Builder`
+expect:  en los doce casos `Call` da true y deja 0 slots cobrados; el `Con` construye un `ConV` con tantos campos como argumentos
+why:     sin dar tamaño a la lista, `append` la agranda y la cuenta de la pila baja: lo mata el mutante que quita el `make`.
+ref:     TestMachineFrames/frames_balance_the_slots

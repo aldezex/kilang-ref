@@ -31,7 +31,7 @@ func redefined(name string, at, first base.Span) diag.Diagnostic {
 func checkSources(t *testing.T, prelude, user string) []diag.Diagnostic {
 	t.Helper()
 	rp, mods, in, sink := resolveSources(t, prelude, user)
-	sema.Check(mods, rp, in, sink)
+	sema.Check(mods, rp, sema.Declare(mods, rp, in, sink), in, sink)
 	return sink.All()
 }
 
@@ -78,17 +78,18 @@ func TestTypeNames(t *testing.T) {
 				t.Errorf("definition %d is %+v, want %+v", i, got[i], wantDef)
 			}
 		}
-		// A type and a constructor have the error type for now, and `main` its own.
+		// A type has the type that its name stands for, a constructor the type of
+		// a value (a function when it has fields) and `main` its own.
 		typed := p.Frontend.Typed
+		wantTypes := map[string]string{
+			"Shape": "Shape", "Circle": "(Float) -> Shape", "Rect": "(Float, Float) -> Shape", "Unit": "Shape",
+			"Point": "Point", "Meters": "Float", "Flag": "Flag", "On": "Flag", "Off": "Flag", "main": "() -> ()",
+		}
 		for id, d := range p.Frontend.Resolved.Defs.All() {
 			if d.Module != p.Frontend.User {
 				continue
 			}
-			want := "{error}"
-			if d.Kind == sema.DefFn {
-				want = "() -> ()"
-			}
-			if got := typed.Types.Show(typed.DefTypes.Get(id)); got != want {
+			if got, want := typed.Types.Show(typed.DefTypes.Get(id)), wantTypes[in.String(d.Name)]; got != want {
 				t.Errorf("%s has the type %s, want %s", in.String(d.Name), got, want)
 			}
 		}
@@ -99,7 +100,7 @@ func TestTypeNames(t *testing.T) {
 		// values, so `Circle` is a type and a constructor at once and neither is
 		// defined twice. In an expression it is the constructor; in a type
 		// annotation, the type.
-		const src = "type Shape { Circle(r: Float) }\ntype Circle { x: Float }\nfn f(c: Circle) {}\nfn main() { Circle }"
+		const src = "type Shape { Circle(r: Float) }\ntype Circle { x: Float }\nfn f(c: Circle) {}\nfn main() { let c = Circle }"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p)
 		res := userRes(t, p, "Circle")
@@ -119,24 +120,32 @@ func TestTypeNames(t *testing.T) {
 	})
 
 	t.Run("a_type_is_not_a_value_and_a_constructor_is_not_a_type", func(t *testing.T) {
-		// `Shape` in an expression is an unknown name (E0301): types are not in
-		// the space of values. `A` in an annotation is an unknown type (E0406):
+		// `Shape` in an expression is an unknown constructor (E0306): types are not
+		// in the space of values, and a name that starts in uppercase can only be
+		// a constructor. `A` in an annotation is an unknown type (E0406):
 		// constructors are not in the space of types. Neither has a suggestion.
 		const value = "type Shape { A }\nfn main() { Shape }"
 		p := testsupport.Analyze(t, value)
-		wantDiags(t, "a type as a value", p, diag.NewError(diag.E(301), "unknown name `Shape`",
-			diag.Label{Span: spanIn(t, p, value, "{ Shape }", "Shape"), Message: "not found in this scope"}))
+		wantDiags(t, "a type as a value", p, diag.NewError(diag.E(306), "unknown constructor `Shape`",
+			diag.Label{Span: spanIn(t, p, value, "{ Shape }", "Shape"), Message: "not a constructor in this scope"}))
 		const ctor = "type Shape { A }\nfn f(a: A) {}\nfn main() {}"
 		p = testsupport.Analyze(t, ctor)
 		wantDiags(t, "a constructor as a type", p, unknownType(spanIn(t, p, ctor, ": A", "A"), "A", ""))
 
-		// A type is not a candidate for an unknown name either, even when it is
-		// the very first definition of the program, which has the id 0 that the
+		// A type is not a candidate for an unknown constructor either, even when it
+		// is the very first definition of the program, which has the id 0 that the
 		// space of the values answers for a name it does not have: the prelude
 		// here declares `Maybe` first, and `Mayb` is not asked "did you mean
 		// `Maybe`?".
 		_, _, _, sink := resolveSources(t, "pub type Maybe { Just }\n", "fn main() { Mayb }\n")
 		all := sink.All()
+		if len(all) != 1 || all[0].Code != diag.E(306) || all[0].Help != "" || len(all[0].Fixits) != 0 {
+			t.Errorf("a type is suggested for a constructor: %+v", all)
+		}
+		// Nor for an unknown name that starts in lowercase, which is one letter
+		// from the type (`maybe`, E0301): the list of those leaves out the types.
+		_, _, _, sink = resolveSources(t, "pub type Maybe { Just }\n", "fn main() { maybe }\n")
+		all = sink.All()
 		if len(all) != 1 || all[0].Code != diag.E(301) || all[0].Help != "" || len(all[0].Fixits) != 0 {
 			t.Errorf("a type is suggested for a value: %+v", all)
 		}
@@ -160,7 +169,7 @@ func TestTypeNames(t *testing.T) {
 		}
 		// Both are definitions, and the second one's constructors still exist:
 		// `B` is not an unknown name, and a use of `Shape` is not an unknown type.
-		p := testsupport.Analyze(t, "type Shape { A }\ntype Shape { B }\nfn f(s: Shape) { B }\nfn main() {}")
+		p := testsupport.Analyze(t, "type Shape { A }\ntype Shape { B }\nfn f(s: Shape) { let b = B }\nfn main() {}")
 		wantCodes(t, p, "E0302")
 		if got := len(defsOf(p.Frontend.Resolved, p.Frontend.User)); got != 6 {
 			t.Errorf("the file has %d definitions, want 6 (two types, two constructors, f and main)", got)
@@ -292,42 +301,85 @@ func TestTypeNames(t *testing.T) {
 			t.Errorf("Hidden in the user's file is %+v, want it not found: the prelude's type is private", res)
 		}
 		// The shadowing has a visible effect: with the type declared, a `Bool`
-		// parameter is no longer the builtin.
-		const decl = "type Bool { Yes }\nfn f(b: Bool) -> Bool { b }\nfn main() {}"
-		if got := testsupport.DefType(t, testsupport.Analyze(t, decl), "f"); got != "({error}) -> {error}" {
-			t.Errorf("f with a declared Bool has type %s, want ({error}) -> {error}", got)
-		}
-		if got := testsupport.DefType(t, testsupport.Analyze(t, "fn f(b: Bool) -> Bool { b }\nfn main() {}"), "f"); got != "(Bool) -> Bool" {
-			t.Errorf("f with the builtin has type %s, want (Bool) -> Bool", got)
-		}
-	})
-
-	t.Run("a_declared_type_has_the_error_type_until_declare", func(t *testing.T) {
-		// Declare (Tarea 52) makes the types of the declared types. Until then
-		// nothing can be compared with one: it is the error type, which agrees
-		// with everything, and what has it is not a mistake wherever it is used.
-		const src = "type Shape { A }\ntype Meters = Float\n" +
-			"fn f(s: Shape) -> Int { s }\nfn g(m: Meters) -> Bool { m }\nfn main() { let x: Int = f(true)\n let y: Meters = 1 }"
-		p := testsupport.Analyze(t, src)
-		wantCodes(t, p)
-		for name, want := range map[string]string{"f": "({error}) -> Int", "g": "({error}) -> Bool"} {
-			if got := testsupport.DefType(t, p, name); got != want {
-				t.Errorf("%s has type %s, want %s", name, got, want)
+		// parameter is no longer the builtin. Both are written `Bool`, so the
+		// test looks at the kind of the node.
+		for _, row := range []struct {
+			name, src string
+			want      sema.TypeKind
+		}{
+			{"declared", "type Bool { Yes }\nfn f(b: Bool) -> Bool { b }\nfn main() {}", sema.TypeData},
+			{"builtin", "fn f(b: Bool) -> Bool { b }\nfn main() {}", sema.TypeBuiltin},
+		} {
+			p := testsupport.Analyze(t, row.src)
+			wantCodes(t, p)
+			id, _ := fnNamed(t, p, "f")
+			typed := p.Frontend.Typed
+			fn := typed.Types.Node(typed.DefTypes.Get(id))
+			if got := typed.Types.Node(fn.Params[0]).Kind; got != row.want || typed.Types.Node(fn.Ret).Kind != row.want {
+				t.Errorf("%s: the parameter has kind %d, want %d", row.name, got, row.want)
 			}
 		}
 	})
 
-	t.Run("a_constructor_in_an_expression_has_the_error_type_until_declare", func(t *testing.T) {
-		// A constructor is a definition of the values, and its type is the error
-		// type until Declare: calling it with any arguments, using it where any
-		// type is expected, and writing it alone are not mistakes yet.
-		const src = "type Shape { Circle(r: Float), None }\n" +
-			"fn main() {\n  let a = Circle(1.0)\n  let b: Int = None\n  let c: Bool = Circle(true, 2)\n  let d = Circle\n}"
+	t.Run("a_declared_type_is_what_its_name_stands_for", func(t *testing.T) {
+		// A name in an annotation is the type that Declare made: a sum or a record
+		// is its own type, an alias is what it expands to, so `Meters` and `Float`
+		// are the same type, and `Shape` and `Float` are not.
+		const src = "type Shape { A }\ntype Meters = Float\n" +
+			"fn f(s: Shape) -> Int { 1 }\nfn g(m: Meters) -> Float { m }\nfn main() {\n  let x: Int = f(A)\n  let y: Meters = 1.5\n}"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p)
+		for name, want := range map[string]string{"f": "(Shape) -> Int", "g": "(Float) -> Float"} {
+			if got := testsupport.DefType(t, p, name); got != want {
+				t.Errorf("%s has type %s, want %s", name, got, want)
+			}
+		}
+		const bad = "type Shape { A }\nfn f(s: Shape) -> Float { s }\nfn main() {}"
+		p = testsupport.Analyze(t, bad)
+		wantDiags(t, "a Shape where a Float is returned", p,
+			secondary(mismatch(spanIn(t, p, bad, "{ s }", "s"), "expected `Float`, found `Shape`"),
+				spanIn(t, p, bad, "-> Float", "Float"), "expected because of the return type"))
+
+		// A type that has the name of a builtin one is another type. The two read
+		// alike in the message that compares them, so a note says they are not the
+		// same; a message of two types that differ has no note.
+		const shadow = "type Int { Mk }\nfn f(x: Int) -> Int { x }\nfn main() { print(f(1)) }"
+		const same = "these are two different types with the same name: a `type` of the program hides the type that had that name"
+		p = testsupport.Analyze(t, shadow)
+		wantDiags(t, "a declared Int and the builtin", p,
+			secondary(mismatch(spanIn(t, p, shadow, "f(1", "1"), "expected `Int`, found `Int`"),
+				spanIn(t, p, shadow, "x: Int", "x: Int"), "the parameter is declared here").WithNote(same),
+			mismatch(spanIn(t, p, shadow, "print(f(1))", "f(1)"), "expected `Int`, found `Int`").WithNote(same))
+
+		// A type that is declared twice is E0302, the name stands for the first and
+		// the constructors of the second have the second's type: the E0401 that
+		// follows is a true one, and its note blames the repeat and not a builtin
+		// type, which nothing hides here.
+		const twice = "type Shape { Circle(r: Float) }\ntype Shape { Square(side: Float) }\nfn main() {\n  let s = Square(1.0)\n  let t: Shape = s\n}"
+		p = testsupport.Analyze(t, twice)
+		all := p.Session.Sink.All()
+		if len(all) != 2 || all[0].Code != diag.E(302) || all[1].Code != diag.E(401) || all[1].Primary.Message != "expected `Shape`, found `Shape`" ||
+			!slices.Equal(all[1].Notes, []string{"these are two different types with the same name: the program declares a type with that name more than once"}) {
+			t.Errorf("a type declared twice: diagnostics %+v, want the E0302 and an E0401 whose note blames the repeat", all)
+		}
+	})
+
+	t.Run("a_constructor_is_a_value_of_its_type", func(t *testing.T) {
+		// A constructor with fields is a function from them to its type, and one
+		// without is a value of its type, so each fits where its type is expected
+		// and nowhere else.
+		const src = "type Shape { Circle(r: Float), None }\n" +
+			"fn main() {\n  let a: Shape = Circle(1.0)\n  let b: Shape = None\n  let c = Circle\n  let d: Int = a\n}"
+		p := testsupport.Analyze(t, src)
+		wantDiags(t, "a shape where an Int is wanted", p,
+			secondary(mismatch(spanIn(t, p, src, "= a\n", "a"), "expected `Int`, found `Shape`"),
+				spanIn(t, p, src, ": Int", "Int"), "expected because of this annotation"))
 		res := useAt(t, p, "Circle", 0)
 		if res.Kind != sema.ResDef || p.Frontend.Resolved.Defs.Get(res.Def).Kind != sema.DefCtor {
 			t.Errorf("Circle resolved to %+v, want its constructor", res)
+		}
+		if got := exprType(t, p, spanIn(t, p, src, "= Circle\n", "Circle")); got != "(Float) -> Shape" {
+			t.Errorf("Circle alone has the type %s, want (Float) -> Shape", got)
 		}
 	})
 
@@ -337,13 +389,13 @@ func TestTypeNames(t *testing.T) {
 		// mistake, or what has the type: one error, not an unknown type and an
 		// unknown name for each use.
 		rows := []struct{ name, src string }{
-			{"a use of the type and of a constructor", "type Shape { Circle( }\nfn f(s: Shape) {}\nfn g() { Circle }\nfn main() {}"},
-			{"the variant read before the mistake", "type Shape { Circle(r: Float), Rect( }\nfn g() {\n  Circle\n  Rect\n}\nfn main() {}"},
+			{"a use of the type and of a constructor", "type Shape { Circle( }\nfn f(s: Shape) {}\nfn g() { let c = Circle }\nfn main() {}"},
+			{"the variant read before the mistake", "type Shape { Circle(r: Float), Rect( }\nfn g() {\n  let c = Circle\n  let r = Rect\n}\nfn main() {}"},
 			{"the variants after the mistake", "type Shape {\n  Circle(r: Float)\n  Rect(w: Float h: Float)\n  Tri(a: Float)\n}\nfn area(s: Shape) {}\n" +
 				"fn main() {\n  Circle(1.0)\n  Rect(1.0, 2.0)\n  Tri(1.0)\n}"},
 			{"an alias that cannot be read", "type A = 1\nfn f(a: A) {}\nfn main() {}"},
 			{"a type with no body", "type A\nfn f(a: A) {}\nfn main() {}"},
-			{"a real type of the same name wins", "type Shape { Circle( }\ntype Shape { A }\nfn f(s: Shape) { A }\nfn main() {}"},
+			{"a real type of the same name wins", "type Shape { Circle( }\ntype Shape { A }\nfn f(s: Shape) { let a = A }\nfn main() {}"},
 			// The header is what is wrong, with the brace on the line below the name:
 			// the variants are read, and a use of one is not an unknown name.
 			{"the brace below the name", "type Shape\n{\n  Circle(r: Float)\n  Dot\n}\nfn area(s: Shape) -> Int { 1 }\n" +

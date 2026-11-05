@@ -30,6 +30,45 @@ func TestMachineFrames(t *testing.T) {
 		}
 	})
 
+	t.Run("frames_balance_the_slots", func(t *testing.T) {
+		// The room of the values that wait in a frame is charged to the slots when
+		// the frame is pushed and given back when it is done, and it is the room
+		// that was made, so a frame that held more than it was charged for (the
+		// room that a slice grows to when it is not made big enough) would leave
+		// the count lower after every call. Once a Call returns the count is the
+		// slots of the entry's own environment, here none, whatever the arities.
+		sp := base.Span{File: 1, Lo: 0, Hi: 1}
+		for _, arity := range []int{1, 2, 3, 4, 5, 9} {
+			b := core.Builder{P: &core.Program{}}
+			p := b.P
+			lits := func() []core.ExprID {
+				var ids []core.ExprID
+				for i := 0; i < arity; i++ {
+					ids = append(ids, b.LitInt(sp, int64(i)))
+				}
+				return ids
+			}
+			ctor := p.Ctors.Push(core.Ctor{Arity: uint32(arity)})
+			var params []core.VarID
+			for i := 0; i < arity; i++ {
+				params = append(params, p.Vars.Push(core.Var{Slot: uint32(i)}))
+			}
+			callee := p.Funs.Push(core.Fun{Params: params, Body: b.LitUnit(sp), HasBody: true, FrameSize: uint32(arity)})
+			makes := p.Funs.Push(core.Fun{Body: b.Con(sp, ctor, lits()), HasBody: true})
+			calls := p.Funs.Push(core.Fun{Body: b.Call(sp, b.FunRef(sp, callee), lits()), HasBody: true})
+			for name, f := range map[string]core.FunID{"a constructor": makes, "a call": calls} {
+				m := New(p, new(base.SourceManager), io.Discard, io.Discard)
+				v, ok := m.Call(f, nil)
+				if !ok || m.slots != 0 {
+					t.Errorf("%s of %d arguments: Call returned %v and left %d slots charged, want true and none", name, arity, ok, m.slots)
+				}
+				if con, isCon := v.(ConV); name == "a constructor" && (!isCon || len(con.Fields) != arity) {
+					t.Errorf("a constructor of %d arguments built %#v, want a ConV with that many fields", arity, v)
+				}
+			}
+		}
+	})
+
 	t.Run("stack_limit_setting", func(t *testing.T) {
 		// The limit in frames for each value of KI_STACK_MB: the setting times
 		// 1<<14 when it is a positive integer, and the default (256 MiB) when it

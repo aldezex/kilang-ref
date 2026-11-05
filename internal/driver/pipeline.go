@@ -30,8 +30,9 @@ const (
 type Frontend struct {
 	Modules []*syntax.Module
 	User    sema.ModuleIdx
-	// Resolved and Typed are nil until Analyze has run.
+	// Resolved, Decls and Typed are nil until Analyze has run.
 	Resolved *sema.ResolvedProgram
+	Decls    *sema.Decls
 	Typed    *sema.TypedProgram
 }
 
@@ -103,14 +104,18 @@ func (s *Session) lex(id base.FileID) (tb syntax.TokenBuffer) {
 }
 
 // Analyze runs the passes after the parser on f: so far, name resolution (the
-// pass "resolve") and the type checker (the pass "check"). Both run whether or
-// not the file has errors, because what an earlier pass could not understand
-// has the error type, which the next one never reports again. It reports to the
-// session's sink and does not write them; ReportAll does. If either pass
-// panics, Analyze does not return: it panics with the *ICE (see runPass).
+// pass "resolve"), the declarations (the pass "declare", which makes the table of
+// types from the `type` items) and the type checker (the pass "check"), in that
+// order. All three run whether or not the file has errors, because what an
+// earlier pass could not understand has the error type, which the next one never
+// reports again. It reports to the session's sink and does not write them;
+// ReportAll does. If any pass panics, Analyze does not return: it panics with
+// the *ICE (see runPass). Check is called only from here: it needs the Decls
+// that the pass before it made.
 func (s *Session) Analyze(f *Frontend) {
 	s.runPass("resolve", func() { f.Resolved = sema.Resolve(f.Modules, f.User, s.Interner, &s.Sink) })
-	s.runPass("check", func() { f.Typed = sema.Check(f.Modules, f.Resolved, s.Interner, &s.Sink) })
+	s.runPass("declare", func() { f.Decls = sema.Declare(f.Modules, f.Resolved, s.Interner, &s.Sink) })
+	s.runPass("check", func() { f.Typed = sema.Check(f.Modules, f.Resolved, f.Decls, s.Interner, &s.Sink) })
 }
 
 // Lower elaborates f, which Analyze has been through, to Core (the pass

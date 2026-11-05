@@ -1,0 +1,17 @@
+// test: T11.96
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0306]: unknown constructor `Circl`
+// |   --> tests/errors/ch11/unknown_constructor_render.ki:16:11
+// |    |
+// | 16 |   let s = Circl(1.0)
+// |    |           ^^^^^ not a constructor in this scope
+// |    = help: did you mean `Circle`?
+// |    |
+// | 16 -   let s = Circl(1.0)
+// | 16 +   let s = Circle(1.0)
+type Shape { Circle(r: Float) }
+fn main() {
+  let s = Circl(1.0)
+}

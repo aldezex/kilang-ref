@@ -46,6 +46,16 @@ const (
 	ReasonOperand
 )
 
+// The reasons of Part II come after ReasonOperand, in the order the sessions add
+// them.
+const (
+	// ReasonCtorArg is an argument of a constructor, checked against the type of
+	// the field. Because is the field, as written in the declaration of the
+	// variant. It is ReasonArgument for a constructor, which has no parameter to
+	// point at but a field.
+	ReasonCtorArg ReasonKind = ReasonOperand + 1
+)
+
 // Reason is why a type is expected, given to Unify so that the error it may
 // report can explain itself.
 type Reason struct {

@@ -23,8 +23,11 @@ type TypedModule struct {
 
 // TypedProgram is the result of Check.
 type TypedProgram struct {
-	// Types holds every type that the tables below name.
+	// Types holds every type that the tables below name: it is the table of
+	// Decls, which Declare made and Check adds to.
 	Types *TypeTable
+	// Decls is the declarations that Check was given.
+	Decls *Decls
 	// Modules has one entry for each module, in the order of the modules.
 	Modules []TypedModule
 	// DefTypes is the type of each definition, indexed by DefID: a function
@@ -56,11 +59,12 @@ type TypedProgram struct {
 // returns `()`. A type name is a type that the program declares (the module's
 // own, or a `pub` one of the prelude: see ResolvedProgram.LookupType), or `Int`,
 // `Float`, `Bool`, or `()`; any other is E0406 (an unknown type), reported once
-// where it is written, and has the error type. So has a type that is declared,
-// until the pass that makes the types of the declarations (Declare, in the next
-// session) gives it one: nothing is compared with it, and what has it is not a
-// mistake. The type of a constructor is the error type too, for the same
-// reason.
+// where it is written, and has the error type. A declared type is the type that
+// Declare made of it (a sum or a record, or what an alias expands to), and a
+// constructor is a value of the type of Decls.CtorType: a function from its
+// fields to its type, or its type itself when it has no fields, so `Circle(1.0)`
+// is a call like any other and `Circle` can be passed as a function. A name that
+// is in no scope has the error type.
 // Then `main`, if the user's file has one, is held to its type, `() -> ()`
 // (E0404). Only then are the bodies checked, each against the return type of
 // its function (the tail of a body is the reason ReasonBlockTail). All the
@@ -92,11 +96,12 @@ type TypedProgram struct {
 // Parse bounds that depth (MaxNesting levels, and the operators and calls of
 // one statement, MaxChain), so a tree the parser made is safe; a tree built by
 // hand is not.
-func Check(mods []*syntax.Module, res *ResolvedProgram, in *base.Interner, sink *diag.Sink) *TypedProgram {
-	tbl := NewTypeTable()
+func Check(mods []*syntax.Module, res *ResolvedProgram, decls *Decls, in *base.Interner, sink *diag.Sink) *TypedProgram {
+	tbl := decls.Types
 	c := &checker{
-		mods: mods, res: res, in: in, sink: sink,
-		tp:     &TypedProgram{Types: tbl, Modules: make([]TypedModule, len(mods))},
+		mods: mods, res: res, in: in, sink: sink, decls: decls,
+		reader: typeReader{mods: mods, res: res, in: in, sink: sink, decls: decls},
+		tp:     &TypedProgram{Types: tbl, Decls: decls, Modules: make([]TypedModule, len(mods))},
 		u:      Unifier{Types: tbl, Sink: sink},
 		intT:   tbl.Builtin(BuiltinInt),
 		boolT:  tbl.Builtin(BuiltinBool),
@@ -119,6 +124,10 @@ type checker struct {
 	sink *diag.Sink
 	tp   *TypedProgram
 	u    Unifier
+	// decls is what Declare made, and reader reads the types that annotations
+	// write with it.
+	decls  *Decls
+	reader typeReader
 
 	// The builtin types and the error type, which every rule uses.
 	intT, boolT, unitT, floatT, errT TypeID
@@ -183,19 +192,25 @@ func (c *checker) signatures() {
 		c.tp.LocalTypes.Push(c.errT)
 	}
 	// The definitions are in DefID order, so each Push gives the id of its Def.
-	for _, def := range c.res.Defs.All() {
-		c.tp.DefTypes.Push(c.signature(def))
+	for id, def := range c.res.Defs.All() {
+		c.tp.DefTypes.Push(c.signature(id, def))
 	}
 }
 
 // signature returns the function type of def, and gives its parameters their
 // types. A parameter with an annotation has that type; one without gets a new
-// variable. A function without `->` returns `()`. The definition of a type or of
-// a constructor has the error type: it is not a function, and nothing can be
-// compared with it yet.
-func (c *checker) signature(def Def) TypeID {
-	if def.Kind == DefType || def.Kind == DefCtor {
-		return c.errT
+// variable. A function without `->` returns `()`. A constructor has the type
+// that Decls.CtorType says. The definition of a type has the type that its name
+// stands for (see Decls.Meaning): no expression is the name of a type, so nothing
+// reads it as the type of a value.
+func (c *checker) signature(id DefID, def Def) TypeID {
+	switch def.Kind {
+	case DefType:
+		td, _ := c.decls.TypeDefOf(id)
+		return c.decls.Meaning(td)
+	case DefCtor:
+		ctor, _ := c.decls.CtorOf(id)
+		return c.decls.CtorType(ctor)
 	}
 	m := c.mods[def.Module]
 	it := m.ItemNodes.Get(def.Item)
@@ -221,58 +236,10 @@ func (c *checker) signature(def Def) TypeID {
 	return c.tp.Types.Fun(params, ret, c.tp.Types.EmptyRow())
 }
 
-// typeOf returns the type that the type expression id of module mod writes.
-//
-// A name is looked up among the types that the program declares first, and then
-// among the builtins, so a declared type wins over `Bool` (see LookupType). A
-// declared type, and one that the parser could not read after its name, have the
-// error type, silently: for the second the parser has said what is wrong, and
-// for the first nothing makes the type of a declaration until Declare does.
+// typeOf returns the type that the type expression id of module mod writes (see
+// typeReader.typeOf).
 func (c *checker) typeOf(mod ModuleIdx, id syntax.TypeExprID) TypeID {
-	te := c.mods[mod].Types.Get(id)
-	switch te.Kind {
-	case syntax.TypeUnit:
-		return c.unitT
-	case syntax.TypeNamed:
-		if _, ok := c.res.LookupType(mod, te.Name); ok {
-			return c.errT
-		}
-		switch c.in.String(te.Name) {
-		case "Int":
-			return c.intT
-		case "Float":
-			return c.floatT
-		case "Bool":
-			return c.boolT
-		}
-		// Not a type that is in scope: reported here, once, where it is
-		// written, and the error type from then on, which says nothing more
-		// wherever it is used.
-		c.unknownTypeError(mod, te.Span, c.in.String(te.Name))
-		return c.errT
-	case syntax.TypeError:
-		return c.errT
-	default:
-		panic("unreachable")
-	}
-}
-
-// unknownTypeError reports E0406 for the type name that is written at, in module
-// mod. The help and its edit are there when a type in scope, a builtin or one
-// that the program declares, is spelled almost like it (`Bol` for `Bool`,
-// `Shap` for `Shape`), as for an unknown name. There is no note: what is in
-// scope depends on the program.
-func (c *checker) unknownTypeError(mod ModuleIdx, at base.Span, name string) {
-	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type in this scope"})
-	// Like the help of an unknown name, it costs a pass over the candidates,
-	// which nobody reads once the sink is full.
-	if !c.sink.Truncated() {
-		candidates := append([]string{"Int", "Float", "Bool"}, c.res.visibleTypes(mod, c.in)...)
-		if best, ok := suggest(name, candidates); ok {
-			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
-		}
-	}
-	c.sink.Report(d)
+	return c.reader.typeOf(mod, id)
 }
 
 // mainSignature reports E0404 if the `main` of the user's file does not have the
@@ -974,7 +941,7 @@ func (c *checker) call(e syntax.Expr) TypeID {
 			return node.Ret
 		}
 		for i, arg := range args {
-			c.check(arg, node.Params[i], Reason{Kind: ReasonArgument, Because: c.paramSpan(e.Callee, i)})
+			c.check(arg, node.Params[i], c.argReason(e.Callee, i))
 		}
 		return node.Ret
 	case TypeVariable:
@@ -1012,7 +979,8 @@ func (c *checker) call(e syntax.Expr) TypeID {
 	case TypeErr:
 		c.inferAll(args)
 		return c.errT
-	case TypeBuiltin:
+	case TypeBuiltin, TypeData:
+		// A constructor with no fields is a value of its type, not a function.
 		c.notCallableError(e, ct)
 		c.inferAll(args)
 		return c.errT
@@ -1057,26 +1025,45 @@ func (c *checker) inferAll(ids []syntax.ExprID) {
 	}
 }
 
-// calleeDef returns the definition that the callee expression is the name of.
-func (c *checker) calleeDef(callee syntax.ExprID) (Def, bool) {
+// calleeDef returns the definition that the callee expression is the name of,
+// and its id.
+func (c *checker) calleeDef(callee syntax.ExprID) (DefID, Def, bool) {
 	if res := c.rm.ExprRes[callee]; c.m.Exprs.Get(callee).Kind == syntax.ExprName && res.Kind == ResDef {
-		return c.res.Defs.Get(res.Def), true
+		return res.Def, c.res.Defs.Get(res.Def), true
 	}
-	return Def{}, false
+	return 0, Def{}, false
 }
 
 // paramSpan returns the span of the i-th parameter of the function that the
-// callee expression is the name of: the secondary label of an argument that
-// does not fit. If the callee is not the name of a function (it is a variable
-// that holds one), there is no parameter to point at, and the result is the
-// zero Span, which Unify takes for no place at all.
+// callee expression is the name of, or, for a constructor, of its i-th field as
+// the declaration of its variant writes it: the secondary label of an argument
+// that does not fit. A constructor has no Params to index, because the item that
+// its Def names is the type's. If the callee is not the name of a definition (it
+// is a variable that holds a function), there is nothing to point at, and the
+// result is the zero Span, which Unify takes for no place at all.
 func (c *checker) paramSpan(callee syntax.ExprID, i int) base.Span {
-	def, ok := c.calleeDef(callee)
+	id, def, ok := c.calleeDef(callee)
 	if !ok {
 		return base.Span{}
 	}
+	if def.Kind == DefCtor {
+		ctor, _ := c.decls.CtorOf(id)
+		return c.decls.FieldSpan(c.mods, ctor, i)
+	}
 	m := c.mods[def.Module]
 	return m.Params(m.ItemNodes.Get(def.Item).Params)[i].Span
+}
+
+// argReason is the reason for the i-th argument of a call whose callee is the
+// expression callee: the argument of a function, or of a constructor, which has
+// a reason of its own because it is a field that explains the type, and not a
+// parameter.
+func (c *checker) argReason(callee syntax.ExprID, i int) Reason {
+	kind := ReasonArgument
+	if _, def, ok := c.calleeDef(callee); ok && def.Kind == DefCtor {
+		kind = ReasonCtorArg
+	}
+	return Reason{Kind: kind, Because: c.paramSpan(callee, i)}
 }
 
 // maxNoteParams is how many parameter types the note of an E0402 writes. A
@@ -1105,7 +1092,7 @@ func (c *checker) arityError(e syntax.Expr, fn Type) {
 		diag.Label{Span: e.OpSpan, Message: "supplied here"})
 	if callee := c.m.Exprs.Get(e.Callee); callee.Kind == syntax.ExprName {
 		name := c.in.String(callee.Name)
-		if def, ok := c.calleeDef(e.Callee); ok && def.Span.File == e.OpSpan.File {
+		if _, def, ok := c.calleeDef(e.Callee); ok && def.Span.File == e.OpSpan.File {
 			d = d.WithSecondary(diag.Label{Span: def.Span, Message: "`" + name + "` is declared here"})
 		}
 		params := fn.Params[:min(len(fn.Params), maxNoteParams)]
@@ -1120,8 +1107,9 @@ func (c *checker) arityError(e syntax.Expr, fn Type) {
 
 // notCallableError reports E0403 for the call e whose callee has the type ty,
 // which is not a function. If the callee is a variable, a secondary label shows
-// where it is bound. (A definition is always a function, so a callee that is a
-// definition never gets here.)
+// where it is bound. (A function is always a function, so a callee that is a
+// function never gets here; one that is a constructor without fields does, and
+// has no secondary label: its definition is not a variable.)
 func (c *checker) notCallableError(e syntax.Expr, ty TypeID) {
 	callee := c.m.Exprs.Get(e.Callee)
 	d := diag.NewError(diag.E(403), "cannot call a value of type `"+c.tp.Types.Show(ty)+"`",

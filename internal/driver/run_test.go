@@ -153,14 +153,16 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("constructors_evaluate_as_unit", func(t *testing.T) {
-		// A program with a `type` runs, which takes a Fun for each type and each
-		// constructor (a program without bodies for them would be an ICE of Lint),
-		// and until constructors build values a constructor in an expression is
-		// `()`: the arguments of a call are still evaluated, in order, and what
-		// comes out is the unit that `main` ends with.
-		const src = "type Shape {\n  Circle(r: Float)\n  None\n}\ntype Meters = Float\n" +
-			"fn main() {\n  Circle(print(7))\n  Circle(print(8), None)\n  None\n}\n"
+	t.Run("constructors_build_values", func(t *testing.T) {
+		// A program with a `type` runs, with the binary's whole path: the Fun of
+		// each type and each constructor, the Con of a call and the wrapper of a
+		// constructor that is passed along. The values are built and dropped (main
+		// returns `()`), and what shows is that their arguments are evaluated, once
+		// each and in order.
+		const src = "type Shape {\n  Circle(r: Float)\n  Pair(Int, Shape)\n  None\n}\ntype Meters = Float\n" +
+			"fn p(n: Int) -> Int {\n  print(n)\n  n\n}\n" +
+			"fn make(f, x: Float) -> Shape { f(x) }\n" +
+			"fn main() {\n  let a = Pair(p(7), Pair(p(8), None))\n  let b = make(Circle, 1.0)\n  let c = Circle(2.0)\n  let d = None\n}\n"
 		code, stdout, stderr := runCLI(t, "run", writeKi(t, src))
 		if code != 0 || stdout != "7\n8\n" || stderr != "" {
 			t.Errorf("got %d, stdout %q, stderr %q, want 0, \"7\\n8\\n\" and nothing on stderr", code, stdout, stderr)
@@ -238,7 +240,7 @@ func TestRun(t *testing.T) {
 			t.Fatalf("ki run without the hook: got %d, stdout %q, stderr %q, want 0, \"7\\n\" and nothing on stderr", code, stdout, stderr)
 		}
 		// Every pass that `ki run` runs, from the lexer to the machine itself.
-		for _, pass := range []string{"lex", "parse", "resolve", "check", "elaborate", "lint", "run"} {
+		for _, pass := range []string{"lex", "parse", "resolve", "declare", "check", "elaborate", "lint", "run"} {
 			t.Setenv("KI_DEBUG_PANIC_IN", pass)
 			code, stdout, stderr := runCLI(t, "run", path)
 			checkICE(t, "ki run with the hook in "+pass, code, stdout, stderr, pass)

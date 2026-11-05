@@ -3,11 +3,12 @@
 // no types: nothing in it records the type of a variable or of an expression.
 // Its expressions are strict.
 //
-// This file holds the data: a Program owns every function, expression and
-// variable of a build. The Builder in builder.go is how the elaboration, and
-// the tests, make them. Part I needs only the part of Core that the language
+// This file holds the data: a Program owns every function, expression, variable
+// and constructor of a build. The Builder in builder.go is how the elaboration,
+// and the tests, make them. Part I needs only the part of Core that the language
 // of Part I elaborates to: literals, variables, calls, primitive operations,
-// `let` and a `match` on Bool.
+// `let` and a `match` on Bool; Part II adds the constructors, which build the
+// values of the types that a program declares.
 //
 // Like the syntax tree, a Program stores its nodes in IdVecs and refers to
 // them by id, never by pointer. The children of a node that form a list are a
@@ -29,6 +30,9 @@ type VarID uint32
 
 // FunID names a function in Program.Funs.
 type FunID uint32
+
+// CtorID names a constructor in Program.Ctors.
+type CtorID uint32
 
 // Rep says how the value of a variable is represented at run time.
 type Rep uint8
@@ -144,6 +148,7 @@ const (
 	// The kinds of Part II come after Match, in the order the sessions add them.
 
 	LitFloat // Float
+	Con      // Ctor, Args: `K(ē)`, the value of the constructor Ctor built from the values of Args
 )
 
 // PatKind is the kind of pattern of one arm of a Match.
@@ -175,9 +180,12 @@ type Expr struct {
 	Var   VarID
 	Fun   FunID
 	Prim  Prim
+	// Ctor is the constructor that a Con builds.
+	Ctor CtorID
 
-	// Callee is what a Call calls. Args holds the arguments of a Call and of a
-	// PrimCall: a range over Program.ExprPool, read with Program.Args.
+	// Callee is what a Call calls. Args holds the arguments of a Call, of a
+	// PrimCall and of a Con: a range over Program.ExprPool, read with
+	// Program.Args.
 	Callee ExprID
 	Args   base.ListRange
 
@@ -214,9 +222,28 @@ type Fun struct {
 	UserModule bool
 }
 
+// Ctor is a constructor: how a value of a declared type is built. Arity is how
+// many values it is built from, and a Con that gives another number is what Lint
+// refuses. Tag tells the constructors of one type apart: its position among them,
+// from 0. Tuple marks a constructor that builds a tuple, which has no name of its
+// own and exists once for each arity; the elaboration makes none yet. Fields
+// holds the names of the fields when the declaration gives them, and is nil
+// otherwise (a field with no name has base.NoSymbol in it when a constructor
+// names only some).
+type Ctor struct {
+	Name   base.Symbol
+	Tag    uint32
+	Arity  uint32
+	Tuple  bool
+	Fields []base.Symbol
+}
+
 // Program is the Core of a whole build: the prelude and the user's file.
 type Program struct {
 	Funs base.IdVec[FunID, Fun]
+	// Ctors lists the constructors of every declared type, in the order of the
+	// declarations: CtorID(c) is the constructor that sema.CtorID(c) is.
+	Ctors base.IdVec[CtorID, Ctor]
 	// Exprs holds every expression. ExprPool and ArmPool are the pools that the
 	// ListRanges of the expressions point into.
 	Exprs    base.IdVec[ExprID, Expr]

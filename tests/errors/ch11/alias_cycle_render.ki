@@ -1,0 +1,18 @@
+// test: T11.97
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0801]: alias `Meters` refers to itself
+// |   --> tests/errors/ch11/alias_cycle_render.ki:15:6
+// |    |
+// | 15 | type Meters = Distance
+// |    |      ^^^^^^ this alias is part of a cycle
+// | 16 | type Distance = Length
+// |    |      -------- through `Distance`, defined here
+// | 17 | type Length = Meters
+// |    |      ------ through `Length`, defined here
+// |    = note: an alias stands for another type, so it cannot stand for itself
+type Meters = Distance
+type Distance = Length
+type Length = Meters
+fn main() {}

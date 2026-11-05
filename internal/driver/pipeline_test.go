@@ -18,6 +18,9 @@ func TestPipeline(t *testing.T) {
 		if len(f.Modules) != 2 || f.User != 1 {
 			t.Fatalf("%d modules and User %d, want 2 and 1", len(f.Modules), f.User)
 		}
+		if f.Decls != nil || f.Typed != nil {
+			t.Errorf("Decls is %+v and Typed %+v before Analyze, want nil", f.Decls, f.Typed)
+		}
 		if f.Resolved != nil {
 			t.Errorf("Resolved is %+v before Analyze, want nil", f.Resolved)
 		}
@@ -80,8 +83,12 @@ func TestPipeline(t *testing.T) {
 		s := NewSession(strings.NewReader(""), &strings.Builder{}, &errOut)
 		f := s.ParseSource("a.ki", []byte("fn f() {}\nfn f() {}\n"))
 		s.Analyze(f)
-		if f.Resolved == nil {
-			t.Error("Resolved is nil after Analyze")
+		if f.Resolved == nil || f.Decls == nil || f.Typed == nil {
+			t.Errorf("after Analyze, Resolved is %v, Decls %v and Typed %v, want none nil", f.Resolved, f.Decls, f.Typed)
+		}
+		// The checker works on the table that the pass before it made: one table.
+		if f.Typed != nil && f.Decls != nil && (f.Typed.Decls != f.Decls || f.Typed.Types != f.Decls.Types) {
+			t.Error("Typed has another Decls or another table of types than the declarations that Analyze made")
 		}
 		if got := s.Sink.Count(diag.E(302)); got != 1 || len(s.Sink.All()) != 1 {
 			t.Errorf("sink %+v, want exactly one E0302", s.Sink.All())

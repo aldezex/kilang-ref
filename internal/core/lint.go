@@ -9,8 +9,8 @@ import (
 
 // appendChildren appends to buf the expressions directly under e, in the order
 // a walk visits them, and returns the result: the callee of a Call and then its
-// arguments, the arguments of a PrimCall, the init of a Let and then its body,
-// and the scrutinee of a Match and then the body of each arm in order.
+// arguments, the arguments of a PrimCall or a Con, the init of a Let and then its
+// body, and the scrutinee of a Match and then the body of each arm in order.
 func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 	switch e.Kind {
 	case LitInt, LitFloat, LitBool, LitUnit, VarRef, FunRef:
@@ -18,7 +18,7 @@ func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 	case Call:
 		buf = append(buf, e.Callee)
 		return append(buf, p.Args(e.Args)...)
-	case PrimCall:
+	case PrimCall, Con:
 		return append(buf, p.Args(e.Args)...)
 	case Let:
 		return append(buf, e.Init, e.Body)
@@ -85,16 +85,17 @@ func (p *Program) Subexprs(root ExprID) iter.Seq[ExprID] {
 //   - a call of a FunRef has as many arguments as that function has
 //     parameters, and a PrimCall as many as Prim.Arity says (a call through a
 //     variable is not checked: Lint does not know what the variable holds);
+//   - a Con has as many arguments as its constructor has fields (Ctor.Arity);
 //   - a Match has the arms true and false, or a wildcard arm;
 //   - a function either has a body and no extern name, or an extern name and no
 //     body, and it walks the body of a function only if it has one;
 //   - the slot of every parameter and every Let variable is less than the
 //     FrameSize of its function.
 //
-// Lint assumes that the expressions and functions it follows exist, and the
-// variable of every Let, parameter and VarRef (it needs the variable to spell
-// its name): an id past the end of its table is an index out of range (see
-// base.IdVec.Get), not a violation. A Let chain or a nesting of any
+// Lint assumes that the expressions, functions and constructors it follows
+// exist, and the variable of every Let, parameter and VarRef (it needs the
+// variable to spell its name): an id past the end of its table is an index out of
+// range (see base.IdVec.Get), not a violation. A Let chain or a nesting of any
 // depth is fine, because the walk keeps its own stack (see Subexprs).
 //
 // It also assumes that the body of each function is a tree, as Subexprs says:
@@ -245,6 +246,11 @@ func (l *linter) check(e *Expr, frame uint32) {
 		want, got := e.Prim.Arity(), len(l.p.Args(e.Args))
 		if got != want {
 			l.report("primitive %s with %d argument(s), but it takes %d", e.Prim, got, want)
+		}
+	case Con:
+		ctor := l.p.Ctors.Get(e.Ctor)
+		if got := len(l.p.Args(e.Args)); got != int(ctor.Arity) {
+			l.report("constructor `%s` with %d argument(s), but it takes %d", l.in.String(ctor.Name), got, ctor.Arity)
 		}
 	case Let:
 		l.slot(e.Var, frame)

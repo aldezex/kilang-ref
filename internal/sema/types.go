@@ -74,9 +74,18 @@ const (
 	TypeErr
 )
 
+// The kinds of Part II come after TypeErr, in the order the sessions add them, so
+// that no kind of Part I changes its value.
+const (
+	// TypeData is a type that the program declares, applied to its arguments:
+	// Type.Def says which declaration and Type.Args holds the arguments. A type
+	// has no arguments until the generics (chapter 13), so Args is empty for now.
+	TypeData TypeKind = TypeErr + 1
+)
+
 // Type is a node of the type table. Only the fields of its Kind mean
-// something, as TypeKind says. Params is shared with the table, so the caller
-// must not change it.
+// something, as TypeKind says. Params and Args are shared with the table, so the
+// caller must not change them.
 type Type struct {
 	Kind    TypeKind
 	Builtin Builtin
@@ -84,6 +93,8 @@ type Type struct {
 	Ret     TypeID
 	Effects RowID
 	Var     TypeVarID
+	Def     TypeDefID
+	Args    []TypeID
 }
 
 // Row is an effect row: the effects of a function. In Part I the only row is
@@ -157,6 +168,14 @@ func encodeIDs(ids []TypeID) string {
 	return b.String()
 }
 
+// dataKey is what makes two applications of a declared type the same type: the
+// same declaration and the same arguments, which go in as a string for the reason
+// funKey's do.
+type dataKey struct {
+	def  TypeDefID
+	args string
+}
+
 // TypeTable holds the types of a program. Types, variables and rows live in
 // tables indexed by their ids, and a type refers to others by id, never by
 // pointer.
@@ -167,6 +186,14 @@ type TypeTable struct {
 	// funs finds the function type with a given key, so that Fun builds each
 	// one only once (hash-consing).
 	funs map[funKey]TypeID
+	// datas does the same for the types that the program declares (see Data).
+	datas map[dataKey]TypeID
+	// defNames is the name of each declared type, which Show writes (see nameDef):
+	// the table holds no interner, so Declare hands it the text.
+	defNames base.IdVec[TypeDefID, string]
+	// hidesBuiltin says that a declared type has the name of a builtin one, which
+	// it hides (`type Int { Mk }`): see nameDef and Unifier.mismatch.
+	hidesBuiltin bool
 
 	builtins [numBuiltins]TypeID
 	errType  TypeID
@@ -176,7 +203,7 @@ type TypeTable struct {
 // NewTypeTable returns a table that holds the builtin types, the error type
 // and the empty row.
 func NewTypeTable() *TypeTable {
-	t := &TypeTable{funs: make(map[funKey]TypeID)}
+	t := &TypeTable{funs: make(map[funKey]TypeID), datas: make(map[dataKey]TypeID)}
 	for b := BuiltinInt; int(b) < numBuiltins; b++ {
 		t.builtins[b] = t.types.Push(Type{Kind: TypeBuiltin, Builtin: b})
 	}
@@ -220,6 +247,40 @@ func (t *TypeTable) Fun(params []TypeID, ret TypeID, effects RowID) TypeID {
 	id := t.types.Push(Type{Kind: TypeFun, Params: own, Ret: ret, Effects: effects})
 	t.funs[key] = id
 	return id
+}
+
+// Data returns the type that the declaration def applied to args is. The table
+// builds each one once, as it does with Fun, so equal arguments give the same id,
+// and it keeps its own copy of args. The ids are compared as they come, as Fun
+// compares them. A declaration that takes no arguments is Data(def, nil).
+func (t *TypeTable) Data(def TypeDefID, args []TypeID) TypeID {
+	key := dataKey{def: def, args: encodeIDs(args)}
+	if id, ok := t.datas[key]; ok {
+		return id
+	}
+	var own []TypeID // stays nil for a declaration with no arguments
+	if len(args) > 0 {
+		own = slices.Clone(args)
+	}
+	id := t.types.Push(Type{Kind: TypeData, Def: def, Args: own})
+	t.datas[key] = id
+	return id
+}
+
+// nameDef gives the declaration def the name that Show writes for it. Declare
+// calls it once for each declaration, in the order of their ids, so that the
+// names are indexed by TypeDefID like the declarations are; it panics if def is
+// not the next id, because a table that named the wrong declaration would show
+// the wrong type in every message.
+func (t *TypeTable) nameDef(def TypeDefID, name string) {
+	if next := t.defNames.Next(); def != next {
+		panic("sema: the declaration " + strconv.Itoa(int(def)) + " is named out of order, the next is " + strconv.Itoa(int(next)))
+	}
+	switch name {
+	case "Int", "Float", "Bool":
+		t.hidesBuiltin = true
+	}
+	t.defNames.Push(name)
 }
 
 // FreshVar returns a new variable, as a type: one that nothing has bound yet,
@@ -304,9 +365,9 @@ func (t *TypeTable) Bind(v TypeVarID, to TypeID) {
 // seconds.
 func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 	todo := []TypeID{in}
-	// seen holds the function types already looked into. Only they have
-	// anything inside, so only they can be reached by many paths; the other
-	// kinds are answered on the spot.
+	// seen holds the function types, and the declared types that take arguments,
+	// already looked into. Only they have anything inside, so only they can be
+	// reached by many paths; the other kinds are answered on the spot.
 	var seen map[TypeID]struct{}
 	for len(todo) > 0 {
 		id := t.Resolve(todo[len(todo)-1])
@@ -320,7 +381,11 @@ func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 			if n.Var == v {
 				return true
 			}
-		case TypeFun:
+		case TypeFun, TypeData:
+			if n.Kind == TypeData && len(n.Args) == 0 {
+				// A type that takes no arguments has nothing inside.
+				continue
+			}
 			if _, done := seen[id]; done {
 				continue
 			}
@@ -329,7 +394,10 @@ func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 			}
 			seen[id] = struct{}{}
 			todo = append(todo, n.Params...)
-			todo = append(todo, n.Ret)
+			todo = append(todo, n.Args...)
+			if n.Kind == TypeFun {
+				todo = append(todo, n.Ret)
+			}
 		default:
 			panic("unreachable")
 		}
@@ -338,12 +406,13 @@ func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 }
 
 // Show writes the type id the way a diagnostic shows it: `Int`, `Bool`, `()`,
-// `Float`, `(Int, Bool) -> Int`, `() -> ()`; the error type is `{error}`. A variable
-// that has been bound shows what it is bound to. One that has not shows as a
-// name made up on the spot: `a` for the first unbound variable that the text
-// mentions, then `b`… up to `z`, and then `a1`, `b1`… The same variable has
-// the same name each time it appears in one call, and the next call starts
-// again at `a`.
+// `Float`, `(Int, Bool) -> Int`, `() -> ()`; a declared type by its name, with its
+// arguments after it when it has any (`Shape`, `Option<Int>`); the error type is
+// `{error}`. A variable that has been bound shows what it is bound to. One that
+// has not shows as a name made up on the spot: `a` for the first unbound
+// variable that the text mentions, then `b`… up to `z`, and then `a1`, `b1`…
+// The same variable has the same name each time it appears in one call, and the
+// next call starts again at `a`.
 //
 // The text is cut: it is at most MaxTypeText bytes long, plus the `…` that
 // ends it when the type needs more. The cut falls after the last piece of text
@@ -420,6 +489,20 @@ func (t *TypeTable) show(id TypeID, names map[TypeVarID]int) string {
 					if i > 0 {
 						todo = append(todo, piece{text: ", "})
 					}
+				}
+			case TypeData:
+				// The name now; its arguments, if it has any, go on the stack as
+				// "<a0, a1>", in the same way.
+				next = t.defNames.Get(n.Def)
+				if len(n.Args) > 0 {
+					todo = append(todo, piece{text: ">"})
+					for i := len(n.Args) - 1; i >= 0; i-- {
+						todo = append(todo, piece{id: n.Args[i]})
+						if i > 0 {
+							todo = append(todo, piece{text: ", "})
+						}
+					}
+					todo = append(todo, piece{text: "<"})
 				}
 			default:
 				panic("unreachable")

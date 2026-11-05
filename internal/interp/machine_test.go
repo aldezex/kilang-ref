@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -776,6 +777,143 @@ fn bothFunctions() -> Int { let g = dec
 			if _, got := call(t, src, row.fun); got != (interp.IntV{V: row.want}) {
 				t.Errorf("Call(%s) = %#v, want IntV{%d}", row.fun, got, row.want)
 			}
+		}
+	})
+
+	t.Run("constructors_build_values", func(t *testing.T) {
+		// A constructor builds a value that holds the values of its arguments in
+		// order, and one with no fields builds a value with none; the value is the
+		// constructor's own, named by its id, and a constructor called through its
+		// wrapper builds the same.
+		const src = `type Shape {
+  Circle(r: Float)
+  Pair(Int, Shape)
+  Wide(a: Int, b: Bool, c: ())
+  None
+}
+fn circle() -> Shape { Circle(1.5) }
+fn none() -> Shape { None }
+fn pair() -> Shape { Pair(7, Pair(8, None)) }
+fn wide() -> Shape { Wide(1, true, ()) }
+fn wrapped() -> Shape {
+  let f = Circle
+  f(2.0)
+}
+fn main() { let s = Pair(1, None) }
+`
+		c := testsupport.Compile(t, src)
+		in := c.Session.Interner
+		ctorID := func(name string) core.CtorID {
+			for id, k := range c.Core.Ctors.All() {
+				if in.String(k.Name) == name {
+					return id
+				}
+			}
+			t.Fatalf("the Program has no constructor called %s", name)
+			panic("unreachable")
+		}
+		circle, none, pair, wide := ctorID("Circle"), ctorID("None"), ctorID("Pair"), ctorID("Wide")
+		for _, row := range []struct {
+			fn   string
+			want interp.Value
+			text string
+		}{
+			{"circle", interp.ConV{Ctor: circle, Fields: []interp.Value{interp.FloatV{V: 1.5}}}, "Circle(1.5)"},
+			{"none", interp.ConV{Ctor: none}, "None"},
+			{"pair", interp.ConV{Ctor: pair, Fields: []interp.Value{interp.IntV{V: 7},
+				interp.ConV{Ctor: pair, Fields: []interp.Value{interp.IntV{V: 8}, interp.ConV{Ctor: none}}}}}, "Pair(7, Pair(8, None))"},
+			{"wide", interp.ConV{Ctor: wide, Fields: []interp.Value{interp.IntV{V: 1}, interp.BoolV{V: true}, interp.UnitV{}}}, "Wide(1, true, ())"},
+			{"wrapped", interp.ConV{Ctor: circle, Fields: []interp.Value{interp.FloatV{V: 2}}}, "Circle(2.0)"},
+		} {
+			m, _, errOut := machineOf(c)
+			v, ok := m.Call(testsupport.FunNamed(t, c, row.fn), nil)
+			if !ok {
+				t.Fatalf("Call(%s) reported a panic, stderr %q", row.fn, errOut.String())
+			}
+			if !reflect.DeepEqual(v, row.want) {
+				t.Errorf("Call(%s) = %#v, want %#v", row.fn, v, row.want)
+			}
+			if got := interp.Show(v, c.Core, in); got != row.text {
+				t.Errorf("Show of the value of %s = %q, want %q", row.fn, got, row.text)
+			}
+		}
+		// RunMain runs a main that builds a value and drops it: it returns normally.
+		m, out, errOut := machineOf(c)
+		if h := m.RunMain(); h != (interp.Halt{Code: 0}) || out.Len() != 0 || errOut.Len() != 0 {
+			t.Errorf("RunMain() = %+v with stdout %q and stderr %q, want Halt{Code: 0} and both empty", h, out.String(), errOut.String())
+		}
+	})
+
+	t.Run("constructor_steps", func(t *testing.T) {
+		// A Con with no arguments is one step. With arguments it is the Con, each
+		// argument and one frame applied for each of them: `Pair(1, None)` is the
+		// Con, the `1`, the frame, the `None` and the frame, five steps.
+		for _, row := range []struct {
+			src   string
+			fn    string
+			steps int
+		}{
+			{"type T { None }\nfn f() -> T { None }", "f", 1},
+			{"type T { One(Int) }\nfn f() -> T { One(1) }", "f", 3},
+			{"type T { Pair(Int, T), None }\nfn f() -> T { Pair(1, None) }", "f", 5},
+			{"type T { Trio(Int, Int, Int) }\nfn f() -> T { Trio(1, 2, 3) }", "f", 7},
+		} {
+			m, _ := call(t, row.src, row.fn)
+			if got := m.Stats().Steps; got != row.steps {
+				t.Errorf("%q: %d steps, want %d", row.src, got, row.steps)
+			}
+		}
+	})
+
+	t.Run("constructor_arguments_run_left_to_right", func(t *testing.T) {
+		// The arguments of a constructor are evaluated in order, each once, and
+		// the ones inside an argument before the next argument.
+		const src = `type T { Trio(Int, Int, Int), Pair(Int, T), None }
+fn p(n: Int) -> Int {
+  print(n)
+  n
+}
+fn main() {
+  let a = Trio(p(1), p(2), p(3))
+  let b = Pair(p(4), Pair(p(5), None))
+  let c = Pair(p(6), Pair(p(7), Pair(p(8), None)))
+}
+`
+		h, stdout, stderr := runMain(t, src)
+		if want := "1\n2\n3\n4\n5\n6\n7\n8\n"; h != (interp.Halt{Code: 0}) || stdout != want || stderr != "" {
+			t.Errorf("RunMain() = %+v with stdout %q and stderr %q, want Halt{Code: 0}, stdout %q and nothing on stderr", h, stdout, stderr, want)
+		}
+	})
+
+	t.Run("constructor_values_count_as_slots", func(t *testing.T) {
+		// The values that wait to become the fields of a constructor are slots of
+		// the stack, as the values that wait to become the environment of a call
+		// are: a constructor with 1000 fields whose last argument is the recursive
+		// call holds 1000 slots at each level, and at 1 MiB (1<<16 slots) the stack
+		// overflows after a few dozen levels and not after the thousands that the
+		// frames alone would allow. Once the value is built they are no longer
+		// counted: a hundred such values, one after the other, are not an overflow.
+		t.Setenv("KI_STACK_MB", "1")
+		const fields = 1000
+		types := strings.Repeat("Int, ", fields-1) + "W"
+		ints := strings.Repeat("n, ", fields-1)
+		src := "type W { M(" + types + "), E }\nfn f(n: Int) -> W { M(" + ints + "f(n)) }\nfn main() { let w = f(0) }"
+		m, h, _, stderr := runMainOn(t, src)
+		if h != (interp.Halt{Code: 103}) || !strings.HasPrefix(stderr, "panic: stack overflow at ") {
+			t.Fatalf("RunMain() = %+v, stderr %q, want Halt{Code: 103} and a stack overflow", h, stderr)
+		}
+		if s := m.Stats(); s.MaxDepth >= 1000 {
+			t.Errorf("Stats().MaxDepth = %d, want fewer than 1000 frames: the 65 levels that fit the slots, not the 8000 that fit the frames", s.MaxDepth)
+		}
+
+		var many strings.Builder
+		many.WriteString("type W { M(" + strings.Repeat("Int, ", fields-1) + "Int) }\nfn mk(n: Int) -> W { M(" + strings.Repeat("n, ", fields-1) + "n) }\nfn main() {\n")
+		for i := range 100 {
+			fmt.Fprintf(&many, "  let w%d = mk(%d)\n", i, i)
+		}
+		many.WriteString("}\n")
+		if h, _, stderr := runMain(t, many.String()); h != (interp.Halt{Code: 0}) || stderr != "" {
+			t.Errorf("a hundred values of 1000 fields: RunMain() = %+v, stderr %q, want Halt{Code: 0}: a built value does not keep counting", h, stderr)
 		}
 	})
 

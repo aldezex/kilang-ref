@@ -48,7 +48,7 @@ type Session struct {
 	Interner       *base.Interner // the identifiers of the files lexed so far; NewSession makes it
 	Format         DiagFormat     // how ReportAll writes the diagnostics; one of the constants above
 	// DebugPanicIn is the name of the pass that panics on purpose when it
-	// starts ("lex", "parse", "resolve", "check"…), to try the ICE boundary (see
+	// starts ("lex", "parse", "resolve", "declare", "check"…), to try the ICE boundary (see
 	// runPass); empty means none. Main sets it from KI_DEBUG_PANIC_IN, and
 	// NewSession leaves it empty: a Session made with NewSession does not
 	// depend on the environment, but one that Main makes does. The tests of
