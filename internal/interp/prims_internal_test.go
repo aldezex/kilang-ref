@@ -193,7 +193,7 @@ func TestPrims(t *testing.T) {
 			name string
 			work func()
 		}{
-			{"primitive_after_the_last", func() { applyPrim(core.PrimNotBool+1, BoolV{V: true}, BoolV{V: true}) }},
+			{"primitive_after_the_last", func() { applyPrim(core.PrimGeFloat+1, BoolV{V: true}, BoolV{V: true}) }},
 			{"largest_primitive", func() { applyPrim(core.Prim(math.MaxUint8), UnitV{}, UnitV{}) }},
 			{"division_error_after_the_last", func() { divResult(0, divOverflow+1) }},
 		}

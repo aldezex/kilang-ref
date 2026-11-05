@@ -77,6 +77,24 @@ const (
 	PrimNotBool
 )
 
+// The primitives of Part II come after PrimNotBool, in the order the sessions
+// add them, so that no primitive of Part I changes its value. Each line of this
+// block is written `X + 1 + iota`: an implicit repetition of a line without
+// iota would give every name the same value.
+const (
+	PrimAddFloat Prim = PrimNotBool + 1 + iota
+	PrimSubFloat
+	PrimMulFloat
+	PrimDivFloat
+	PrimNegFloat
+	PrimEqFloat
+	PrimNeFloat
+	PrimLtFloat
+	PrimLeFloat
+	PrimGtFloat
+	PrimGeFloat
+)
+
 // primNames is the name of each primitive, indexed by Prim.
 var primNames = [...]string{
 	PrimAddInt: "add_int", PrimSubInt: "sub_int", PrimMulInt: "mul_int",
@@ -84,10 +102,14 @@ var primNames = [...]string{
 	PrimEqInt: "eq_int", PrimNeInt: "ne_int", PrimLtInt: "lt_int",
 	PrimLeInt: "le_int", PrimGtInt: "gt_int", PrimGeInt: "ge_int",
 	PrimEqBool: "eq_bool", PrimNeBool: "ne_bool", PrimNotBool: "not_bool",
+	PrimAddFloat: "add_float", PrimSubFloat: "sub_float", PrimMulFloat: "mul_float",
+	PrimDivFloat: "div_float", PrimNegFloat: "neg_float", PrimEqFloat: "eq_float",
+	PrimNeFloat: "ne_float", PrimLtFloat: "lt_float", PrimLeFloat: "le_float",
+	PrimGtFloat: "gt_float", PrimGeFloat: "ge_float",
 }
 
 // String returns the name of the primitive: "add_int", "sub_int" and so on up
-// to "not_bool". A value that is not a primitive prints as "Prim(n)".
+// to "ge_float". A value that is not a primitive prints as "Prim(n)".
 func (p Prim) String() string {
 	if int(p) < len(primNames) {
 		return primNames[p]
@@ -95,10 +117,10 @@ func (p Prim) String() string {
 	return "Prim(" + strconv.Itoa(int(p)) + ")"
 }
 
-// Arity returns the number of arguments the primitive takes: 1 for PrimNegInt
-// and PrimNotBool, 2 for every other primitive.
+// Arity returns the number of arguments the primitive takes: 1 for PrimNegInt,
+// PrimNotBool and PrimNegFloat, 2 for every other primitive.
 func (p Prim) Arity() int {
-	if p == PrimNegInt || p == PrimNotBool {
+	if p == PrimNegInt || p == PrimNotBool || p == PrimNegFloat {
 		return 1
 	}
 	return 2
@@ -118,6 +140,10 @@ const (
 	PrimCall                 // Prim, Args
 	Let                      // Var, the variable that is bound; Init; Body
 	Match                    // Scrutinee, Arms
+
+	// The kinds of Part II come after Match, in the order the sessions add them.
+
+	LitFloat // Float
 )
 
 // PatKind is the kind of pattern of one arm of a Match.
@@ -143,11 +169,12 @@ type Expr struct {
 	Kind ExprKind
 	Span base.Span
 
-	Int  int64
-	Bool bool
-	Var  VarID
-	Fun  FunID
-	Prim Prim
+	Int   int64
+	Float float64
+	Bool  bool
+	Var   VarID
+	Fun   FunID
+	Prim  Prim
 
 	// Callee is what a Call calls. Args holds the arguments of a Call and of a
 	// PrimCall: a range over Program.ExprPool, read with Program.Args.

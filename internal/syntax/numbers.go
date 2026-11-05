@@ -30,8 +30,10 @@ import (
 // A literal has no sign: `-5` is a Minus token and a 5. Whatever the literal
 // gets wrong, the token keeps its kind (Int or Float) with the value 0, so the
 // parser sees a number where the programmer wrote one and adds no error of its
-// own. Each literal reports at most one diagnostic, and its span is the whole
-// literal.
+// own. An Int that was reported is also recorded in the TokenBuffer (see
+// TokenBuffer.reportedNumber), because its 0 is not the number written and the
+// parser makes no number of it. Each literal reports at most one diagnostic,
+// and its span is the whole literal.
 
 // isDecDigit reports whether c is a decimal digit.
 func isDecDigit(c byte) bool { return c >= '0' && c <= '9' }
@@ -160,6 +162,7 @@ func (lx *lexer) radixInt(start, radix int, isDigit func(byte) bool) {
 // radix. A value that does not fit in 64 bits is E0105 and the token gets 0.
 func (lx *lexer) emitInt(start int, text string, radix int) {
 	v, err := strconv.ParseInt(text, radix, 64)
+	reported := err != nil
 	if err != nil {
 		// The digits were checked while lexing, so a range error is the only
 		// one ParseInt can return.
@@ -172,7 +175,7 @@ func (lx *lexer) emitInt(start int, text string, radix int) {
 			WithHelp("the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`"))
 		v = 0
 	}
-	lx.pushInt(start, v)
+	lx.pushInt(start, v, reported)
 }
 
 // emitFloat emits the Float token for the literal that goes from start to the
@@ -245,14 +248,20 @@ func (lx *lexer) malformed(start int, label, help string, isFloat bool, fixits .
 		lx.pushFloat(start, 0)
 		return
 	}
-	lx.pushInt(start, 0)
+	lx.pushInt(start, 0, true)
 }
 
 // pushInt stores v in the table of Ints and emits the Int token, which holds
 // the index of v, for the literal that goes from start to the current position.
-func (lx *lexer) pushInt(start int, v int64) {
+// reported says that the literal was reported (E0105 or E0107) and v is the 0 of
+// the token, not the number written: the token is then recorded in the buffer
+// (see TokenBuffer.reportedNumber).
+func (lx *lexer) pushInt(start int, v int64, reported bool) {
 	lx.tb.Ints = append(lx.tb.Ints, v)
 	lx.emit(Int, start, uint32(len(lx.tb.Ints)-1))
+	if reported {
+		lx.tb.reportedNumbers = append(lx.tb.reportedNumbers, uint32(start))
+	}
 }
 
 // pushFloat is pushInt for a Float.

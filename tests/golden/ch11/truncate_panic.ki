@@ -1,0 +1,11 @@
+// test: T11.33
+// run: run
+// expect-exit: 101
+// expect-stdout: 3
+// expect-stderr: panic: Float out of range at tests/golden/ch11/truncate_panic.ki:9:9
+fn main() {
+  let zero = 0.0
+  print(truncate(3.99))
+  print(truncate(1.0 / zero))
+  print(2)
+}

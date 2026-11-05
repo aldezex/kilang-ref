@@ -502,6 +502,9 @@ func TestParseExpr(t *testing.T) {
 			{"alpha >= beta == gamma", [2]uint32{6, 8}, [2]uint32{14, 16}, "use `&&`: `alpha >= beta && beta == gamma`", "&& beta "},
 			{"1 != n < 20", [2]uint32{2, 4}, [2]uint32{7, 8}, "use `&&`: `1 != n && n < 20`", "&& n "},
 			{"true == flag != false", [2]uint32{5, 7}, [2]uint32{13, 15}, "use `&&`: `true == flag && flag != false`", "&& flag "},
+			// A Float is one token, as an Int is: it can be any of the three operands.
+			{"0.5 < x < 1.5", [2]uint32{4, 5}, [2]uint32{8, 9}, "use `&&`: `0.5 < x && x < 1.5`", "&& x "},
+			{"a < 2.5 < c", [2]uint32{2, 3}, [2]uint32{8, 9}, "use `&&`: `a < 2.5 && 2.5 < c`", "&& 2.5 "},
 		}
 		for _, row := range rows {
 			r := newExprRun(t, row.src)

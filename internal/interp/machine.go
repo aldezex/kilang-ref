@@ -5,11 +5,12 @@
 // with the value when it is ready). All three are data in the Machine, and
 // running it is a loop over them (Machine.run), not a recursion over the tree.
 //
-// It evaluates all of Core as Part I has it: literals, variables, `let`, the
-// primitives, `match`, and calls of the program's functions. A program can end
-// in two ways other than returning from `main`: a panic (an overflow or a
-// division by zero), with Halt{Code: 101}, and a stack that has grown past its
-// limit, with Halt{Code: 103}. A call that is the last thing its function does
+// It evaluates all of Core as Part I and chapter 11 have it: literals,
+// variables, `let`, the primitives, `match`, and calls of the program's
+// functions. A program can end in two ways other than returning from `main`: a
+// panic (an overflow, a division by zero, or a Float that does not fit in an
+// Int), with Halt{Code: 101}, and a stack that has grown past its limit, with
+// Halt{Code: 103}. A call that is the last thing its function does
 // reuses that function's frame and environment instead of adding another pair,
 // so a loop written as such calls does not make the stack grow. The functions
 // that the runtime provides, such as `print`, have no body in Core: the machine
@@ -325,6 +326,8 @@ func (m *Machine) step(id core.ExprID) {
 	switch x.Kind {
 	case core.LitInt:
 		m.ret(IntV{V: x.Int})
+	case core.LitFloat:
+		m.ret(FloatV{V: x.Float})
 	case core.LitBool:
 		m.ret(BoolV{V: x.Bool})
 	case core.LitUnit:
@@ -473,8 +476,9 @@ func (m *Machine) newEnv(fun core.Fun, args []Value) []Value {
 // collected the values vals (the callee first, then the arguments). It makes
 // the body of the callee the control, in a new environment. A callee with no
 // body is a function of the runtime: it runs at once (see callExtern) and its
-// value goes to the top frame. It pushes no frame and no environment, so it
-// adds nothing to envs.
+// value goes to the top frame, or, if the program panics in it, the machine
+// halts with that panic. It pushes no frame and no environment, so it adds
+// nothing to envs.
 //
 // A call in tail position, one with no frame waiting for its value but the
 // retFrame of the function that makes it, reuses that retFrame and puts the new
@@ -508,7 +512,12 @@ func (m *Machine) enter(call core.Expr, vals []Value) {
 	callee := vals[0].(FunV)
 	fun := m.prog.Funs.Get(callee.Fun)
 	if !fun.HasBody {
-		m.ret(m.callExtern(fun.ExternName, vals[1:]))
+		v, halt := m.callExtern(fun.ExternName, call.Span, vals[1:])
+		if halt != nil {
+			m.stop(*halt)
+			return
+		}
+		m.ret(v)
 		return
 	}
 	env := m.newEnv(fun, vals[1:])

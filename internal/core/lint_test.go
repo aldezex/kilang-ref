@@ -75,23 +75,24 @@ func TestLint(t *testing.T) {
 		if got := core.Lint(c.Core, c.Session.Interner); len(got) != 0 {
 			t.Errorf("Lint of the elaborated fib returned %q, want nothing", got)
 		}
-		// The prelude's `print` is in the Program, with no body, and Lint
-		// has read it too: this is what the check above ran over.
-		if n := c.Core.Funs.Len(); n != 2 {
-			t.Fatalf("the Program has %d functions, want 2 (print and fib)", n)
+		// The five functions of the prelude are in the Program, with no body, and
+		// Lint has read them too: this is what the check above ran over.
+		if n := c.Core.Funs.Len(); n != 6 {
+			t.Fatalf("the Program has %d functions, want 6 (the prelude's five and fib)", n)
 		}
 		in := c.Session.Interner
 		if f := c.Core.Funs.Get(0); in.String(f.Name) != "print" || f.HasBody {
 			t.Errorf("fun 0 is %q (has a body: %v), want print with no body", in.String(f.Name), f.HasBody)
 		}
-		if f := c.Core.Funs.Get(1); in.String(f.Name) != "fib" || !f.HasBody {
-			t.Errorf("fun 1 is %q (has a body: %v), want fib with a body", in.String(f.Name), f.HasBody)
+		if f := c.Core.Funs.Get(5); in.String(f.Name) != "fib" || !f.HasBody {
+			t.Errorf("fun 5 is %q (has a body: %v), want fib with a body", in.String(f.Name), f.HasBody)
 		}
 	})
 
 	t.Run("accepts_every_construct", func(t *testing.T) {
 		for _, row := range []struct{ name, source string }{
 			{"negation and not", "fn f(a: Int, b: Bool) -> Bool { !b && -a < 0 }\n"},
+			{"floats", "fn f(a: Float, b: Float) -> Bool { -a * 2.0 + b / 0.5 - 1e21 >= a || a == b || a != b }\n"},
 			{"and, or and equality", "fn f(a: Bool, b: Bool, x: Int) -> Bool { a && b || !a || x == 1 || a != b }\n"},
 			{"shadowing and statements", "fn f(a: Int) -> Int {\n  let x = 1\n  let x = x + a\n  print(x)\n  print(x)\n  x\n}\n"},
 			{"a function used as a value", "fn apply(g, x) { g(x) }\nfn main() { apply(print, 1) }\n"},
@@ -245,7 +246,7 @@ func TestLint(t *testing.T) {
 		// of an ICE finds the function and the variable in their file: `n` is
 		// taken out of the parameters of `f`, and its body reads it unbound.
 		c := testsupport.Compile(t, "fn f(n: Int) -> Int { n }\n")
-		c.Core.Funs.Ptr(1).Params = nil
+		c.Core.Funs.Ptr(testsupport.FunNamed(t, c, "f")).Params = nil
 		lintCheck(t, "a source with its parameter taken away", c.Core, c.Session.Interner, "fun f: unbound variable `n`")
 	})
 
@@ -286,6 +287,12 @@ func TestLint(t *testing.T) {
 			{"a unary primitive with two arguments", func(l *lintProg, g2, g0 core.FunID) core.ExprID {
 				return l.Prim(span(0, 1), core.PrimNegInt, lit(l, 2))
 			}, "primitive neg_int with 2 argument(s), but it takes 1"},
+			{"a unary float primitive with two arguments", func(l *lintProg, g2, g0 core.FunID) core.ExprID {
+				return l.Prim(span(0, 1), core.PrimNegFloat, lit(l, 2))
+			}, "primitive neg_float with 2 argument(s), but it takes 1"},
+			{"a binary float primitive with one argument", func(l *lintProg, g2, g0 core.FunID) core.ExprID {
+				return l.Prim(span(0, 1), core.PrimAddFloat, lit(l, 1))
+			}, "primitive add_float with 1 argument(s), but it takes 2"},
 			{"a unary primitive with no arguments", func(l *lintProg, g2, g0 core.FunID) core.ExprID {
 				return l.Prim(span(0, 1), core.PrimNotBool, nil)
 			}, "primitive not_bool with 0 argument(s), but it takes 1"},

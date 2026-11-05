@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/kirt/fmtnum"
 )
 
 // Print writes the functions of the user's file as text, one after the other
@@ -19,7 +20,9 @@ import (
 //   - a Match is `match S {`, one line for each arm two spaces further in
 //     (`true => …`, `false => …`, `_ => …`) and a `}`;
 //   - a call or a primitive is `callee(a, b)` or `add_int(a, b)`, all in one
-//     line unless an operand takes several.
+//     line unless an operand takes several;
+//   - a Float literal is written as kirt/fmtnum writes it (`1.0`, `0.1`,
+//     `1e21`), so that it is never taken for an Int.
 //
 // Whatever starts in the middle of a line (an argument, the callee, the init of
 // a Let, the scrutinee or the body of an arm) goes on in that line, and its
@@ -196,6 +199,8 @@ func (pr *printer) node(t printTask) {
 	switch e.Kind {
 	case LitInt:
 		pr.out.WriteString(strconv.FormatInt(e.Int, 10))
+	case LitFloat:
+		pr.out.WriteString(fmtnum.Float(e.Float))
 	case LitBool:
 		pr.out.WriteString(strconv.FormatBool(e.Bool))
 	case LitUnit:

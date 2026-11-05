@@ -53,8 +53,8 @@ type TypedProgram struct {
 //
 // Signatures come first. Every function gets its type from its annotations:
 // a parameter without one gets a new variable, and a function without `->`
-// returns `()`. A type name that is neither `Int` nor `Bool` is E0406 (an
-// unknown type), reported once where it is written, and has the error type.
+// returns `()`. A type name that is not `Int`, `Float`, `Bool` or `()` is E0406
+// (an unknown type), reported once where it is written, and has the error type.
 // Then `main`, if the user's file has one, is held to its type, `() -> ()`
 // (E0404). Only then are the bodies checked, each against the return type of
 // its function (the tail of a body is the reason ReasonBlockTail). All the
@@ -62,11 +62,15 @@ type TypedProgram struct {
 // (chapter 13 does that), so what a call or a body finds out about a parameter
 // is what every other use of the function sees.
 //
-// The operators are fixed: `+ - * / %` take two Int and give an Int, `< <= > >=`
-// take two Int and give a Bool, `&& ||` take and give Bool, `-` is Int to Int
-// and `!` Bool to Bool. `==` and `!=` compare two values of one type, and that
-// type has to be Int or Bool (see equality for when that is judged). If an
-// operand has the error type, so does the result. A call is checked against the
+// The operators are fixed by the type of their operands, and the left operand
+// says which: `+ - *` and `/` take two Int and give an Int, or two Float and
+// give a Float; `< <= > >=` take two Int or two Float and give a Bool; `%` takes
+// two Int and gives an Int, and has no Float; `&& ||` take and give Bool; `-` is
+// Int to Int or Float to Float and `!` Bool to Bool. `==` and `!=` compare two
+// values of one type, and that type has to be Int, Bool or Float. When the left
+// operand has no type yet, which of the types it is waits until every body has
+// been checked (see numeric and equality). If an operand has the error type, so
+// does the result. A call is checked against the
 // type of its callee: E0403 if it is not a function, E0402 if the number of
 // arguments is not the number of parameters (unless an argument is missing,
 // which the parser has reported: see call). A callee whose type is a variable
@@ -86,17 +90,18 @@ func Check(mods []*syntax.Module, res *ResolvedProgram, in *base.Interner, sink 
 	tbl := NewTypeTable()
 	c := &checker{
 		mods: mods, res: res, in: in, sink: sink,
-		tp:    &TypedProgram{Types: tbl, Modules: make([]TypedModule, len(mods))},
-		u:     Unifier{Types: tbl, Sink: sink},
-		intT:  tbl.Builtin(BuiltinInt),
-		boolT: tbl.Builtin(BuiltinBool),
-		unitT: tbl.Builtin(BuiltinUnit),
-		errT:  tbl.Error(),
+		tp:     &TypedProgram{Types: tbl, Modules: make([]TypedModule, len(mods))},
+		u:      Unifier{Types: tbl, Sink: sink},
+		intT:   tbl.Builtin(BuiltinInt),
+		boolT:  tbl.Builtin(BuiltinBool),
+		unitT:  tbl.Builtin(BuiltinUnit),
+		floatT: tbl.Builtin(BuiltinFloat),
+		errT:   tbl.Error(),
 	}
 	c.signatures()
 	c.mainSignature()
 	c.bodies()
-	c.judgeEqualities()
+	c.judgePending()
 	return c.tp
 }
 
@@ -110,7 +115,7 @@ type checker struct {
 	u    Unifier
 
 	// The builtin types and the error type, which every rule uses.
-	intT, boolT, unitT, errT TypeID
+	intT, boolT, unitT, floatT, errT TypeID
 
 	// The module whose bodies are being checked, its tree, its names and its
 	// table of types (a slice of tp.Modules, so a write here is a write there).
@@ -118,18 +123,39 @@ type checker struct {
 	rm        *ModuleRes
 	exprTypes []TypeID
 
-	// equalities are the `==` and `!=` whose left operand had no type yet when
-	// the body was checked, to be judged once all the bodies are (see equality).
-	equalities []pendingEquality
+	// pending are the operators whose left operand had no type yet when the body
+	// was checked, to be judged once all the bodies are (see numeric).
+	pending []pendingOperand
+	// rejected holds the variables whose type an operator has refused already: a
+	// variable that an operator refuses is one mistake, however many operators
+	// have it as an operand (see rejectOperand). The variable is the one the
+	// operand is as it was written: two parameters that a comparison made equal
+	// are two variables, and each is reported (see firstRejection).
+	rejected map[TypeID]bool
 }
 
-// pendingEquality is a left operand of `==` or `!=` that was a variable
-// nothing had bound yet: operand is its type, at where it is written and op
-// the operator.
-type pendingEquality struct {
+// operandSet says which types an operator works on.
+type operandSet uint8
+
+const (
+	// onNumbers is Int and Float: `+ - * /`, the four orderings and `-`.
+	onNumbers operandSet = iota
+	// onEquatable is Int, Bool and Float: `==` and `!=`.
+	onEquatable
+	// onIntegers is Int alone: `%`, which has no Float.
+	onIntegers
+)
+
+// pendingOperand is a left operand of an operator that was a variable nothing
+// had bound yet: operand is its type, at where it is written, op the operator
+// and set the types the operator works on. reason is only used by `%`, which
+// explains its mistake with the operator as the reason (see remainder).
+type pendingOperand struct {
 	operand TypeID
 	at      base.Span
 	op      string
+	set     operandSet
+	reason  Reason
 }
 
 // ifKeywordLen is the length of the `if` keyword in bytes.
@@ -193,6 +219,8 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 		switch c.in.String(te.Name) {
 		case "Int":
 			return c.intT
+		case "Float":
+			return c.floatT
 		case "Bool":
 			return c.boolT
 		}
@@ -212,8 +240,8 @@ func (c *checker) typeOf(m *syntax.Module, id syntax.TypeExprID) TypeID {
 // (`Bol` for `Bool`), as for an unknown name.
 func (c *checker) unknownTypeError(at base.Span, name string) {
 	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
-		WithNote("the types Ki knows: `Int`, `Bool` and `()`")
-	if best, ok := suggest(name, []string{"Int", "Bool"}); ok {
+		WithNote("the types Ki knows: `Int`, `Float`, `Bool` and `()`")
+	if best, ok := suggest(name, []string{"Int", "Float", "Bool"}); ok {
 		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
 	}
 	c.sink.Report(d)
@@ -329,7 +357,25 @@ func (c *checker) check(id syntax.ExprID, expected TypeID, r Reason) (TypeID, bo
 // the error on the whole expression. It returns what check returns.
 func (c *checker) checkAt(id syntax.ExprID, expected TypeID, r Reason) (TypeID, bool) {
 	found := c.infer(id)
-	return found, c.u.Unify(expected, found, c.m.Exprs.Get(id).Span, r)
+	e := c.m.Exprs.Get(id)
+	// An Int literal where a Float is expected is the one mistake whose edit is
+	// certain: the same number, written as a Float, when the Float is that number
+	// (see exactAsFloat). A number that does not fit in an Int is not a literal here:
+	// the parser made an error node of it.
+	if e.Kind == syntax.ExprInt && c.tp.Types.Resolve(expected) == c.floatT && exactAsFloat(e.Int) {
+		r.IntAsFloat = strconv.FormatInt(e.Int, 10) + ".0"
+	}
+	return found, c.u.Unify(expected, found, e.Span, r)
+}
+
+// exactAsFloat reports whether the Int n is also a Float: a float64 holds every
+// integer up to 2^53 and, above that, only some of them, so for the others the
+// number written as a Float is a different number. The comparison goes through
+// `n` again to see that nothing was lost, and `f < 1<<63` keeps the conversion
+// back inside the range of an Int, where Go defines it.
+func exactAsFloat(n int64) bool {
+	f := float64(n)
+	return f < 1<<63 && int64(f) == n
 }
 
 // infer works out the type of the expression id from what is inside it, and
@@ -340,6 +386,8 @@ func (c *checker) infer(id syntax.ExprID) TypeID {
 	switch e.Kind {
 	case syntax.ExprInt:
 		ty = c.intT
+	case syntax.ExprFloat:
+		ty = c.floatT
 	case syntax.ExprBool:
 		ty = c.boolT
 	case syntax.ExprUnit:
@@ -471,7 +519,17 @@ func (c *checker) inferIf(e syntax.Expr) TypeID {
 //
 // With an `else`, the `then` branch is inferred and the `else` branch is
 // checked against it (see elseBranch), and the result is unified with the
-// expected type on the whole `if`.
+// expected type on the whole `if`. That is the rule that makes the `then`
+// branch the one that decides, and a mistake between the branches one error. It
+// has one exception: when a `Float` is expected, each branch is checked against
+// it. There the mistake is an `Int` literal and the edit is certain, and the
+// rule would put the error on the `2.5` of `if b { 1 } else { 2.5 }` (it says
+// the other branch is an `Int`, and the function returns a `Float`) and none on
+// the `1`, which is the one that is wrong. A `Float` expected has no other
+// reading of which branch is right, so each wrong branch has its own error, as
+// each wrong argument of a call does. The `if` has the error type if one of
+// them does not fit, so the place that uses it adds nothing. The branches have
+// the reason of the place.
 //
 // An `if` with no `else` whose `then` branch the parser could not read (see
 // unreadThen) is neither: it has the error type, which fits every place, and
@@ -493,6 +551,14 @@ func (c *checker) checkIf(e syntax.Expr, expected TypeID, r Reason) (TypeID, boo
 		then.CanReturn = false
 		_, fits := c.check(e.Then, c.unitT, then)
 		return c.unitT, fits
+	}
+	if c.tp.Types.Resolve(expected) == c.floatT {
+		_, thenFits := c.check(e.Then, expected, r)
+		_, elseFits := c.check(e.Else, expected, r)
+		if !thenFits || !elseFits {
+			return c.errT, false
+		}
+		return c.floatT, true
 	}
 	ty := c.elseBranch(e, c.infer(e.Then))
 	return ty, c.u.Unify(expected, ty, e.Span, r)
@@ -521,52 +587,177 @@ func (c *checker) isError(ty TypeID) bool {
 	return ty == c.errT
 }
 
-// binary is the type of a binary operation. Each operand is checked against the
-// type the operator wants, with the error on the operand.
+// binary is the type of a binary operation. `&&` and `||` check each operand
+// against Bool, with the error on the operand; the other operators have a
+// function of their own.
 func (c *checker) binary(e syntax.Expr) TypeID {
-	if e.Op == syntax.BinEq || e.Op == syntax.BinNe {
-		return c.equality(e)
-	}
-	var operand, result TypeID
 	switch e.Op {
-	case syntax.BinAdd, syntax.BinSub, syntax.BinMul, syntax.BinDiv, syntax.BinRem:
-		operand, result = c.intT, c.intT
-	case syntax.BinLt, syntax.BinLe, syntax.BinGt, syntax.BinGe:
-		operand, result = c.intT, c.boolT
+	case syntax.BinEq, syntax.BinNe:
+		return c.equality(e)
+	case syntax.BinRem:
+		return c.remainder(e)
+	case syntax.BinAdd, syntax.BinSub, syntax.BinMul, syntax.BinDiv, syntax.BinLt, syntax.BinLe, syntax.BinGt, syntax.BinGe:
+		return c.numeric(e)
 	case syntax.BinAnd, syntax.BinOr:
-		operand, result = c.boolT, c.boolT
+		r := Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: e.Op.String(), Index: 2}
+		lhs, _ := c.checkAt(e.Lhs, c.boolT, r)
+		rhs, _ := c.checkAt(e.Rhs, c.boolT, r)
+		if c.isError(lhs) || c.isError(rhs) {
+			return c.errT
+		}
+		return c.boolT
 	default:
 		panic("unreachable")
 	}
-	r := Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: e.Op.String(), Index: 2}
-	lhs, _ := c.checkAt(e.Lhs, operand, r)
-	rhs, _ := c.checkAt(e.Rhs, operand, r)
-	if c.isError(lhs) || c.isError(rhs) {
-		return c.errT
-	}
-	return result
 }
 
-// unary is the type of `-x` (Int to Int) and `!x` (Bool to Bool).
-func (c *checker) unary(e syntax.Expr) TypeID {
-	operand, text := c.intT, "-"
-	if e.UnOp == syntax.Not {
-		operand, text = c.boolT, "!"
+// numeric is the type of `+ - * /` (the type of the operands) and of `< <= > >=`
+// (Bool). Both operands are one type, Int or Float, and the left operand
+// decides which, as in equality:
+//
+//   - Int or Float: the right operand is checked against it, with the operator as
+//     the reason, so `1 + 2.0` is an E0401 on the `2.0` that says the operator
+//     expects `Int` operands. A right operand that does not fit is the one
+//     mistake, and the operation has the error type, as in remainder: if it kept
+//     the type of the left operand, `-> Float { i + x }` with an `Int` for `i`
+//     would say a second time, where the result is used, that an `Int` is not a
+//     `Float`.
+//   - Any other type known by now (Bool, a function, `()`): that is the one
+//     mistake, an E0401 on the left operand that no reason explains (see
+//     rejectedOperandError), and the right operand is only inferred. The
+//     operation has the error type, so the place where it is used says nothing
+//     more.
+//   - The error type: the right operand is inferred, and the operation has the
+//     error type.
+//   - A variable that nothing has bound yet (a parameter without an annotation):
+//     the right operand is checked against it, which binds it if the right
+//     operand has a type of its own, and so does the use of the result, since an
+//     arithmetic operation has the type of its operands. If it is still a
+//     variable after that, it is judged when all the bodies are checked
+//     (judgePending), and not now: a call elsewhere is what binds a parameter,
+//     so what is known here depends on the order of the functions, and the same
+//     program must not be accepted in one order and refused in the other. That is
+//     what lets `fn sq(x) -> Float { x * x }` be a function of Floats wherever
+//     it is written.
+func (c *checker) numeric(e syntax.Expr) TypeID {
+	op := e.Op.String()
+	ordering := e.Op == syntax.BinLt || e.Op == syntax.BinLe || e.Op == syntax.BinGt || e.Op == syntax.BinGe
+	lhs := c.infer(e.Lhs)
+	lhsAt := c.m.Exprs.Get(e.Lhs).Span
+	kind := c.operandKindOf(lhs, onNumbers)
+	if kind == operandRejected {
+		c.rejectOperand(lhsAt, lhs, op, onNumbers)
+		c.infer(e.Rhs)
+		return c.errT
 	}
-	found, _ := c.checkAt(e.Operand, operand, Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: text, Index: 1})
+	rhs, fits := c.checkAt(e.Rhs, lhs, Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: op, Index: 2})
+	if !fits || c.isError(lhs) || c.isError(rhs) {
+		return c.errT
+	}
+	if kind == operandFree {
+		// The right operand may have told what the left one is.
+		switch c.operandKindOf(lhs, onNumbers) {
+		case operandRejected:
+			c.rejectOperand(lhsAt, lhs, op, onNumbers)
+			return c.errT
+		case operandFree:
+			c.pending = append(c.pending, pendingOperand{operand: lhs, at: lhsAt, op: op, set: onNumbers})
+			if !ordering {
+				// Still no type: the result is the type of the operands, whatever
+				// it turns out to be.
+				return lhs
+			}
+		}
+	}
+	if ordering {
+		return c.boolT
+	}
+	return c.tp.Types.Resolve(lhs)
+}
+
+// remainder is the type of `a % b`: Int. There is no `%` on Float, so the types
+// that the left operand may have are Int alone (onIntegers), and a Float there
+// is one E0401, on that operand, with the operator as the reason. Otherwise it
+// is judged as the left operand of numeric is:
+//
+//   - Int: the right operand is checked against Int.
+//   - Any other type known by now: that is the one mistake. The right operand is
+//     not compared with Int, and the operation has the error type: a mistake in
+//     the left operand is not three mistakes (the two operands and the place
+//     where the result is used). A wrong right operand has the error type as its
+//     result too, for the same reason.
+//   - A variable that nothing has bound yet: the right operand is checked against
+//     it, which binds it if the right operand has a type of its own, and if it
+//     is still a variable after that it is judged when all the bodies are checked
+//     (judgePending), and not now, for the reason that numeric gives. The
+//     operation is an Int either way.
+func (c *checker) remainder(e syntax.Expr) TypeID {
+	r := Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: "%", Index: 2}
+	lhs := c.infer(e.Lhs)
+	lhsAt := c.m.Exprs.Get(e.Lhs).Span
+	kind := c.operandKindOf(lhs, onIntegers)
+	if kind == operandRejected {
+		c.rejectRemainder(lhsAt, lhs, r)
+		c.infer(e.Rhs)
+		return c.errT
+	}
+	against := c.intT
+	if kind == operandFree {
+		against = lhs
+	}
+	rhs, fits := c.checkAt(e.Rhs, against, r)
+	if !fits || c.isError(lhs) || c.isError(rhs) {
+		return c.errT
+	}
+	if kind == operandFree {
+		// The right operand may have told what the left one is.
+		switch c.operandKindOf(lhs, onIntegers) {
+		case operandRejected:
+			c.rejectRemainder(lhsAt, lhs, r)
+			return c.errT
+		case operandFree:
+			c.pending = append(c.pending, pendingOperand{operand: lhs, at: lhsAt, op: "%", set: onIntegers, reason: r})
+		}
+	}
+	return c.intT
+}
+
+// unary is the type of `-x` and `!x`. `!` takes a Bool. `-` works on Int and on
+// Float and gives the type of its operand, which is judged like the left operand
+// of numeric: a type that is neither is an E0401 on the operand that no reason
+// explains, and an operand that is a free variable waits for the bodies.
+func (c *checker) unary(e syntax.Expr) TypeID {
+	if e.UnOp == syntax.Not {
+		found, _ := c.checkAt(e.Operand, c.boolT, Reason{Kind: ReasonOperand, Because: e.OpSpan, Detail: "!", Index: 1})
+		if c.isError(found) {
+			return c.errT
+		}
+		return c.boolT
+	}
+	found := c.infer(e.Operand)
+	at := c.m.Exprs.Get(e.Operand).Span
+	switch c.operandKindOf(found, onNumbers) {
+	case operandRejected:
+		c.rejectOperand(at, found, "-", onNumbers)
+		return c.errT
+	case operandFree:
+		c.pending = append(c.pending, pendingOperand{operand: found, at: at, op: "-", set: onNumbers})
+		return found
+	}
 	if c.isError(found) {
 		return c.errT
 	}
-	return operand
+	return c.tp.Types.Resolve(found)
 }
 
 // equality is the type of `a == b` and `a != b`: Bool. The two operands are one
-// type, and it has to be Int or Bool. The left operand is inferred first, and
-// what it is decides what happens:
+// type, and it has to be Int, Bool or Float. The left operand is inferred first,
+// and what it is decides what happens:
 //
-//   - Int or Bool (or the error type, which says nothing): the right operand is
-//     checked against it, with the operator as the reason, so `1 == true` is
-//     an E0401 on the `true` that says the operator expects `Int` operands.
+//   - Int, Bool or Float (or the error type, which says nothing): the right
+//     operand is checked against it, with the operator as the reason, so
+//     `1 == true` is an E0401 on the `true` that says the operator expects `Int`
+//     operands.
 //   - Any other type known by now (a function, `()`): that is the one mistake,
 //     an E0401 on the left operand that no reason explains, so it has a note
 //     and no secondary label. The right operand is only inferred, because `==`
@@ -576,7 +767,7 @@ func (c *checker) unary(e syntax.Expr) TypeID {
 //     annotation): the right operand is checked against it, which binds it if
 //     the right operand has a type of its own. If it is still a variable after
 //     that, the left operand is judged when all the bodies are checked
-//     (judgeEqualities), and not now: a call elsewhere is what binds a
+//     (judgePending), and not now: a call elsewhere is what binds a
 //     parameter, so what is known here depends on the order of the functions,
 //     and the same program must not be accepted in one order and refused in the
 //     other.
@@ -584,8 +775,8 @@ func (c *checker) equality(e syntax.Expr) TypeID {
 	op := e.Op.String()
 	lhs := c.infer(e.Lhs)
 	lhsAt := c.m.Exprs.Get(e.Lhs).Span
-	if c.eqKindOf(lhs) == eqRejected {
-		c.rejectedEqualityError(lhsAt, lhs, op)
+	if c.operandKindOf(lhs, onEquatable) == operandRejected {
+		c.rejectOperand(lhsAt, lhs, op, onEquatable)
 		c.infer(e.Rhs)
 		return c.boolT
 	}
@@ -594,67 +785,131 @@ func (c *checker) equality(e syntax.Expr) TypeID {
 		return c.errT
 	}
 	// The right operand may have told what the left one is.
-	switch c.eqKindOf(lhs) {
-	case eqRejected:
-		c.rejectedEqualityError(lhsAt, lhs, op)
-	case eqUnknown:
-		c.equalities = append(c.equalities, pendingEquality{operand: lhs, at: lhsAt, op: op})
+	switch c.operandKindOf(lhs, onEquatable) {
+	case operandRejected:
+		c.rejectOperand(lhsAt, lhs, op, onEquatable)
+	case operandFree:
+		c.pending = append(c.pending, pendingOperand{operand: lhs, at: lhsAt, op: op, set: onEquatable})
 	}
 	return c.boolT
 }
 
-// eqKind is what is known about the type of a left operand of `==` or `!=`.
-type eqKind uint8
+// operandKind is what is known about the type of a left operand.
+type operandKind uint8
 
 const (
-	// eqOK is Int, Bool or the error type.
-	eqOK eqKind = iota
-	// eqUnknown is a variable that nothing has bound.
-	eqUnknown
-	// eqRejected is any other type: a function or `()`.
-	eqRejected
+	// operandOK is a type that the operator works on, or the error type.
+	operandOK operandKind = iota
+	// operandFree is a variable that nothing has bound.
+	operandFree
+	// operandRejected is any other type: for an operator on numbers, Bool, a
+	// function or `()`; for `==`, a function or `()`; for `%`, also Float.
+	operandRejected
 )
 
-// eqKindOf says what ty, resolved, is for an equality.
-func (c *checker) eqKindOf(ty TypeID) eqKind {
+// operandKindOf says what ty, resolved, is for an operator that works on the
+// types of set.
+func (c *checker) operandKindOf(ty TypeID, set operandSet) operandKind {
 	switch t := c.tp.Types.Resolve(ty); {
-	case t == c.intT || t == c.boolT || t == c.errT:
-		return eqOK
+	case t == c.intT || t == c.errT || t == c.floatT && set != onIntegers:
+		return operandOK
+	case t == c.boolT && set == onEquatable:
+		return operandOK
 	case c.tp.Types.Node(t).Kind == TypeVariable:
-		return eqUnknown
+		return operandFree
 	default:
-		return eqRejected
+		return operandRejected
 	}
 }
 
-// rejectedEqualityError reports E0401 for the left operand of `==` or `!=`,
-// which is written at and has the type ty, a type the operator does not work on.
-func (c *checker) rejectedEqualityError(at base.Span, ty TypeID, op string) {
+// rejectOperand reports the operand of the operator op that is written at and has
+// the type ty, a type the operator does not work on (rejectedOperandError). If ty
+// is an inference variable, the report is made once (see firstRejection).
+func (c *checker) rejectOperand(at base.Span, ty TypeID, op string, set operandSet) {
+	if c.firstRejection(ty) {
+		c.rejectedOperandError(at, ty, op, set)
+	}
+}
+
+// rejectRemainder reports the left operand of `%` that is written at and has the
+// type ty, which is not Int. Unlike the other operators, `%` explains the
+// mistake with a reason, the operator that expects an Int (r): it is the E0401
+// that Unify writes for an Int that is not there. Like rejectOperand it
+// reports once for a variable (see firstRejection).
+func (c *checker) rejectRemainder(at base.Span, ty TypeID, r Reason) {
+	if c.firstRejection(ty) {
+		c.u.Unify(c.intT, ty, at, r)
+	}
+}
+
+// firstRejection says whether the refusal of an operand of type ty is to be
+// reported now. It is, unless ty is an inference variable that an operator has
+// refused already: a parameter that nothing typed and that an operator refuses
+// is one mistake, in the type of the parameter, however many operators have it
+// as an operand, and whether the call that made it so was checked before the
+// operator or after it. The parameter is told by its variable: the operands of
+// `a + b + c` are one (the sum is the type of `a`), but two parameters that
+// something else made equal (`x == y`) are two variables, and the call that
+// makes both a Bool is a mistake in each. A type that is written (`true`, a
+// parameter annotated `Bool`) is reported at each use.
+func (c *checker) firstRejection(ty TypeID) bool {
+	if c.tp.Types.Node(ty).Kind != TypeVariable {
+		return true
+	}
+	if c.rejected[ty] {
+		return false
+	}
+	if c.rejected == nil {
+		c.rejected = make(map[TypeID]bool)
+	}
+	c.rejected[ty] = true
+	return true
+}
+
+// rejectedOperandError reports E0401 for the operand of the operator op that is
+// written at and has the type ty, a type the operator does not work on. The
+// label says what the operator takes and the note says it again for the
+// operator, with no secondary label: no other place in the program explains the
+// rule. set is onNumbers or onEquatable: `%` has a reason to give instead (see
+// rejectRemainder).
+func (c *checker) rejectedOperandError(at base.Span, ty TypeID, op string, set operandSet) {
 	// Once the sink has dropped an error it drops this one too, so the text of
 	// the type is not written (see Unifier.mismatch).
 	if c.sink.Truncated() {
 		return
 	}
+	expected, works := "`Int` or `Float`", "`Int` and `Float`"
+	if set == onEquatable {
+		expected, works = "`Int`, `Bool` or `Float`", "`Int`, `Bool` and `Float`"
+	}
 	c.sink.Report(diag.NewError(diag.E(401), "mismatched types",
-		diag.Label{Span: at, Message: "expected `Int` or `Bool`, found `" + c.tp.Types.Show(ty) + "`"}).
-		WithNote("`" + op + "` works on `Int` and `Bool` here"))
+		diag.Label{Span: at, Message: "expected " + expected + ", found `" + c.tp.Types.Show(ty) + "`"}).
+		WithNote("`" + op + "` works on " + works + " here"))
 }
 
-// judgeEqualities judges the left operands of the equalities that had no type
-// when their body was checked. By now every body has had its say about a
-// parameter, so a type that is not Int or Bool is reported as it would have
-// been if the call had come first. A variable that is still free is left alone:
+// judgePending judges the left operands of the operators that had no type when
+// their body was checked. By now every body has had its say about a parameter,
+// so a type that the operator does not work on is reported as it would have been
+// if the call had come first. A variable that is still free is left alone:
 // nothing says it is a function or `()`. A program can therefore be accepted
-// with a free variable as the type of an operand of `==` (`fn same(x, y) ->
-// Bool { x == y }` and no call), and the table keeps it. The pass that has to
-// choose between comparing Ints and comparing Bools takes Int for such an
-// operand. Nothing can tell the difference: a value whose type nothing knows
-// never exists, because main has no parameters, so every value starts as a
-// literal, a function or the result of a function of the prelude.
-func (c *checker) judgeEqualities() {
-	for _, q := range c.equalities {
-		if c.eqKindOf(q.operand) == eqRejected {
-			c.rejectedEqualityError(q.at, q.operand, q.op)
+// with a free variable as the type of an operand (`fn same(x, y) -> Bool { x ==
+// y }` and no call), and the table keeps it. The pass that has to choose between
+// the Int, Float and Bool primitives takes Int for such an operand. Nothing can
+// tell the difference: a value whose type nothing knows never exists, because
+// main has no parameters, so every value starts as a literal, a function or the
+// result of a function of the prelude.
+//
+// An operand that several operators share (`x * x + x` has the same variable in
+// both) is reported once, at the first of them: see rejectOperand.
+func (c *checker) judgePending() {
+	for _, q := range c.pending {
+		if c.operandKindOf(q.operand, q.set) != operandRejected {
+			continue
+		}
+		if q.set == onIntegers {
+			c.rejectRemainder(q.at, q.operand, q.reason)
+		} else {
+			c.rejectOperand(q.at, q.operand, q.op, q.set)
 		}
 	}
 }

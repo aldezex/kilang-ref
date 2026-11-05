@@ -78,11 +78,11 @@ func distinctIDs(t *testing.T, all []namedType) {
 // bytes would take 16 million types, which a test cannot make.
 func checkFunKeysTellIdsApart(t *testing.T) {
 	t.Helper()
-	// A fresh table, so that the ids below are known: the builtins and the
+	// A fresh table, so that the ids below are known: the four builtins and the
 	// error type come first and the 300 variables follow.
 	tbl := NewTypeTable()
 	empty := tbl.EmptyRow()
-	pool := []TypeID{tbl.Builtin(BuiltinInt), tbl.Builtin(BuiltinBool), tbl.Builtin(BuiltinUnit), tbl.Error()}
+	pool := []TypeID{tbl.Builtin(BuiltinInt), tbl.Builtin(BuiltinBool), tbl.Builtin(BuiltinUnit), tbl.Builtin(BuiltinFloat), tbl.Error()}
 	for range 300 {
 		pool = append(pool, tbl.FreshVar(Origin{}))
 	}
@@ -154,14 +154,15 @@ func TestTypeTable(t *testing.T) {
 		builtins := []struct {
 			name string
 			b    Builtin
-		}{{"Int", BuiltinInt}, {"Bool", BuiltinBool}, {"()", BuiltinUnit}}
+		}{{"Int", BuiltinInt}, {"Bool", BuiltinBool}, {"()", BuiltinUnit}, {"Float", BuiltinFloat}}
 		var all []namedType
 		for _, bt := range builtins {
 			all = append(all, namedType{bt.name, tbl.Builtin(bt.b)})
 		}
 		all = append(all, namedType{"the error type", tbl.Error()})
+		errIdx := len(builtins)
 
-		// Four types, six pairs: no two share an id.
+		// Five types, ten pairs: no two share an id.
 		distinctIDs(t, all)
 
 		// Asking again gives the same id. Types are compared by id, so a table
@@ -171,8 +172,8 @@ func TestTypeTable(t *testing.T) {
 				t.Errorf("Builtin(%s) the second time = %d, the first time it was %d", bt.name, got, all[i].id)
 			}
 		}
-		if got := tbl.Error(); got != all[3].id {
-			t.Errorf("Error() the second time = %d, the first time it was %d", got, all[3].id)
+		if got := tbl.Error(); got != all[errIdx].id {
+			t.Errorf("Error() the second time = %d, the first time it was %d", got, all[errIdx].id)
 		}
 
 		// Making other types in between changes nothing.
@@ -183,8 +184,8 @@ func TestTypeTable(t *testing.T) {
 				t.Errorf("Builtin(%s) after making other types = %d, before it was %d", bt.name, got, all[i].id)
 			}
 		}
-		if got := tbl.Error(); got != all[3].id {
-			t.Errorf("Error() after making other types = %d, before it was %d", got, all[3].id)
+		if got := tbl.Error(); got != all[errIdx].id {
+			t.Errorf("Error() after making other types = %d, before it was %d", got, all[errIdx].id)
 		}
 
 		// Each id's node says which type it is.
@@ -194,7 +195,7 @@ func TestTypeTable(t *testing.T) {
 				t.Errorf("Node(%s) = kind %d, builtin %d; want kind %d, builtin %d", bt.name, n.Kind, n.Builtin, TypeBuiltin, bt.b)
 			}
 		}
-		if n := tbl.Node(all[3].id); n.Kind != TypeErr {
+		if n := tbl.Node(all[errIdx].id); n.Kind != TypeErr {
 			t.Errorf("Node(the error type).Kind = %d, want TypeErr (%d)", n.Kind, TypeErr)
 		}
 	})
@@ -293,6 +294,7 @@ func TestTypeTable(t *testing.T) {
 	t.Run("show_function_type", func(t *testing.T) {
 		tbl := NewTypeTable()
 		intT, boolT, unitT := tbl.Builtin(BuiltinInt), tbl.Builtin(BuiltinBool), tbl.Builtin(BuiltinUnit)
+		floatT := tbl.Builtin(BuiltinFloat)
 		fn := funMaker(tbl)
 
 		for _, row := range []struct {
@@ -302,6 +304,8 @@ func TestTypeTable(t *testing.T) {
 		}{
 			{"Int", intT, "Int"},
 			{"Bool", boolT, "Bool"},
+			{"Float", floatT, "Float"},
+			{"Float in a function", fn(floatT, intT, floatT), "(Int, Float) -> Float"},
 			{"the error type", tbl.Error(), "{error}"},
 			{"two parameters", fn(intT, intT, boolT), "(Int, Bool) -> Int"},
 			{"one parameter", fn(boolT, intT), "(Int) -> Bool"},

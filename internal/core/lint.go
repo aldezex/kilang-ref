@@ -13,7 +13,7 @@ import (
 // and the scrutinee of a Match and then the body of each arm in order.
 func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 	switch e.Kind {
-	case LitInt, LitBool, LitUnit, VarRef, FunRef:
+	case LitInt, LitFloat, LitBool, LitUnit, VarRef, FunRef:
 		return buf
 	case Call:
 		buf = append(buf, e.Callee)
@@ -229,7 +229,7 @@ func (l *linter) walk(root ExprID, frame uint32) {
 // children.
 func (l *linter) check(e *Expr, frame uint32) {
 	switch e.Kind {
-	case LitInt, LitBool, LitUnit, FunRef:
+	case LitInt, LitFloat, LitBool, LitUnit, FunRef:
 	case VarRef:
 		if l.scope[e.Var] == 0 {
 			l.report("unbound variable `%s`", l.in.String(l.p.Vars.Get(e.Var).Name))

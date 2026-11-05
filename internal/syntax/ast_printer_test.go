@@ -25,6 +25,10 @@ func (b *tree) intLit(n int64) syntax.ExprID {
 	return b.expr(syntax.Expr{Kind: syntax.ExprInt, Int: n})
 }
 
+func (b *tree) floatLit(v float64) syntax.ExprID {
+	return b.expr(syntax.Expr{Kind: syntax.ExprFloat, Float: v})
+}
+
 func (b *tree) boolLit(v bool) syntax.ExprID {
 	return b.expr(syntax.Expr{Kind: syntax.ExprBool, Bool: v})
 }
@@ -106,6 +110,13 @@ func TestPrinter(t *testing.T) {
 			{"negative int", func(b *tree) syntax.ExprID { return b.intLit(-7) }, "-7"},
 			{"largest int", func(b *tree) syntax.ExprID { return b.intLit(math.MaxInt64) }, "9223372036854775807"},
 			{"smallest int", func(b *tree) syntax.ExprID { return b.intLit(math.MinInt64) }, "-9223372036854775808"},
+			{"float", func(b *tree) syntax.ExprID { return b.floatLit(1.5) }, "1.5"},
+			{"whole float", func(b *tree) syntax.ExprID { return b.floatLit(2) }, "2.0"},
+			{"float in exponent form", func(b *tree) syntax.ExprID { return b.floatLit(1e21) }, "1e21"},
+			{"float zero", func(b *tree) syntax.ExprID { return b.floatLit(0) }, "0.0"},
+			{"float among operands", func(b *tree) syntax.ExprID {
+				return b.binary(syntax.BinAdd, b.floatLit(0.1), b.call(b.name("f"), b.floatLit(1e-7)))
+			}, "(+ 0.1 (call f 1e-7))"},
 			{"true", func(b *tree) syntax.ExprID { return b.boolLit(true) }, "true"},
 			{"false", func(b *tree) syntax.ExprID { return b.boolLit(false) }, "false"},
 			{"unit", func(b *tree) syntax.ExprID { return b.unit() }, "()"},

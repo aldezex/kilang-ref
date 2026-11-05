@@ -95,14 +95,15 @@ func resolveSources(t *testing.T, prelude, user string) (*sema.ResolvedProgram, 
 
 func TestResolve(t *testing.T) {
 	t.Run("collects_top_level_fns", func(t *testing.T) {
-		// The prelude's `print` is a definition too, the first of all, so the
-		// two of the user's file are definitions 1 and 2 of the program.
+		// The prelude's five functions (print, printFloat, toFloat, truncate and
+		// sqrt) are definitions too, the first of all, so the two of the user's
+		// file are definitions 5 and 6 of the program.
 		const src = "fn a() {}\npub fn b(x: Int) {}\n"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p)
 		rp, m, in := p.Frontend.Resolved, p.Frontend.Modules[p.Frontend.User], p.Session.Interner
-		if got := rp.Defs.Len(); got != 3 {
-			t.Fatalf("the program has %d definitions, want 3 (the prelude's print and the two of the file)", got)
+		if got := rp.Defs.Len(); got != 7 {
+			t.Fatalf("the program has %d definitions, want 7 (the prelude's five and the two of the file)", got)
 		}
 		want := []sema.Def{
 			{Name: in.InternString("a"), Kind: sema.DefFn, Module: 1, Item: m.Items[0], Span: base.Span{File: m.File, Lo: 3, Hi: 4}},
@@ -111,15 +112,18 @@ func TestResolve(t *testing.T) {
 		if got := defsOf(rp, 1); !slices.Equal(got, want) {
 			t.Errorf("definitions of module 1:\n%+v\nwant\n%+v", got, want)
 		}
-		// Definitions are numbered in source order, after those of module 0.
-		if def := rp.Defs.Get(0); in.String(def.Name) != "print" || def.Module != 0 || def.Kind != sema.DefExternFn {
-			t.Errorf("definition 0 is %+v, want the extern print of module 0", def)
+		// Definitions are numbered in source order, after those of module 0, which
+		// are the externs of the prelude in the order it declares them.
+		for i, name := range []string{"print", "printFloat", "toFloat", "truncate", "sqrt"} {
+			if def := rp.Defs.Get(sema.DefID(i)); in.String(def.Name) != name || def.Module != 0 || def.Kind != sema.DefExternFn {
+				t.Errorf("definition %d is %+v, want the extern %s of module 0", i, def, name)
+			}
 		}
-		if got, wantDef := rp.Defs.Get(1), want[0]; got != wantDef {
-			t.Errorf("definition 1 is %+v, want %+v", got, wantDef)
+		if got, wantDef := rp.Defs.Get(5), want[0]; got != wantDef {
+			t.Errorf("definition 5 is %+v, want %+v", got, wantDef)
 		}
-		if got, wantDef := rp.Defs.Get(2), want[1]; got != wantDef {
-			t.Errorf("definition 2 is %+v, want %+v", got, wantDef)
+		if got, wantDef := rp.Defs.Get(6), want[1]; got != wantDef {
+			t.Errorf("definition 6 is %+v, want %+v", got, wantDef)
 		}
 	})
 
@@ -489,10 +493,11 @@ func TestResolve(t *testing.T) {
 		if def.Module != 1 || def.Kind != sema.DefFn || def.ExternName != "" {
 			t.Errorf("print resolved to %+v, want the fn of module 1", def)
 		}
-		// The prelude's print is still a definition of the program.
-		if got := defsOf(p.Frontend.Resolved, 0); len(got) != 1 || got[0].Kind != sema.DefExternFn ||
+		// The prelude's print is still a definition of the program, the first of
+		// the prelude's five.
+		if got := defsOf(p.Frontend.Resolved, 0); len(got) != 5 || got[0].Kind != sema.DefExternFn ||
 			p.Session.Interner.String(got[0].Name) != "print" {
-			t.Errorf("definitions of module 0: %+v, want the extern print", got)
+			t.Errorf("definitions of module 0: %+v, want five externs, the first print", got)
 		}
 	})
 

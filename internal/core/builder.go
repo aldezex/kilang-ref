@@ -24,6 +24,11 @@ func (b *Builder) LitInt(sp base.Span, v int64) ExprID {
 	return b.add(Expr{Kind: LitInt, Span: sp, Int: v})
 }
 
+// LitFloat makes the floating-point literal v.
+func (b *Builder) LitFloat(sp base.Span, v float64) ExprID {
+	return b.add(Expr{Kind: LitFloat, Span: sp, Float: v})
+}
+
 // LitBool makes the literal true or false.
 func (b *Builder) LitBool(sp base.Span, v bool) ExprID {
 	return b.add(Expr{Kind: LitBool, Span: sp, Bool: v})

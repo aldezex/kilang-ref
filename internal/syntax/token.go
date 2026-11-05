@@ -1,6 +1,10 @@
 package syntax
 
-import "github.com/aldezex/kilang/internal/base"
+import (
+	"slices"
+
+	"github.com/aldezex/kilang/internal/base"
+)
 
 // The token kinds (TokenKind, its constants, String and the keywords table)
 // live in token_kind.go, which go generate writes from token_kinds.txt. After
@@ -47,6 +51,12 @@ type TokenBuffer struct {
 	// quote the token in front of it when it reports an error (see text).
 	src []byte
 
+	// reportedNumbers holds the Span.Lo of each Int token whose literal Lex
+	// reported, E0105 or E0107, in the order of the tokens. Such a token has the
+	// value 0, which is not the number that was written; a 0 that was written
+	// (`0`, `0x0`, `0_0`) is not in it. See reportedNumber. Only Lex sets it.
+	reportedNumbers []uint32
+
 	// endsInComment says that the file ends inside a comment: its last line
 	// has a `//` comment and not even a line break comes after it to end it,
 	// or a `/*` comment is never closed. Whatever is written at the end of the
@@ -75,6 +85,16 @@ type TokenBuffer struct {
 // TokenBuffer.unterminatedLiteral.
 func (tb *TokenBuffer) inUnterminatedLiteral(at uint32) bool {
 	return tb.unterminatedLiteral.Lo < at && at <= tb.unterminatedLiteral.Hi
+}
+
+// reportedNumber says whether Lex reported the literal of t, an Int token of tb
+// (E0105, because the number does not fit in 64 bits, or E0107, because it is
+// malformed). The token then holds the value 0 whatever was written, so what the
+// parser makes of it must not be a second error about the same digits. t must
+// be a token of tb, and tb a buffer that Lex returned.
+func (tb *TokenBuffer) reportedNumber(t Token) bool {
+	_, found := slices.BinarySearch(tb.reportedNumbers, t.Span.Lo)
+	return found
 }
 
 // text returns the text of t as the file has it. t must be a token of tb, and

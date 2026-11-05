@@ -4,20 +4,24 @@ import (
 	"strconv"
 
 	"github.com/aldezex/kilang/internal/core"
+	"github.com/aldezex/kilang/kirt/fmtnum"
 )
 
 // Value is what an expression evaluates to. It is a sealed interface (spec 9.1):
 // there is one struct for each form of value, and the unexported method value
 // keeps any other package from defining a new form, because only this package
 // can write it. (A type elsewhere can still embed Value and so satisfy it, but
-// the machine never makes one.) A type switch with a case for each of the four
+// the machine never makes one.) A type switch with a case for each of the five
 // forms below covers every form the machine makes, and it ends in
-// `default: panic("unreachable")` for the day someone adds a fifth form and
+// `default: panic("unreachable")` for the day someone adds a sixth form and
 // forgets one of the switches, and for a Value built by embedding.
 type Value interface{ value() }
 
 // IntV is an Int: a signed 64-bit integer.
 type IntV struct{ V int64 }
+
+// FloatV is a Float: an IEEE 754 binary64 number.
+type FloatV struct{ V float64 }
 
 // BoolV is a Bool.
 type BoolV struct{ V bool }
@@ -29,18 +33,22 @@ type UnitV struct{}
 // the id of its Fun, and carries nothing else.
 type FunV struct{ Fun core.FunID }
 
-func (IntV) value()  {}
-func (BoolV) value() {}
-func (UnitV) value() {}
-func (FunV) value()  {}
+func (IntV) value()   {}
+func (FloatV) value() {}
+func (BoolV) value()  {}
+func (UnitV) value()  {}
+func (FunV) value()   {}
 
-// Show returns how a value is written: an Int in decimal ("42", "-7"), a Bool
-// as "true" or "false", the unit value as "()" and any function as "<fn>". It
-// does not name the function, because a Value does not know the name of its Fun.
+// Show returns how a value is written: an Int in decimal ("42", "-7"), a Float
+// as kirt/fmtnum writes it ("1.0", "0.1", "NaN"), a Bool as "true" or "false",
+// the unit value as "()" and any function as "<fn>". It does not name the
+// function, because a Value does not know the name of its Fun.
 func Show(v Value) string {
 	switch v := v.(type) {
 	case IntV:
 		return strconv.FormatInt(v.V, 10)
+	case FloatV:
+		return fmtnum.Float(v.V)
 	case BoolV:
 		return strconv.FormatBool(v.V)
 	case UnitV:

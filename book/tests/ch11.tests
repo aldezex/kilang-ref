@@ -1,0 +1,263 @@
+[T11.01] fmtnum.fixed_form                                 level: core
+kind:    unit (go test)      file: kirt/fmtnum/fmtnum_test.go
+case:    `fmtnum.Float` escribe en forma fija los valores de `1e-6` a `1e21` y añade `.0` solo cuando la salida no tiene punto
+input:   13 valores: 1, 6, 0.1, 1000000, 0.001, -2.5, 100, 120, 123.456, la suma 0.1 + 0.2 (por sus bits), 1e20, -7 y 0.5
+expect:  `1.0`, `6.0`, `0.1`, `1000000.0`, `0.001`, `-2.5`, `100.0`, `120.0`, `123.456`, `0.30000000000000004`, `100000000000000000000.0`, `-7.0` y `0.5`, cada uno exacto
+why:     un `Float` entero que saliera sin punto se leería como un `Int`, y uno con fracción con `.0` de más saldría como `0.5.0`.
+ref:     TestFloat/fixed_form_adds_dot_zero_only_to_integers
+
+[T11.02] fmtnum.exponential_form                           level: core
+kind:    unit (go test)      file: kirt/fmtnum/fmtnum_test.go
+case:    fuera de `1e-6 <= |f| < 1e21` la salida es exponencial, sin `+` y sin ceros de relleno en el exponente
+input:   1e21, 1.5e-7, -2.5e300, 1e-7, 1e100, el mayor finito, el menor subnormal, el mayor subnormal y el menor normal
+expect:  `1e21`, `1.5e-7`, `-2.5e300`, `1e-7`, `1e100`, `1.7976931348623157e308`, `5e-324`, `2.225073858507201e-308` y `2.2250738585072014e-308`
+why:     `strconv` con `'g'` escribe `1e+21`: un `+` o un `e-07` distintos harían que dos backends imprimieran el mismo número con textos diferentes.
+ref:     TestFloat/exponential_form_has_no_plus_and_no_padding
+
+[T11.03] fmtnum.thresholds                                 level: core
+kind:    unit (go test)      file: kirt/fmtnum/fmtnum_test.go
+case:    los umbrales de la forma fija son `1e-6` (incluido) y `1e21` (excluido), con el valor justo a cada lado
+input:   1e-6, el `float64` anterior y el siguiente; el anterior a 1e21, 1e21 y el siguiente; y -1e-6 y -1e21
+expect:  `0.000001`, `9.999999999999997e-7`, `0.0000010000000000000002`, `999999999999999900000.0`, `1e21`, `1.0000000000000001e21`, `-0.000001` y `-1e21`
+why:     fija cada umbral con el valor exacto y con el `float64` de cada lado, que es donde se decide la forma.
+ref:     TestFloat/thresholds_of_the_fixed_form
+
+[T11.04] fmtnum.special_values                             level: core
+kind:    unit (go test)      file: kirt/fmtnum/fmtnum_test.go
+case:    NaN, los infinitos y los dos ceros tienen nombre propio
+input:   NaN, NaN negativo, NaN con carga útil, `+Inf`, `-Inf`, `0` y `-0`
+expect:  `NaN` las tres veces (el signo de un NaN no se escribe), `inf`, `-inf`, `0.0` y `-0.0`
+why:     `strconv` escribe `+Inf` y un `-0` sin punto; sin nombres explícitos los backends discreparían justo en los valores raros.
+ref:     TestFloat/special_values_have_explicit_names
+
+[T11.05] fmtnum.round_trip_and_shape                       level: core
+kind:    unit (go test)      file: kirt/fmtnum/fmtnum_test.go
+case:    4 000 valores generados con una semilla fija se leen de vuelta con los mismos bits y tienen la forma que les toca por su tamaño
+input:   `rand.NewPCG(1, 2)`; la mitad son bits al azar (los NaN y los infinitos se saltan) y la mitad un entero de 1 a 100 000 por 10^k, con k de -30 a 29
+expect:  `ParseFloat` del texto da los mismos bits; si el valor es 0 o `1e-6 <= |f| < 1e21` el texto casa con `^-?[0-9]+\.[0-9]+$`, y si no con `^-?[0-9](\.[0-9]+)?e-?[1-9][0-9]*$`
+why:     los casos a mano comparten tus supuestos; miles de valores, muchos junto a los umbrales, encuentran el dígito que falta o el exponente mal escrito.
+ref:     TestFloat/many_values_round_trip_and_have_the_shape_of_their_form
+
+[T11.06] syntax.float_literals                             level: core
+kind:    unit (go test)      file: internal/syntax/parser_test.go
+case:    un literal `Float` es un operando como un `Int`, y el volcado del árbol lo escribe como `kirt/fmtnum`
+input:   en el cuerpo de `f`: `1.5`, `2.0`, `1e21`, `1e-9`, `-2.5`, `1.0 + 2.0 * 3.0`, `g(0.1, 0.5 < x)` y `let x = 0.1`; y `1e999`
+expect:  los volcados `1.5`, `2.0`, `1e21`, `1e-9`, `(neg 2.5)`, `(+ 1.0 (* 2.0 3.0))`, `(call g 0.1 (< 0.5 x))` y `(let x _ 0.1)`; y, para `1e999`, `0.0` con un único diagnóstico, E0109
+why:     el parser rechazaba los floats con E0201, y sin el `.0` del volcado un `2.0` se confundiría con el `Int` 2 en `ki emit ast`.
+ref:     TestParser/float_literals
+
+[T11.07] check.float_type_and_literals                     level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    `Float` es un tipo, sus literales tienen ese tipo, y el preludio declara `printFloat`, `toFloat`, `truncate` y `sqrt` con sus tipos
+input:   10 programas: un literal, un exponente, un parámetro, un `let` anotado, un `let` sin anotar, el tipo de cada función del preludio y `let g = truncate`
+expect:  ningún diagnóstico y, por filas, los tipos `() -> Float`, `() -> Float`, `(Float) -> Float`, `() -> ()`, `() -> Float`, `(Float) -> ()`, `(Int) -> Float`, `(Float) -> Int`, `(Float) -> Float` y `() -> ()`
+why:     sin el nombre `Float` en el comprobador seguiría siendo un E0406, y sin la regla del literal `1.5` no tendría tipo.
+ref:     TestFloatCheck/float_is_a_type_with_literals
+
+[T11.08] check.float_and_int_are_not_converted             level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    un `Int` donde se espera un `Float`, y al revés, es un E0401, en una anotación, un argumento, un retorno y el resultado de una suma; si el `Int` es un literal que un `Float` guarda exacto, la edición lo escribe como `Float`, también un cero escrito de otra forma, y nada más tiene edición; un número que el lexer rechazó, porque no cabe en un `Int` o está mal escrito, es solo el error del lexer
+input:   `let x: Float = 1`, `let n: Int = 1.0`, `g(1)` con `fn g(x: Float)`, `fn f() -> Float { 1 }` y `let r: Int = 1.0 + 2.0`; diez literales con su edición (`1`, `0x10`, `1.0 / 0`, `sqrt(1_000)`, `0`, `0x0`, `0_0`, `0b0`, `9007199254740992` y `4611686018427387904`); `f(1)` con `fn f(x) { printFloat(x) }`, cuyo parámetro no lleva anotación; con un `Float` esperado, `-> Float { if b { 1 } else { 2.5 } }`, su espejo `{ 2.5 } else { 1 }`, una cadena `else if` con dos ramas `Int` y una `Float`, `{ n } else { 2.5 }` con `n` un `Int` y `-> Int { if b { 1 } else { 2.5 } }`; seis sin edición (una variable, `-1`, `let b: Bool = 1`, `let r: Int = 1.0`, `9007199254740993` y `9223372036854775807`); y nueve que el lexer rechaza: tres que no caben en un `Int` (`99999999999999999999`, `0x8000_0000_0000_0000` y `9223372036854775808`) y seis mal escritos (`0_`, `1_`, `0_0_`, `0x_`, `0x0_` y `0b`); y un programa de cinco `let` con `0_`, `99999999999999999999` y `0x_` anotados `Bool` y los ceros bien escritos `0` y `0x0` anotados `Int` entre ellos
+expect:  un E0401 por programa: «expected `Float`, found `Int`» (o `Int` y `Float` al revés, y en la suma sobre `1.0 + 2.0`), con la secundaria «expected because of this annotation», «the parameter is declared here» o «expected because of the return type»; con el literal, además la ayuda «write the number as a `Float`: `1.0`» y una edición que escribe el mismo número como `Float` (`1.0`, `16.0`, `0.0` en los cuatro ceros, `9007199254740992.0` y `4611686018427387904.0`) y deja el programa sin errores, también en `f(1)`; con `Float` esperado cada rama que es `Int` tiene su error, sobre el `1` con su edición (en los dos primeros, uno; en la cadena, uno por rama, `1.0` y `2.0`) y sobre `n` sin edición, y ninguno sobre la rama `Float`; con `Int` esperado el error sigue sobre `2.5`, con «the other branch has type `Int`»; en los seis sin edición, ni ayuda ni edición (`9007199254740993` no es un `Float`: el que se escribiría es otro número); en los nueve que el lexer rechaza, un único error, el E0105 de los tres que no caben y el E0107 de los seis mal escritos, y ningún E0401; en el programa de cinco `let`, tres errores, E0107, E0105 y E0107 en ese orden, y los dos ceros bien escritos no dan ninguno
+why:     Ki no convierte solo: si un `Int` entrara donde se espera un `Float`, `toFloat` sobraría y un programa cambiaría de significado sin avisar.
+ref:     TestFloatCheck/float_and_int_are_not_converted
+
+[T11.09] check.operators_on_floats                         level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    `+ - * /` entre dos `Float` dan `Float`, las seis comparaciones dan `Bool`, y la negación y las combinaciones conservan el tipo
+input:   `a OP b` con `a`, `b: Float` para los diez operadores, y seis funciones más: negación, literal negativo, `a * a + 1.0`, `a + 1.0 < a * 2.0`, `a % b + a * b - -a` con `Int` y `0.5 < x` con `x` sin tipo
+expect:  sin diagnósticos; `(Float, Float) -> Float` para los cuatro aritméticos, `(Float, Float) -> Bool` para los seis de comparación, y `(Float) -> Float`, `() -> Float`, `(Float) -> Float`, `(Float) -> Bool`, `(Int, Int) -> Int` y `(Float) -> Bool`
+why:     si `a + b` siguiera dando `Int`, aceptarías la suma de dos floats y rechazarías usar el resultado como `Float`.
+ref:     TestFloatCheck/operators_on_floats_have_the_type_of_their_operands
+
+[T11.10] check.left_operand_decides                        level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    el operando izquierdo decide si el operador trabaja con `Int` o con `Float`, y el derecho se comprueba contra él con el operador como razón
+input:   para cada uno de `+ - * / < <= > >= == !=`: `1 OP 2.0` y `1.0 OP 2`; `1.0 == true`; y con `i: Int` y `x: Float`, `i OP x` para `+ - * /` como retorno `Float` y como argumento de `printFloat`, y `i < x` como retorno `Bool`
+expect:  un E0401 por programa sobre el operando derecho: «expected `Int`, found `Float`» con la secundaria «`OP` expects `Int` operands», o al revés con `Float` e `Int` y, como es un literal, la edición que escribe `2.0`; `1.0 == true` da «expected `Float`, found `Bool`» y «`==` expects `Float` operands»; en las nueve de `i OP x`, un único E0401 sobre `x` con esa secundaria y ninguno donde se usa el resultado
+why:     con `Int` fijo, `1.0 + 2` pasaría; sin la razón no se sabría de dónde viene lo esperado; y con el tipo del izquierdo, `i + x` daría otro error al usarse.
+ref:     TestFloatCheck/operands_are_one_type_and_the_left_one_decides
+
+[T11.11] check.remainder_once                              level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    `%` solo existe para `Int`: un `Float` es un único E0401, sobre el operando que sobra, y el resto de la operación no dice nada más; si el operando izquierdo no tiene tipo, espera a los cuerpos como el de `+`
+input:   `1.0 % 2.0`, `1.0 % 2`, `1.0 % 2.0` anotado `Float` y `Bool`; `1 % 2.0` y ese anotado `Float`; `true % false`; `1.0 % (1 + true)`; `2.5 % 2` tras un `let`; `fn f() -> Int { 7 + 8 % 3 }`; `nope % 1`, `1 % nope` y `nope % nope` anotados `Bool`; `fn f(x) -> Int { x % 2 }`; y con `x` sin tipo, `x % 2.0` con retorno `Float`, `x % true` y dos `%` seguidos sobre la misma `x`, el primero con `true`
+expect:  un E0401 «expected `Int`, found `Float`» (o `Bool`) con la secundaria «`%` expects `Int` operands», sobre el izquierdo si es el que falla (también `2.5` tras el `let` y la `x` de los tres que no tienen tipo, uno solo en los dos `%`) y sobre `2.0` si es el derecho; `1.0 % (1 + true)` da además el E0401 del `+`; `7 + 8 % 3` ningún diagnóstico; con `nope`, solo los E0301 de los nombres (uno, uno y dos); `f` tiene tipo `(Int) -> Int`
+why:     sin devolver el tipo de error, un `%` mal escrito daría dos errores, el del operando y el del sitio donde se usa el resultado; comparar además el derecho sumaría un tercero.
+ref:     TestFloatCheck/remainder_has_no_float_and_reports_once
+
+[T11.12] check.rejected_left_operand                       level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    si el operando izquierdo de `+ - * / < <= > >=` o de `-` no es `Int` ni `Float`, hay un único E0401 sobre él, con nota y sin etiqueta secundaria, y la operación tiene el tipo de error
+input:   `true + 1`, `true < 1`, `() * 1`, `f / 2.0` con `f` una función, `true + false`, `true + 1` anotado `Bool`, `true * 1.0` anotado `Float`, `true + (1 + true)`, `-true`, `-()`, `-true` anotado `Int` y anotado `Bool`, y `nope + 1.0` anotado `Bool`
+expect:  «expected `Int` or `Float`, found `T`» con la nota «`OP` works on `Int` and `Float` here» y sin secundaria, un solo error por programa; en `true + (1 + true)` además el E0401 del `+` interior sobre su `true`, con la secundaria «`+` expects `Int` operands»; `nope + 1.0` da solo el E0301 del nombre
+why:     sin esta regla `true + false` daba dos errores, y «expects `Int` operands» dejaba de ser verdad ahora que `Float` también vale.
+ref:     TestFloatCheck/left_operand_that_is_not_a_number_is_one_error
+
+[T11.13] check.operator_waits_for_free_operand             level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    un operador cuyo operando izquierdo es una variable sin ligar espera a que todos los cuerpos estén comprobados, `%` incluido, y el veredicto no depende del orden de las funciones
+input:   nueve funciones sin anotar (`sq`, `half`, `neg`, `dbl`, `lt` con floats y con enteros, `same`, `total` y `rem`), cada una con su `main` antes y después; cuatro que nada liga; ocho que `main` llama con `true`, `false`, una función o `()` (con `x` en uno o en varios operadores o sentencias, con tres parámetros que `+` hace uno, y con dos funciones de las que la primera recibe un float y la segunda un `true`); dos de `%` que `main` llama con floats o con bools, la segunda con dos `%`; cinco en que el operando derecho (`true`, `()`) hace del izquierdo algo que el operador no admite, una con otra suma sobre la misma `x` después; `x == f` con `x == x` después; `fn bad(x) -> Bool { x + x }`; y `x == y` con `x + x` e `y + y`, llamada con `true, true`
+expect:  los nueve tipos `(Float) -> Float` (tres veces), `(Int) -> Int`, `(Float, Float) -> Bool`, `(Int, Int) -> Bool`, `(Float, Float) -> Bool`, `(Float, Float, Float) -> Float` y `(Int, Int) -> Int` en los dos órdenes; `(a, a) -> Bool`, `(a) -> ()` (dos veces) y `(a, a) -> Int` en los libres; por cada llamada mal, un E0401 con el mismo texto en los dos órdenes y una sola vez aunque la variable esté en varios operadores o sentencias (el de `%` con la secundaria «`%` expects `Int` operands»), también el de la segunda función cuando la primera acepta su llamada; en las de operando derecho, un E0401 sobre la primera `x` y ninguno más aunque otro operador use `x` después; uno en `bad`; y dos con `x == y`, uno por parámetro
+why:     juzgar enseguida fijaría `x` a `Int` en `x * x` si el cuerpo va antes que su llamada: el veredicto dependería del orden.
+ref:     TestFloatCheck/an_operator_waits_for_its_free_left_operand
+
+[T11.14] check.equality_takes_floats                       level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    `==` y `!=` aceptan `Float`, también cuando el literal es lo que da tipo a un parámetro sin anotar
+input:   `fn z(x) -> Bool { x == 0.5 }`, `fn z(x) -> Bool { 0.5 != x }` y `fn isNaN(x: Float) -> Bool { x != x }`
+expect:  sin diagnósticos y tipo `(Float) -> Bool` los tres
+why:     `x != x` es la prueba de NaN en IEEE: si `!=` rechazara `Float`, esa prueba sería un E0401 en vez de un programa válido.
+ref:     TestFloatCheck/equality_takes_floats
+
+[T11.15] check.unknown_type_names_float                    level: core
+kind:    unit (go test)      file: internal/sema/float_test.go
+case:    `Float` ya es un tipo, así que un nombre cercano lo sugiere y uno lejano no sugiere nada
+input:   `Flot`, `Floot` y `Double` como tipo de un parámetro
+expect:  un E0406 cada uno, con la nota «the types Ki knows: `Int`, `Float`, `Bool` and `()`»; en `Flot` y `Floot` la ayuda «did you mean `Float`?» con la edición que lo escribe, y en `Double` ninguna
+why:     la nota y las sugerencias eran verdad con tres tipos; con cuatro, un `Flot` sin ayuda sería peor que el `Bol` de antes.
+ref:     TestFloatCheck/unknown_type_names_float
+
+[T11.16] core.float_operators_map_to_float_prims           level: core
+kind:    unit (go test)      file: internal/core/elaborate_test.go
+case:    la elaboración elige la primitiva por el tipo del operando izquierdo (o del de `-`), y un literal `Float` es un `LitFloat` que cubre su texto
+input:   16 cuerpos con `x`, `y: Float` (los cuatro aritméticos, `-`, las seis comparaciones, dos combinaciones, `1.5 + x`, `2.0` y `1e21`); `fn lit() -> Float { 1.5 }`; y nueve funciones, con `Float` ligado por el retorno o por el otro operando, con `Int`, con `%` y sin tipo
+expect:  `add_float(x@0, y@1)` y las demás primitivas `_float` en el orden de los operadores; un `LitFloat` de 1.5 que cubre «1.5»; `mul_float`, `div_float` y `neg_float` con `Float` ligado después; `rem_int` y `add_int(mul_int(..))` con enteros; y `lt_int`, `eq_int`, `neg_int` y `add_int` con variables que nada liga
+why:     una tabla de primitivas con un hueco elegiría `add_int` para floats, y el intérprete se detendría con un error interno de compilador.
+ref:     TestElaborate/float_operators_map_to_float_prims
+
+[T11.17] core.print_float_literals                         level: core
+kind:    unit (go test)      file: internal/core/print_test.go
+case:    `ki emit core` escribe los literales y las primitivas de `Float` con el texto de `kirt/fmtnum`, y un `Program` hecho a mano con literales que ningún fuente escribe, también
+input:   `fn f(x: Float) -> Float { -x * 2.0 + 1e21 }` con un `main` que llama `printFloat(f(0.1))`; y un `Program` con 1.5, 2, 1e21, NaN, -inf y -0
+expect:  `add_float(mul_float(neg_float(x), 2.0), 1e21)` y `printFloat(f(0.1))`; y `show(1.5, 2.0, 1e21, NaN, -inf, -0.0)`
+why:     con `2` en vez de `2.0`, `emit core` no distinguiría un `Float` de un `Int` y no podrías comparar el Core con el fuente.
+ref:     TestPrint/float_literals_print_as_kirt_fmtnum_writes_them
+
+[T11.18] interp.float_arithmetic                           level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    las primitivas de `Float` siguen IEEE: dividir por cero o desbordar da infinito o NaN sin panic, y `-0.0` es un cero con signo
+input:   `printFloat` de 14 expresiones: `0.1 + 0.2`, `0.3 - 0.1`, `0.1 * 3.0`, `7.0 / 2.0`, `2.0 * 3.5`, `1.0 - 1.0`, `-(1.5)`, `-0.0`, `1.0 / 0.0`, `-1.0 / 0.0`, `0.0 / 0.0`, `1e308 * 10.0`, `1e21 + 1.0` y `1e-7 / 10.0`
+expect:  `Halt{0}`, stderr vacío y, una por línea: `0.30000000000000004`, `0.19999999999999998`, `0.30000000000000004`, `3.5`, `7.0`, `0.0`, `-1.5`, `-0.0`, `inf`, `-inf`, `NaN`, `inf`, `1e21` y `1e-8`
+why:     dividir enteros por cero hace panic y floats no: copiar ese camino mataría el programa con `1.0 / 0.0` en vez de dar `inf`.
+ref:     TestFloatOps/arithmetic_follows_ieee_and_never_panics
+
+[T11.19] interp.float_comparisons                          level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    las seis comparaciones de `Float` siguen IEEE: un NaN no es igual a nada ni está ordenado, y `0.0 == -0.0`
+input:   27 condiciones en `print(if COND { 1 } else { 0 })`: los dos lados de cada operador, los ceros, los infinitos de un desbordamiento y las de un NaN (`0.0 / 0.0`)
+expect:  `Halt{0}` y un `1` o un `0` por línea según IEEE, como `nan == nan` 0, `nan != nan` 1, `nan < 1.0` 0, `nan <= nan` 0, `0.0 == -0.0` 1, `2.0 <= 2.0` 1 y `2.0 < 2.0` 0
+why:     un NaN rompe identidades: `x != x` es verdadero y `!(x < y)` no equivale a `x >= y`; no derives unos operadores de otros.
+ref:     TestFloatOps/comparisons_follow_ieee
+
+[T11.20] interp.truncate_toward_zero                       level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    `truncate` descarta la parte fraccionaria hacia cero y acepta los límites exactos de `Int`
+input:   2.9, -2.9, 0.9, -0.9, 0.0, -0.0, 1e18, 9223372036854774784.0 (el mayor `Float` por debajo de 2^63) y -9223372036854775808.0
+expect:  `2`, `-2`, `0`, `0`, `0`, `0`, `1000000000000000000`, `9223372036854774784` y `-9223372036854775808`, una por línea
+why:     redondear en vez de truncar daría 3 para 2.9, y -2^63 es un `Int` válido que un `<=` en el límite inferior rechazaría.
+ref:     TestFloatOps/truncate_drops_the_fraction_toward_zero
+
+[T11.21] interp.truncate_range_panics                      level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    `truncate` hace panic con NaN, con los infinitos y con todo lo que queda fuera de `[-2^63, 2^63)`, en la posición de la llamada
+input:   `0.0 / 0.0`, `1.0 / 0.0`, `-1.0 / 0.0`, `9223372036854775808.0`, `9223372036854775807.0` (que como `Float` es 2^63), `-9223372036854777856.0` y `1e300`, cada uno en `print(truncate(..))` de la línea 2, seguido de `print(2)`
+expect:  siete veces `Halt{101}`, stdout vacío y stderr exactamente `panic: Float out of range at test.ki:2:9` y un salto de línea
+why:     `float64(MaxInt64)` ya es 2^63: compararlo deja pasar 2^63, y convertir un `Float` fuera de rango a `int64` puede dar un valor distinto en cada máquina.
+ref:     TestFloatOps/truncate_panics_out_of_range
+
+[T11.22] interp.truncate_panic_position                    level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    el panic de `truncate` señala la llamada, aunque esté dentro de otra función, y lo impreso antes sale antes que el mensaje
+input:   `fn cut(x: Float) -> Int { 1 + truncate(x) }` con la llamada en la línea 2; `main` imprime 1 y llama a `cut(1.0 / 0.0)`; stdout retiene lo escrito hasta que se vacía y stderr va al mismo registro
+expect:  `Halt{101}` y el registro exactamente `1`, un salto de línea, `panic: Float out of range at test.ki:2:7` y otro salto de línea
+why:     si el extern no vaciara stdout antes del panic, el mensaje saldría antes que el `1` que el programa ya imprimió.
+ref:     TestFloatOps/truncate_panic_is_at_the_call_and_flushes_stdout_first
+
+[T11.23] interp.to_float_and_sqrt                          level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    `toFloat` da el `Float` más cercano (empates al par) y `sqrt` es la raíz exacta de IEEE, con NaN para un negativo
+input:   `toFloat` de 0, -7, 9007199254740993, 9007199254740995, `MaxInt64` y `MinInt64`; `sqrt` de 4.0, 2.0, 0.0, -0.0, -1.0 y `1.0 / 0.0`
+expect:  `0.0`, `-7.0`, `9007199254740992.0`, `9007199254740996.0`, `9223372036854776000.0`, `-9223372036854776000.0`, `2.0`, `1.4142135623730951`, `0.0`, `-0.0`, `NaN` e `inf`
+why:     truncar en vez de redondear al par daría 9007199254740994 para 2^53 + 3, y el último bit cambiaría de un backend a otro.
+ref:     TestFloatOps/to_float_and_sqrt
+
+[T11.24] interp.float_functions_are_values                 level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    `toFloat`, `truncate` y `sqrt` son externs y no operadores, así que valen como valores
+input:   `let f = toFloat` y `f(3)`, `let g = truncate` y `g(2.5)`, y `apply(sqrt, 16.0)` con `fn apply(h, x: Float) -> Float { h(x) }`
+expect:  `Halt{0}`, stderr vacío y stdout `3.0`, `2` y `4.0`, una por línea
+why:     si fueran primitivas del Core no habría un `FunRef` que pasar, y `let f = truncate` dejaría de compilar aunque `let f = print` compile.
+ref:     TestFloatOps/float_functions_are_values
+
+[T11.25] interp.float_through_calls                        level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    un `Float` pasa por llamadas, también de cola, sin perder bits, y la llamada de cola sigue reutilizando su entorno
+input:   `sum(10, 0.0)` con `fn sum(n: Int, acc: Float) -> Float { if n == 0 { acc } else { sum(n - 1, acc + 0.1) } }`
+expect:  `Halt{0}`, stderr vacío, stdout `0.9999999999999999` y `Stats().MaxEnvs` igual a 2
+why:     diez sumas de 0.1 no dan 1.0 porque cada una redondea; con otra precisión el oráculo daría `1.0` y discreparía de los demás backends.
+ref:     TestFloatOps/floats_flow_through_calls_and_tail_calls
+
+[T11.26] interp.call_float                                 level: core
+kind:    unit (go test)      file: internal/interp/float_test.go
+case:    `Machine.Call` entrega un `Float` a una función del programa y devuelve el `Float` del resultado
+input:   `half(5.0)` con `fn half(x: Float) -> Float { x / 2.0 }`, llamada con `FloatV{V: 5}`
+expect:  el valor `FloatV{V: 2.5}`
+why:     sin `FloatV`, otro paquete no podría pasar un `Float` a `Call` ni leer el que devuelve.
+ref:     TestFloatOps/call_passes_and_returns_a_float
+
+[T11.27] interp.c10_bits                                   level: core
+kind:    unit (go test)      file: internal/interp/c10_internal_test.go
+case:    cada primitiva de `Float` da exactamente los bits de la tabla con operandos que un compilador fusionaría, también compuestas en una `Machine`, y con `KI_C10_BITS` escribe cada fila para el canario
+input:   42 filas: las 11 primitivas con `a = 1 + 2^-52` y `d = 1 + 2^-51`, ceros con signo, NaN e infinitos, y las formas `a*a + c`, `a*a - d`, `d - a*a` y `-(a*a) + d` en una `Machine`
+expect:  cada resultado es el de la tabla (`nan` para un NaN), las cuatro formas dan `0x0000000000000000`; con la variable puesta, una línea `c10 <nombre> <resultado>` por fila
+why:     fundido, `a*a - d` da 2^-104 y sin fundir 0: si el oráculo cambiara con la máquina, ya no sería la referencia de los demás.
+ref:     TestC10Bits
+
+[T11.28] canary.detector_reads_only_instructions           level: core
+kind:    unit (canary)       file: kirt/canary/c10_test.go
+case:    el detector de FMA lee las instrucciones del listado y no otros textos
+input:   un listado inventado con dos funciones, un volcado hexadecimal, un símbolo de datos llamado `FMSUBD`, una instrucción `FMADDS` y una `FNMSUBD`
+expect:  `opcodes` da `FMADDD`, `RET` para la primera y `FMULD`, `FADDD`, `FMADDS`, `FNMSUBD` para la segunda; `fused` da `example.Explicit: FNMSUBD` y `example.Naive: FMADDD`, y ve cada uno de los cuatro mnemónicos
+why:     un detector que buscara el texto en todo el listado daría falsos positivos con nombres de símbolos, o se saltaría instrucciones.
+ref:     TestC10/detector_reads_only_instructions
+
+[T11.29] canary.detector_sees_the_prototype                level: core
+kind:    unit (canary)       file: kirt/canary/c10_test.go
+case:    aplicado al prototipo de C10, que está escrito para fundir, el detector ve la instrucción fundida de `Naive` y ninguna en `Explicit`, en arm64 y en amd64 con `GOAMD64=v3`, y ninguna con `v1`
+input:   `GOARCH=arm64 go build -gcflags=-S .` y `GOARCH=amd64` con `GOAMD64=v3` y con `v1`, en `docs/research/proto/c10-floats`
+expect:  en arm64 exactamente `c10floats.Naive: FMADDD`, y `c10floats.Explicit` con `FMULD` y `FADDD`; en amd64 con `v3` exactamente `c10floats.Naive: VFMADD231SD`, con `v1` ninguna instrucción fundida, y `MULSD` y `ADDSD` en `Naive` con `v1` y en `Explicit` con los dos niveles
+why:     un canario que no ve nada no prueba nada: este control reproduce que arm64 y `GOAMD64=v3` funden, antes de mirar el intérprete.
+ref:     TestC10/detector_sees_fma_in_the_prototype
+
+[T11.30] canary.arm64_static                               level: core
+kind:    unit (canary)       file: kirt/canary/c10_test.go
+case:    el código de arm64 de `internal/interp` y de `kirt/fmtnum` no tiene ninguna instrucción fundida, y el listado contiene las primitivas
+input:   `GOARCH=arm64 go build -gcflags=-S ./internal/interp ./kirt/fmtnum`
+expect:  ningún `FMADDD`, `FMSUBD`, `FNMADDD` ni `FNMSUBD`; `applyPrim` tiene `FADDD`, `FSUBD`, `FMULD`, `FDIVD`, `FNEGD` y `FCMPD`, y hay una función `fmtnum.Float`
+why:     es la pata estática de C10 hasta que haya qemu: arm64 funde por defecto y aquí no puedes ejecutar su código para notar la diferencia.
+ref:     TestC10/arm64_code_that_computes_floats_has_no_fused_instruction
+
+[T11.31] canary.amd64_v1_v3                                level: core
+kind:    unit (canary)       file: kirt/canary/c10_test.go
+case:    las builds `GOAMD64=v1` (nunca funde) y `GOAMD64=v3` (funde) de `TestC10Bits` escriben los mismos bits
+input:   `go test -c` de `./internal/interp` con cada nivel, y cada binario con `KI_C10_BITS=1` y `-test.run ^TestC10Bits$`; se salta si la máquina no es amd64 de Linux con `fma` y `avx2`
+expect:  las líneas `c10 ..` de las dos salidas son idénticas y hay al menos una
+why:     con `GOAMD64=v3` el compilador funde: una primitiva con dos operaciones en una expresión daría otros bits solo en esa build.
+ref:     TestC10/amd64_builds_v1_and_v3_print_the_same_bits
+
+[T11.32] run.floats_golden                                 level: core
+kind:    run                 file: tests/golden/ch11/floats.ki
+case:    `ki run` de un programa que imprime con `printFloat` los floats del hito del capítulo
+input:   con `let zero = 0.0`: `1.0`, `0.1`, `1000000.0`, `1e21`, `zero / zero`, `1.0 / zero`, `-1.0 / zero`, `0.1 + 0.2`, `1.5e-7` y `-zero`
+expect:  sale con 0, stderr vacío y stdout exactamente `1.0`, `0.1`, `1000000.0`, `1e21`, `NaN`, `inf`, `-inf`, `0.30000000000000004`, `1.5e-7` y `-0.0`, una por línea
+why:     es el primer programa con `Float` de punta a punta, con el binario de verdad; si el formato viniera de `strconv`, saldrían `1e+06` y `+Inf`.
+ref:     tests/golden/ch11/floats.ki
+
+[T11.33] run.truncate_panic_golden                         level: core
+kind:    run                 file: tests/golden/ch11/truncate_panic.ki
+case:    `ki run` de un programa que imprime `truncate(3.99)` y después hace `truncate` de un infinito
+input:   `let zero = 0.0`, `print(truncate(3.99))`, `print(truncate(1.0 / zero))` y `print(2)`
+expect:  sale con 101, stdout exactamente `3` y un salto de línea, y stderr `panic: Float out of range at tests/golden/ch11/truncate_panic.ki:9:9`
+why:     es el panic de un extern de punta a punta: lo impreso antes sale, la posición es la de la llamada y nada corre después.
+ref:     tests/golden/ch11/truncate_panic.ki

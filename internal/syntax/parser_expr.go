@@ -274,11 +274,11 @@ func (p *parser) chainedDiag(start, first base.Span) diag.Diagnostic {
 }
 
 // isOperandToken reports whether a token of kind k is by itself an operand: an
-// integer, a boolean or a name, the expressions that primary reads from a
-// single token.
+// integer, a float, a boolean or a name, the expressions that primary reads from
+// a single token.
 func isOperandToken(k TokenKind) bool {
 	switch k {
-	case Int, KwTrue, KwFalse, LowerIdent, UpperIdent:
+	case Int, Float, KwTrue, KwFalse, LowerIdent, UpperIdent:
 		return true
 	}
 	return false
@@ -345,10 +345,10 @@ func (p *parser) prefix() ExprID {
 	return p.m.Exprs.Push(Expr{Kind: ExprUnary, Span: p.spanFrom(t.Span), UnOp: op, OpSpan: t.Span, Operand: operand})
 }
 
-// primary reads an expression that has no operator at its top: an integer or
-// boolean literal, a name, `()`, a parenthesized expression, a block or an if.
-// The other literals (strings, characters and floats) come in later chapters,
-// so for now their tokens are ones that cannot start an expression. A token
+// primary reads an expression that has no operator at its top: an integer,
+// float or boolean literal, a name, `()`, a parenthesized expression, a block or
+// an if. The other literals (strings and characters) come in later chapters, so
+// for now their tokens are ones that cannot start an expression. A token
 // that cannot start an expression is E0201, and gives an ExprError with an
 // empty span at that token, which consumes nothing, so that a `)` or a `}` that
 // ends the expression is still there for the caller. Whoever calls it must
@@ -358,7 +358,18 @@ func (p *parser) primary() ExprID {
 	switch t.Kind {
 	case Int:
 		p.advance()
+		// An Int that the lexer reported (E0105 for a number that does not fit,
+		// E0107 for one that is malformed) holds the value 0, and that 0 is not the
+		// number written: the literal is an error node, so the lexer's error is the
+		// only one and nothing downstream compares a value that is not there. A zero
+		// that is written, `0`, `0x0` or `0_0`, was not reported and is the Int.
+		if p.tb.reportedNumber(t) {
+			return p.errorExpr(t.Span)
+		}
 		return p.m.Exprs.Push(Expr{Kind: ExprInt, Span: t.Span, Int: p.tb.Ints[t.Payload]})
+	case Float:
+		p.advance()
+		return p.m.Exprs.Push(Expr{Kind: ExprFloat, Span: t.Span, Float: p.tb.Floats[t.Payload]})
 	case KwTrue, KwFalse:
 		p.advance()
 		return p.m.Exprs.Push(Expr{Kind: ExprBool, Span: t.Span, Bool: t.Kind == KwTrue})

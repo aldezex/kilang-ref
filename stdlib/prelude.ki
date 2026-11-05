@@ -1,3 +1,21 @@
 // The Ki prelude: names every module sees without importing them.
 #[extern("ki_print_int")]
 pub fn print(x: Int)
+
+// printFloat is print for a Float. It is provisional: it goes when `print` is
+// generic (the chapter on Show).
+#[extern("ki_print_float")]
+pub fn printFloat(x: Float)
+
+// toFloat is the nearest Float to an Int; truncate drops the fraction of a Float
+// and panics if the result is not an Int (a NaN, an infinity, or a value
+// outside the range of Int); sqrt is the square root. They are externs and not
+// operators, so a program can use each as a value, as it can print.
+#[extern("ki_to_float")]
+pub fn toFloat(i: Int) -> Float
+
+#[extern("ki_truncate")]
+pub fn truncate(f: Float) -> Int
+
+#[extern("ki_sqrt")]
+pub fn sqrt(f: Float) -> Float

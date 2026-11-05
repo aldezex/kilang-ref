@@ -16,8 +16,8 @@ import (
 // The program must have no errors. Elaborate does not look for them: a call
 // with the wrong number of arguments is translated as written. It panics on the
 // nodes that stand for an error (an expression or a statement the parser could
-// not read, a name that stands for nothing, and `==` or `!=` on something that
-// is neither Int nor Bool), because it has nothing to translate them to.
+// not read, a name that stands for nothing, and an operator on a type it does
+// not work on), because it has nothing to translate them to.
 //
 // What it makes of each construct:
 //
@@ -36,13 +36,14 @@ import (
 //     `match a { true => b; false => false }` and `a || b` is
 //     `match a { true => true; false => b }`, so b is read only when a does not
 //     settle the result.
-//   - An operator is a PrimCall. For `==` and `!=` the primitive depends on the
-//     type of the left operand, once resolved: Bool gives the Bool primitive and
-//     Int the Int one, and so does a type variable that nothing has bound (a
-//     parameter that nothing fixes, in a function that no one calls with a
-//     value). A value of unknown type does not exist at run time, so choosing
-//     Int there changes what no program does; chapter 13, where `==` becomes a
-//     method, drops the rule.
+//   - An operator is a PrimCall. Its primitive depends on the type of the left
+//     operand (the operand of `-`), once resolved: Float gives the Float
+//     primitive, Bool (only for `==` and `!=`) the Bool one and Int the Int one,
+//     and so does a type variable that nothing has bound (a parameter that
+//     nothing fixes, in a function that no one calls with a value). A value of
+//     unknown type does not exist at run time, so choosing Int there changes
+//     what no program does; chapter 13, where the operators become methods,
+//     drops the rule. `%` is Int only.
 //   - A name that stands for a definition is a FunRef and one that stands for a
 //     variable is a VarRef, wherever it is: the callee of a Call is elaborated
 //     like any other expression.
@@ -149,6 +150,8 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	switch x.Kind {
 	case syntax.ExprInt:
 		return e.b.LitInt(x.Span, x.Int)
+	case syntax.ExprFloat:
+		return e.b.LitFloat(x.Span, x.Float)
 	case syntax.ExprBool:
 		return e.b.LitBool(x.Span, x.Bool)
 	case syntax.ExprUnit:
@@ -177,7 +180,11 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 		operand := e.expr(x.Operand)
 		switch x.UnOp {
 		case syntax.Neg:
-			return e.b.Prim(x.OpSpan, PrimNegInt, []ExprID{operand})
+			prim := PrimNegInt
+			if e.operandType(x.Operand, "-") == opFloat {
+				prim = PrimNegFloat
+			}
+			return e.b.Prim(x.OpSpan, prim, []ExprID{operand})
 		case syntax.Not:
 			return e.b.Prim(x.OpSpan, PrimNotBool, []ExprID{operand})
 		default:
@@ -232,57 +239,68 @@ func (e *elaborator) shortCircuit(x syntax.Expr, settledBy bool) ExprID {
 	return e.b.Match(x.Span, lhs, []Arm{{Pat: PatTrue, Body: onTrue}, {Pat: PatFalse, Body: onFalse}})
 }
 
-// binaryPrim returns the primitive of an operator that is not `&&` or `||`.
-func (e *elaborator) binaryPrim(x syntax.Expr) Prim {
-	switch x.Op {
-	case syntax.BinAdd:
-		return PrimAddInt
-	case syntax.BinSub:
-		return PrimSubInt
-	case syntax.BinMul:
-		return PrimMulInt
-	case syntax.BinDiv:
-		return PrimDivInt
-	case syntax.BinRem:
-		return PrimRemInt
-	case syntax.BinLt:
-		return PrimLtInt
-	case syntax.BinLe:
-		return PrimLeInt
-	case syntax.BinGt:
-		return PrimGtInt
-	case syntax.BinGe:
-		return PrimGeInt
-	case syntax.BinEq, syntax.BinNe:
-		return e.equalityPrim(x)
+// opType is the type that an operator works on, as far as the choice of its
+// primitive goes.
+type opType uint8
+
+const (
+	opInt opType = iota
+	opFloat
+	opBool
+)
+
+// operandType returns the opType of the expression operand of the operator op,
+// from the type that the checker found for it: Float is opFloat, Bool is opBool,
+// and Int is opInt, and so is a type variable that nothing has bound (see
+// Elaborate). Any other type has no primitive, and neither has Bool for an
+// operator that is not `==` or `!=`: the checker reports both, and a program
+// with errors is not elaborated, so it panics with the text that the report of
+// the ICE shows.
+func (e *elaborator) operandType(operand syntax.ExprID, op string) opType {
+	types := e.typed.Types
+	ty := types.Resolve(e.tm.ExprTypes[operand])
+	switch {
+	case ty == types.Builtin(sema.BuiltinFloat):
+		return opFloat
+	case ty == types.Builtin(sema.BuiltinBool) && (op == "==" || op == "!="):
+		return opBool
+	case ty == types.Builtin(sema.BuiltinInt), types.Node(ty).Kind == sema.TypeVariable:
+		return opInt
 	default:
-		panic("unreachable")
+		panic("core: cannot elaborate `" + op + "` on a value of type `" + types.Show(ty) + "`")
 	}
 }
 
-// equalityPrim returns the primitive of `==` or `!=`, which depends on the type
-// of the left operand (see Elaborate).
-func (e *elaborator) equalityPrim(x syntax.Expr) Prim {
-	types := e.typed.Types
-	ty := types.Resolve(e.tm.ExprTypes[x.Lhs])
-	onBool := false
-	switch {
-	case ty == types.Builtin(sema.BuiltinBool):
-		onBool = true
-	case ty == types.Builtin(sema.BuiltinInt), types.Node(ty).Kind == sema.TypeVariable:
-	default:
-		panic("core: cannot elaborate `" + x.Op.String() + "` on a value of type `" + types.Show(ty) + "`")
+// binaryPrims is the primitive of each binary operator that is not `&&` or
+// `||`, for each opType: the Int one, the Float one and, for `==` and `!=`, the
+// Bool one. A zero entry (PrimAddInt is 0, so the zero Prim is a real one)
+// would be a mistake of the table: operandType never returns opBool for the
+// operators that have none, and `%` has no Float.
+var binaryPrims = map[syntax.BinOp][3]Prim{
+	syntax.BinAdd: {opInt: PrimAddInt, opFloat: PrimAddFloat},
+	syntax.BinSub: {opInt: PrimSubInt, opFloat: PrimSubFloat},
+	syntax.BinMul: {opInt: PrimMulInt, opFloat: PrimMulFloat},
+	syntax.BinDiv: {opInt: PrimDivInt, opFloat: PrimDivFloat},
+	syntax.BinRem: {opInt: PrimRemInt},
+	syntax.BinLt:  {opInt: PrimLtInt, opFloat: PrimLtFloat},
+	syntax.BinLe:  {opInt: PrimLeInt, opFloat: PrimLeFloat},
+	syntax.BinGt:  {opInt: PrimGtInt, opFloat: PrimGtFloat},
+	syntax.BinGe:  {opInt: PrimGeInt, opFloat: PrimGeFloat},
+	syntax.BinEq:  {opInt: PrimEqInt, opFloat: PrimEqFloat, opBool: PrimEqBool},
+	syntax.BinNe:  {opInt: PrimNeInt, opFloat: PrimNeFloat, opBool: PrimNeBool},
+}
+
+// binaryPrim returns the primitive of an operator that is not `&&` or `||`.
+func (e *elaborator) binaryPrim(x syntax.Expr) Prim {
+	ty := opInt
+	if x.Op != syntax.BinRem {
+		ty = e.operandType(x.Lhs, x.Op.String())
 	}
-	switch {
-	case x.Op == syntax.BinEq && onBool:
-		return PrimEqBool
-	case x.Op == syntax.BinEq:
-		return PrimEqInt
-	case onBool:
-		return PrimNeBool
-	default:
-		return PrimNeInt
+	prims, ok := binaryPrims[x.Op]
+	if !ok {
+		panic("unreachable")
 	}
+	return prims[ty]
 }
 
 // block elaborates a block to a chain of Let. The first loop goes through the

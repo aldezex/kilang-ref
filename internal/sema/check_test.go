@@ -95,7 +95,7 @@ func mainError(at base.Span, label, help string, fixits ...diag.FixIt) diag.Diag
 // empty, the help asks whether that type was meant and the fix-it writes it.
 func unknownType(at base.Span, name, best string) diag.Diagnostic {
 	d := diag.NewError(diag.E(406), "unknown type `"+name+"`", diag.Label{Span: at, Message: "not a type Ki knows"}).
-		WithNote("the types Ki knows: `Int`, `Bool` and `()`")
+		WithNote("the types Ki knows: `Int`, `Float`, `Bool` and `()`")
 	if best != "" {
 		d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
 	}
@@ -898,10 +898,12 @@ func TestCheck(t *testing.T) {
 			operand, result      string // the type of the operands and of the result
 			good, bad            string // a literal of the operand type and one that is not
 			badType, wrongResult string // the type of bad, and a type that the result is not
+			rejects              bool   // a wrong left operand is rejected with no reason: the operator works on Int and Float
 		}{
-			{[]string{"+", "-", "*", "/", "%"}, "Int", "Int", "1", "true", "Bool", "Bool"},
-			{[]string{"<", "<=", ">", ">="}, "Int", "Bool", "1", "true", "Bool", "Int"},
-			{[]string{"&&", "||"}, "Bool", "Bool", "true", "1", "Int", "Int"},
+			{[]string{"+", "-", "*", "/"}, "Int", "Int", "1", "true", "Bool", "Bool", true},
+			{[]string{"%"}, "Int", "Int", "1", "true", "Bool", "Bool", false},
+			{[]string{"<", "<=", ">", ">="}, "Int", "Bool", "1", "true", "Bool", "Int", true},
+			{[]string{"&&", "||"}, "Bool", "Bool", "true", "1", "Int", "Int", false},
 		} {
 			for _, op := range g.ops {
 				because := "`" + op + "` expects `" + g.operand + "` operands"
@@ -911,12 +913,17 @@ func TestCheck(t *testing.T) {
 				wantDiags(t, "right operand of "+op, p, secondary(
 					mismatch(spanIn(t, p, src, " "+op+" "+g.bad, g.bad), "expected `"+g.operand+"`, found `"+g.badType+"`"),
 					spanIn(t, p, src, " "+op+" ", op), because))
-				// The left operand is the wrong one.
+				// The left operand is the wrong one. Where the operator works on
+				// Int and on Float, no reason explains it: it is the rejected form.
 				src = "fn main() { let r = " + g.bad + " " + op + " " + g.good + " }"
 				p = testsupport.Analyze(t, src)
-				wantDiags(t, "left operand of "+op, p, secondary(
-					mismatch(spanIn(t, p, src, "= "+g.bad+" ", g.bad), "expected `"+g.operand+"`, found `"+g.badType+"`"),
-					spanIn(t, p, src, " "+op+" ", op), because))
+				if g.rejects {
+					wantDiags(t, "left operand of "+op, p, rejectedOperand(spanIn(t, p, src, "= "+g.bad+" ", g.bad), g.badType, numberTypes, op, numbersWork))
+				} else {
+					wantDiags(t, "left operand of "+op, p, secondary(
+						mismatch(spanIn(t, p, src, "= "+g.bad+" ", g.bad), "expected `"+g.operand+"`, found `"+g.badType+"`"),
+						spanIn(t, p, src, " "+op+" ", op), because))
+				}
 				// Right operands, and the result has the type of the operator.
 				expr := g.good + " " + op + " " + g.good
 				src = "fn main() { let r: " + g.wrongResult + " = " + expr + " }"
@@ -931,14 +938,15 @@ func TestCheck(t *testing.T) {
 		}
 
 		{
-			// Both operands are wrong: one error each.
-			const src = "fn main() { let r = true + false }"
+			// Both operands are wrong: one error each. (For `+` the left operand
+			// decides, and the right one is not compared: see TestFloatCheck.)
+			const src = "fn main() { let r = 1 && 2 }"
 			p := testsupport.Analyze(t, src)
-			because := "`+` expects `Int` operands"
-			plus := spanIn(t, p, src, " + ", "+")
+			because := "`&&` expects `Bool` operands"
+			and := spanIn(t, p, src, " && ", "&&")
 			wantDiags(t, "both operands", p,
-				secondary(mismatch(spanIn(t, p, src, "= true", "true"), "expected `Int`, found `Bool`"), plus, because),
-				secondary(mismatch(spanIn(t, p, src, "+ false", "false"), "expected `Int`, found `Bool`"), plus, because))
+				secondary(mismatch(spanIn(t, p, src, "= 1", "1"), "expected `Bool`, found `Int`"), and, because),
+				secondary(mismatch(spanIn(t, p, src, "&& 2", "2"), "expected `Bool`, found `Int`"), and, because))
 		}
 		{
 			// The mistake is in the operand it is in, not in the whole sum.
@@ -952,8 +960,7 @@ func TestCheck(t *testing.T) {
 		{
 			const src = "fn main() { let r = -true }"
 			p := testsupport.Analyze(t, src)
-			wantDiags(t, "-true", p, secondary(mismatch(spanIn(t, p, src, "-true", "true"), "expected `Int`, found `Bool`"),
-				spanIn(t, p, src, "-true", "-"), "`-` expects an `Int` operand"))
+			wantDiags(t, "-true", p, rejectedOperand(spanIn(t, p, src, "-true", "true"), "Bool", numberTypes, "-", numbersWork))
 		}
 		{
 			const src = "fn main() { let r = !1 }"
@@ -1063,13 +1070,13 @@ func TestCheck(t *testing.T) {
 	})
 
 	t.Run("equality_on_functions_E0401", func(t *testing.T) {
-		note := func(op string) string { return "`" + op + "` works on `Int` and `Bool` here" }
+		note := func(op string) string { return "`" + op + "` works on `Int`, `Bool` and `Float` here" }
 		// `f == f`: one error, on the left operand, with no secondary label (no
 		// other place explains it), the note and no help.
 		{
 			const src = "fn f() {}\nfn g() -> Bool { f == f }"
 			p := testsupport.Analyze(t, src)
-			wantDiags(t, "f == f", p, mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int` or `Bool`, found `() -> ()`").
+			wantDiags(t, "f == f", p, mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").
 				WithNote(note("==")))
 		}
 		for _, row := range []struct{ name, src, context, word, found, op string }{
@@ -1087,7 +1094,7 @@ func TestCheck(t *testing.T) {
 			{"parameter that the right operand makes a function", "fn f() {}\nfn g(x) -> Bool { x == f }", "{ x ==", "x", "() -> ()", "=="},
 		} {
 			p := testsupport.Analyze(t, row.src)
-			wantDiags(t, row.name, p, mismatch(spanIn(t, p, row.src, row.context, row.word), "expected `Int` or `Bool`, found `"+row.found+"`").
+			wantDiags(t, row.name, p, mismatch(spanIn(t, p, row.src, row.context, row.word), "expected `Int`, `Bool` or `Float`, found `"+row.found+"`").
 				WithNote(note(row.op)))
 		}
 		{
@@ -1097,7 +1104,7 @@ func TestCheck(t *testing.T) {
 			const src = "fn f() {}\nfn g() -> Bool { f == 1 + true }"
 			p := testsupport.Analyze(t, src)
 			wantDiags(t, "f == 1 + true", p,
-				mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int` or `Bool`, found `() -> ()`").WithNote(note("==")),
+				mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").WithNote(note("==")),
 				secondary(mismatch(spanIn(t, p, src, "+ true", "true"), "expected `Int`, found `Bool`"),
 					spanIn(t, p, src, " + ", "+"), "`+` expects `Int` operands"))
 		}
@@ -1119,7 +1126,7 @@ func TestCheck(t *testing.T) {
 			const src = "fn f() {}\nfn g() -> Int { f == f }"
 			p := testsupport.Analyze(t, src)
 			wantDiags(t, "f == f where Int is expected", p,
-				mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int` or `Bool`, found `() -> ()`").WithNote(note("==")),
+				mismatch(spanIn(t, p, src, "{ f ==", "f"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").WithNote(note("==")),
 				secondary(mismatch(spanIn(t, p, src, "{ f == f }", "f == f"), "expected `Int`, found `Bool`"),
 					spanIn(t, p, src, "-> Int", "Int"), "expected because of the return type"))
 		}
@@ -1135,7 +1142,7 @@ func TestCheck(t *testing.T) {
 			{"call first", "fn f() {}\nfn main() { let b = same(f, f) }\nfn same(x, y) -> Bool { x == y }"},
 		} {
 			p := testsupport.Analyze(t, row.src)
-			wantDiags(t, row.name, p, mismatch(spanIn(t, p, row.src, "{ x ==", "x"), "expected `Int` or `Bool`, found `() -> ()`").
+			wantDiags(t, row.name, p, mismatch(spanIn(t, p, row.src, "{ x ==", "x"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").
 				WithNote(note("==")))
 		}
 		// A parameter that nothing ever types is not an error, and one that a
@@ -1146,8 +1153,8 @@ func TestCheck(t *testing.T) {
 			const src = "fn f() {}\nfn same(x, y) -> Bool { x == y }\nfn other(x, y) -> Bool { x != y }\nfn main() { let a = same(f, f) }\nfn rest() { let b = other(f, f) }"
 			p := testsupport.Analyze(t, src)
 			wantDiags(t, "two comparisons", p,
-				mismatch(spanIn(t, p, src, "{ x ==", "x"), "expected `Int` or `Bool`, found `() -> ()`").WithNote(note("==")),
-				mismatch(spanIn(t, p, src, "{ x !=", "x"), "expected `Int` or `Bool`, found `() -> ()`").WithNote(note("!=")))
+				mismatch(spanIn(t, p, src, "{ x ==", "x"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").WithNote(note("==")),
+				mismatch(spanIn(t, p, src, "{ x !=", "x"), "expected `Int`, `Bool` or `Float`, found `() -> ()`").WithNote(note("!=")))
 		}
 	})
 
@@ -1920,7 +1927,8 @@ func TestCheck(t *testing.T) {
 		// name of up to five letters, and one more for each three after that.)
 		for _, row := range []struct{ name, best string }{
 			{"Bol", "Bool"}, {"Boo", "Bool"}, {"Ints", "Int"}, {"In", "Int"}, {"Boool", "Bool"},
-			{"Itn", ""}, {"Float", ""}, {"String", ""}, {"Boolean", ""}, {"BOOL", ""}, {"A", ""},
+			{"Flot", "Float"}, {"Floa", "Float"}, {"Floats", "Float"},
+			{"Itn", ""}, {"Double", ""}, {"String", ""}, {"Boolean", ""}, {"BOOL", ""}, {"A", ""},
 		} {
 			src := "fn f(x: " + row.name + ") {}"
 			p := testsupport.Analyze(t, src)
@@ -1945,7 +1953,7 @@ func TestCheck(t *testing.T) {
 
 		// The names of the types, and `()`, are not unknown.
 		{
-			p := testsupport.Analyze(t, "fn f(a: Int, b: Bool, c: ()) -> () { c }\nfn main() { let x: Int = 1\n let y: Bool = true }")
+			p := testsupport.Analyze(t, "fn f(a: Int, b: Bool, c: (), d: Float) -> () { c }\nfn main() { let x: Int = 1\n let y: Bool = true\n let z: Float = 1.0 }")
 			wantDiags(t, "known types", p)
 		}
 	})

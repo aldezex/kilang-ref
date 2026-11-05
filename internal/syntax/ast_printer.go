@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/kirt/fmtnum"
 )
 
 // PrintModule writes the items of m as S-expressions, one line per item, each
@@ -15,6 +16,7 @@ import (
 //	(block S... [tail])      (let NAME T|_ E)      (expr E)
 //	(if C T [E])             (OP L R)              (neg E)    (not E)
 //	(call F ARGS...)         42    true    ()      NAME       (error)
+//	1.5                      a Float, written as kirt/fmtnum writes it: 2.0, 1e21
 //
 // where T is a type (`Int`, `()`, `(error)`) and `_` stands for a type that the
 // program did not write. The arguments of an attribute are quoted as
@@ -142,6 +144,8 @@ func (pr *printer) expr(id ExprID) {
 	switch e.Kind {
 	case ExprInt:
 		pr.str(strconv.FormatInt(e.Int, 10))
+	case ExprFloat:
+		pr.str(fmtnum.Float(e.Float))
 	case ExprBool:
 		pr.str(strconv.FormatBool(e.Bool))
 	case ExprUnit:

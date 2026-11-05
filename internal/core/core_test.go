@@ -74,6 +74,7 @@ func TestBuilder(t *testing.T) {
 			want core.Expr
 		}{
 			{"int", b.LitInt(span(1, 2), math.MinInt64), core.Expr{Kind: core.LitInt, Span: span(1, 2), Int: math.MinInt64}},
+			{"float", b.LitFloat(span(23, 26), 1.5), core.Expr{Kind: core.LitFloat, Span: span(23, 26), Float: 1.5}},
 			{"true", b.LitBool(span(3, 7), true), core.Expr{Kind: core.LitBool, Span: span(3, 7), Bool: true}},
 			{"false", b.LitBool(span(8, 13), false), core.Expr{Kind: core.LitBool, Span: span(8, 13)}},
 			{"unit", b.LitUnit(span(14, 16)), core.Expr{Kind: core.LitUnit, Span: span(14, 16)}},
@@ -232,6 +233,17 @@ var allPrims = []struct {
 	{core.PrimEqBool, "eq_bool", 2},
 	{core.PrimNeBool, "ne_bool", 2},
 	{core.PrimNotBool, "not_bool", 1},
+	{core.PrimAddFloat, "add_float", 2},
+	{core.PrimSubFloat, "sub_float", 2},
+	{core.PrimMulFloat, "mul_float", 2},
+	{core.PrimDivFloat, "div_float", 2},
+	{core.PrimNegFloat, "neg_float", 1},
+	{core.PrimEqFloat, "eq_float", 2},
+	{core.PrimNeFloat, "ne_float", 2},
+	{core.PrimLtFloat, "lt_float", 2},
+	{core.PrimLeFloat, "le_float", 2},
+	{core.PrimGtFloat, "gt_float", 2},
+	{core.PrimGeFloat, "ge_float", 2},
 }
 
 func TestPrim(t *testing.T) {
@@ -241,12 +253,18 @@ func TestPrim(t *testing.T) {
 				t.Errorf("Prim(%d).String() = %q, want %q", uint8(row.p), got, row.name)
 			}
 		}
-		// The 15 primitives are the values 0 to 14: the next one is no
-		// primitive, and a value past the table prints without a panic.
+		// The 26 primitives are the values 0 to 25, and each value of Part II
+		// follows the one before it: the next one is no primitive, and a value
+		// past the table prints without a panic.
+		for i, row := range allPrims {
+			if int(row.p) != i {
+				t.Errorf("%s is the value %d, want %d: the primitives are numbered in the order of allPrims", row.name, row.p, i)
+			}
+		}
 		for _, row := range []struct {
 			p    core.Prim
 			want string
-		}{{core.PrimNotBool + 1, "Prim(15)"}, {255, "Prim(255)"}} {
+		}{{core.PrimGeFloat + 1, "Prim(26)"}, {255, "Prim(255)"}} {
 			if got := row.p.String(); got != row.want {
 				t.Errorf("Prim(%d).String() = %q, want %q", uint8(row.p), got, row.want)
 			}

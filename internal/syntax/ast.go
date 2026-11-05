@@ -237,6 +237,11 @@ const (
 	ExprIf                     // Cond, Then, Else, HasElse
 	ExprBlock                  // Stmts, Tail, HasTail
 	ExprError                  // an expression that could not be read; no field
+
+	// The kinds of Part II come after ExprError, in the order the sessions add
+	// them, so that no kind of Part I changes its value.
+
+	ExprFloat // Float
 )
 
 // Expr is an expression. Every kind uses a few of the fields (see ExprKind)
@@ -256,9 +261,10 @@ type Expr struct {
 	Span base.Span
 
 	// Literals and names.
-	Int  int64
-	Bool bool
-	Name base.Symbol
+	Int   int64
+	Bool  bool
+	Name  base.Symbol
+	Float float64
 
 	// Operators. OpSpan is the span of the operator itself. For a call it is the
 	// argument list, from the `(` to the `)`: the `(` is the operator of a call,

@@ -95,10 +95,11 @@ func remInt(a, b int64) (int64, divErr) {
 	return a % b, divOK
 }
 
-// The messages of the panics that a primitive can cause.
+// The messages of the panics that a primitive or an extern can cause.
 const (
-	msgOverflow  = "integer overflow"
-	msgDivByZero = "division by zero"
+	msgOverflow   = "integer overflow"
+	msgDivByZero  = "division by zero"
+	msgFloatRange = "Float out of range"
 )
 
 // panicAt reports that the program panics at sp: it writes
@@ -129,13 +130,22 @@ func (m *Machine) haltAt(sp base.Span, msg string, code int) Halt {
 }
 
 // applyPrim computes the primitive p on the operands a and b. A primitive of one
-// argument (neg_int, not_bool) reads a only. The second result is "" when the
+// argument (neg_int, not_bool, neg_float) reads a only. The second result is "" when the
 // primitive has a value, and otherwise the message of the panic, in which case
 // the first is nil.
 //
 // Core has no types, but the type checker has accepted the program, so the
 // operands have the forms that p needs. A Value of another form is a bug of an
 // earlier pass, and it shows as the interface conversion panic of Go.
+//
+// The primitives of Float do what IEEE 754 says and never panic: a division by
+// zero is an infinity or a NaN, and a comparison with a NaN is false (`!=` is
+// true). Each one writes a single operation in each expression. Go may fuse
+// `x*y + z` into one instruction that rounds once (spec 5.10, and the canary
+// C10, kirt/canary), and a primitive that fused its operands with another would
+// give other bits on another machine; the operands of two primitives meet in
+// Values, so no operation sees another. A primitive that needs two operations
+// in one expression has to write `float64(x * y)` for the first.
 func applyPrim(p core.Prim, a, b Value) (Value, string) {
 	switch p {
 	case core.PrimAddInt:
@@ -168,6 +178,28 @@ func applyPrim(p core.Prim, a, b Value) (Value, string) {
 		return BoolV{V: boolOf(a) != boolOf(b)}, ""
 	case core.PrimNotBool:
 		return BoolV{V: !boolOf(a)}, ""
+	case core.PrimAddFloat:
+		return FloatV{V: floatOf(a) + floatOf(b)}, ""
+	case core.PrimSubFloat:
+		return FloatV{V: floatOf(a) - floatOf(b)}, ""
+	case core.PrimMulFloat:
+		return FloatV{V: floatOf(a) * floatOf(b)}, ""
+	case core.PrimDivFloat:
+		return FloatV{V: floatOf(a) / floatOf(b)}, ""
+	case core.PrimNegFloat:
+		return FloatV{V: -floatOf(a)}, ""
+	case core.PrimEqFloat:
+		return BoolV{V: floatOf(a) == floatOf(b)}, ""
+	case core.PrimNeFloat:
+		return BoolV{V: floatOf(a) != floatOf(b)}, ""
+	case core.PrimLtFloat:
+		return BoolV{V: floatOf(a) < floatOf(b)}, ""
+	case core.PrimLeFloat:
+		return BoolV{V: floatOf(a) <= floatOf(b)}, ""
+	case core.PrimGtFloat:
+		return BoolV{V: floatOf(a) > floatOf(b)}, ""
+	case core.PrimGeFloat:
+		return BoolV{V: floatOf(a) >= floatOf(b)}, ""
 	default:
 		panic("unreachable")
 	}
@@ -175,6 +207,9 @@ func applyPrim(p core.Prim, a, b Value) (Value, string) {
 
 // intOf returns the int64 inside v, which must be an IntV.
 func intOf(v Value) int64 { return v.(IntV).V }
+
+// floatOf returns the float64 inside v, which must be a FloatV.
+func floatOf(v Value) float64 { return v.(FloatV).V }
 
 // boolOf returns the bool inside v, which must be a BoolV.
 func boolOf(v Value) bool { return v.(BoolV).V }

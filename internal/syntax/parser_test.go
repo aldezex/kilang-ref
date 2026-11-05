@@ -53,6 +53,32 @@ func TestParser(t *testing.T) {
 		wantModule(t, "example", "fn f() -> () {}",
 			"(fn f (params) (ret ()) (block))\n")
 	})
+	t.Run("float_literals", func(t *testing.T) {
+		// A Float is an operand like an Int, and it prints with the text of
+		// kirt/fmtnum, so that `2.0` is never taken for the Int `2`.
+		rows := []struct{ name, src, want string }{
+			{"fraction", "fn f() { 1.5 }", "(fn f (params) (ret _) (block 1.5))\n"},
+			{"whole_value_keeps_its_point", "fn f() { 2.0 }", "(fn f (params) (ret _) (block 2.0))\n"},
+			{"exponent_form", "fn f() { 1e21 }", "(fn f (params) (ret _) (block 1e21))\n"},
+			{"small_exponent", "fn f() { 1e-9 }", "(fn f (params) (ret _) (block 1e-9))\n"},
+			{"negative_is_a_prefix", "fn f() { -2.5 }", "(fn f (params) (ret _) (block (neg 2.5)))\n"},
+			{"precedence", "fn f() { 1.0 + 2.0 * 3.0 }", "(fn f (params) (ret _) (block (+ 1.0 (* 2.0 3.0))))\n"},
+			{"comparison_and_call", "fn f() { g(0.1, 0.5 < x) }", "(fn f (params) (ret _) (block (call g 0.1 (< 0.5 x))))\n"},
+			{"initializer", "fn f() { let x = 0.1 }", "(fn f (params) (ret _) (block (let x _ 0.1)))\n"},
+		}
+		for _, row := range rows {
+			wantModule(t, row.name, row.src, row.want)
+		}
+		// A literal that does not fit keeps its place as the value 0, with the
+		// one error of the lexer: the parser adds none of its own.
+		m, _, in, sink := parseFile(t, "fn f() { 1e999 }")
+		if got := syntax.PrintModule(m, in); got != "(fn f (params) (ret _) (block 0.0))\n" {
+			t.Errorf("1e999 printed %q, want the literal as 0.0", got)
+		}
+		if diags := sink.All(); len(diags) != 1 || diags[0].Code != diag.E(109) {
+			t.Errorf("1e999: diagnostics %+v, want only E0109", diags)
+		}
+	})
 	t.Run("bool_type", func(t *testing.T) {
 		wantModule(t, "example", "fn f(b: Bool) {}",
 			"(fn f (params (b Bool)) (ret _) (block))\n")

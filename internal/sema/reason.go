@@ -74,4 +74,9 @@ type Reason struct {
 	// `() -> ()`, and for the `then` branch of an `if` with no `else`, because
 	// what that branch ends in is not what the function returns.
 	CanReturn bool
+	// IntAsFloat is the Float literal that the Int literal being checked is the
+	// same number as (`1` and `1.0`), when the place expects a Float: the mismatch
+	// that Unify reports then has the edit that writes it. It is empty for what is
+	// not a literal, and Unify reads it only when the expected type is Float.
+	IntAsFloat string
 }

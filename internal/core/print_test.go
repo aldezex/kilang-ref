@@ -243,6 +243,33 @@ fn bare(z)
 		}
 	})
 
+	t.Run("float_literals_print_as_kirt_fmtnum_writes_them", func(t *testing.T) {
+		// A Float is never written like an Int, so that `2.0` and `2` differ in
+		// the dump, and the text is the one that `printFloat` writes.
+		got := printSource(t, "fn f(x: Float) -> Float { -x * 2.0 + 1e21 }\nfn main() { printFloat(f(0.1)) }\n")
+		const want = `fn f(x) =
+  add_float(mul_float(neg_float(x), 2.0), 1e21)
+fn main() =
+  printFloat(f(0.1))
+`
+		if got != want {
+			t.Errorf("Print of a function of Floats:\n%s\nwant:\n%s", got, want)
+		}
+
+		// A Program can hold a literal that no source writes: the special values
+		// and the negative zero have their own names.
+		in := base.NewInterner()
+		b, p := newBuilder()
+		args := []core.ExprID{
+			b.LitFloat(span(0, 1), 1.5), b.LitFloat(span(0, 1), 2), b.LitFloat(span(0, 1), 1e21),
+			b.LitFloat(span(0, 1), math.NaN()), b.LitFloat(span(0, 1), math.Inf(-1)), b.LitFloat(span(0, 1), math.Copysign(0, -1)),
+		}
+		p.Funs.Push(core.Fun{Name: in.InternString("show"), Body: b.Call(span(0, 1), b.FunRef(span(0, 1), 0), args), HasBody: true, UserModule: true})
+		if got, want := core.Print(p, in), "fn show() =\n  show(1.5, 2.0, 1e21, NaN, -inf, -0.0)\n"; got != want {
+			t.Errorf("Print of a call with Float literals:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
 	t.Run("repeated_names_allocation_bound", func(t *testing.T) {
 		// Each `print(1)` but the last (the tail) binds a `_`, and Print gives
 		// the n-1 of them different names. A Print that looked for a free name

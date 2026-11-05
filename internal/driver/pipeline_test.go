@@ -33,11 +33,11 @@ func TestPipeline(t *testing.T) {
 				t.Errorf("module %d has the text %q, want it to contain %q", i, got, want.text)
 			}
 		}
-		// Each module is the tree of its own file: the prelude has its one
-		// function, with its attribute, and the file has `main`.
-		if prelude, user := f.Modules[0], f.Modules[1]; len(prelude.Items) != 1 || len(prelude.AttrPool) != 1 ||
+		// Each module is the tree of its own file: the prelude has its five
+		// functions, each with its attribute, and the file has `main`.
+		if prelude, user := f.Modules[0], f.Modules[1]; len(prelude.Items) != 5 || len(prelude.AttrPool) != 5 ||
 			len(user.Items) != 1 || len(user.AttrPool) != 0 || s.Interner.String(user.ItemNodes.Get(user.Items[0]).Name) != "main" {
-			t.Errorf("prelude has %d items and %d attributes, file has %d items and %d attributes; want 1 and 1, 1 and 0, the item being main",
+			t.Errorf("prelude has %d items and %d attributes, file has %d items and %d attributes; want 5 and 5, 1 and 0, the item being main",
 				len(prelude.Items), len(prelude.AttrPool), len(user.Items), len(user.AttrPool))
 		}
 		// Neither the prelude nor the file reports anything.

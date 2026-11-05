@@ -13,6 +13,7 @@ import (
 	"github.com/aldezex/kilang/internal/sema"
 	"github.com/aldezex/kilang/internal/syntax"
 	"github.com/aldezex/kilang/internal/testsupport"
+	"github.com/aldezex/kilang/kirt/fmtnum"
 )
 
 // elabFun returns the function called name: the first one of that name in the
@@ -59,6 +60,8 @@ func elabShape(c *testsupport.Compiled, id core.ExprID) string {
 	switch e.Kind {
 	case core.LitInt:
 		return strconv.FormatInt(e.Int, 10)
+	case core.LitFloat:
+		return fmtnum.Float(e.Float)
 	case core.LitBool:
 		return strconv.FormatBool(e.Bool)
 	case core.LitUnit:
@@ -500,6 +503,57 @@ fn semi() { print(1); }
 		}
 	})
 
+	t.Run("float_operators_map_to_float_prims", func(t *testing.T) {
+		// The type of the left operand, or of the operand of `-`, chooses the
+		// primitive, and a Float literal is a LitFloat that covers its text.
+		for _, row := range []struct{ expr, ret, want string }{
+			{"x + y", "Float", "add_float(x@0, y@1)"},
+			{"x - y", "Float", "sub_float(x@0, y@1)"},
+			{"x * y", "Float", "mul_float(x@0, y@1)"},
+			{"x / y", "Float", "div_float(x@0, y@1)"},
+			{"-x", "Float", "neg_float(x@0)"},
+			{"x < y", "Bool", "lt_float(x@0, y@1)"},
+			{"x <= y", "Bool", "le_float(x@0, y@1)"},
+			{"x > y", "Bool", "gt_float(x@0, y@1)"},
+			{"x >= y", "Bool", "ge_float(x@0, y@1)"},
+			{"x == y", "Bool", "eq_float(x@0, y@1)"},
+			{"x != y", "Bool", "ne_float(x@0, y@1)"},
+			{"x + y * x", "Float", "add_float(x@0, mul_float(y@1, x@0))"},
+			{"-x - -y", "Float", "sub_float(neg_float(x@0), neg_float(y@1))"},
+			{"1.5 + x", "Float", "add_float(1.5, x@0)"},
+			{"2.0", "Float", "2.0"},
+			{"1e21", "Float", "1e21"},
+		} {
+			c := testsupport.Compile(t, "fn f(x: Float, y: Float) -> "+row.ret+" { "+row.expr+" }\n")
+			if got := elabShape(c, elabFun(t, c, "f").Body); got != row.want {
+				t.Errorf("%s: the body is %s, want %s", row.expr, got, row.want)
+			}
+		}
+		c := testsupport.Compile(t, "fn lit() -> Float { 1.5 }\n")
+		if lit := c.Core.Exprs.Get(elabFun(t, c, "lit").Body); lit.Kind != core.LitFloat || lit.Float != 1.5 || elabText(c, lit.Span) != "1.5" {
+			t.Errorf("lit: the body is %+v covering %q, want a LitFloat of 1.5 that covers \"1.5\"", lit, elabText(c, lit.Span))
+		}
+
+		// A Float operand makes a Float primitive wherever it is, and the Int
+		// and Bool ones keep their own.
+		for _, row := range []struct{ name, src, fn, want string }{
+			{"annotated_by_the_return_type", "fn sq(x) -> Float { x * x }", "sq", "mul_float(x@0, x@0)"},
+			{"bound_by_the_other_operand", "fn h(x) -> Float { x / 2.0 }", "h", "div_float(x@0, 2.0)"},
+			{"negation_bound_by_the_return_type", "fn n(x) -> Float { -x }", "n", "neg_float(x@0)"},
+			{"remainder_is_int", "fn r(x) -> Int { x % 2 }", "r", "rem_int(x@0, 2)"},
+			{"int_stays_int", "fn i(x: Int) -> Int { x * 2 + 1 }", "i", "add_int(mul_int(x@0, 2), 1)"},
+			// A parameter that nothing types has no value at run time, so it is
+			// compared as an Int (see Elaborate).
+			{"free_ordering", "fn lt(x, y) -> Bool { x < y }", "lt", "lt_int(x@0, y@1)"},
+			{"free_equality", "fn same(x, y) -> Bool { x == y }", "same", "eq_int(x@0, y@1)"},
+			{"free_negation", "fn f(x) { let y = -x }", "f", "let y@1 = neg_int(x@0); ()"},
+			{"free_sum", "fn f(x) { let y = x + x }", "f", "let y@1 = add_int(x@0, x@0); ()"},
+		} {
+			c := testsupport.Compile(t, row.src+"\n")
+			elabWant(t, c, row.fn, row.want)
+		}
+	})
+
 	t.Run("block_is_a_let_chain", func(t *testing.T) {
 		// The last function has 100 000 statements, and the source is compiled
 		// with a stack of 1 MiB (see elabCompileCapped): a `block` that
@@ -642,11 +696,11 @@ fn second() -> Int { 2 }
 fn main() {}
 fn last() {}
 `)
-		// A Fun for each definition, with the id of its Def: the prelude's
-		// first, then the file's in source order.
+		// A Fun for each definition, with the id of its Def: the prelude's five
+		// first, then the file's four in source order.
 		rp, p := c.Frontend.Resolved, c.Core
-		if p.Funs.Len() != rp.Defs.Len() || p.Funs.Len() != 5 {
-			t.Fatalf("%d functions for %d definitions, want 5 of each", p.Funs.Len(), rp.Defs.Len())
+		if p.Funs.Len() != rp.Defs.Len() || p.Funs.Len() != 9 {
+			t.Fatalf("%d functions for %d definitions, want 9 of each", p.Funs.Len(), rp.Defs.Len())
 		}
 		for id, def := range rp.Defs.All() {
 			f := p.Funs.Get(core.FunID(id))
@@ -661,8 +715,10 @@ fn last() {}
 				t.Errorf("%s: UserModule is %v, want %v", name, f.UserModule, want)
 			}
 		}
-		if f := p.Funs.Get(0); c.Session.Interner.String(f.Name) != "print" || f.UserModule {
-			t.Errorf("function 0 is %q, want the prelude's print", c.Session.Interner.String(f.Name))
+		for i, name := range []string{"print", "printFloat", "toFloat", "truncate", "sqrt"} {
+			if f := p.Funs.Get(core.FunID(i)); c.Session.Interner.String(f.Name) != name || f.UserModule {
+				t.Errorf("function %d is %q, want the prelude's %s", i, c.Session.Interner.String(f.Name), name)
+			}
 		}
 		// Main is the function main, which is not the last one.
 		if !p.HasMain || c.Session.Interner.String(p.Funs.Get(p.Main).Name) != "main" {
@@ -690,6 +746,8 @@ fn last() {}
 			{"statement", "fn main() { let = 1 }\n", "core: cannot elaborate a statement that could not be read"},
 			{"name", "fn main() { y }\n", "core: cannot elaborate a name that stands for nothing"},
 			{"equality", "fn main() { () == () }\n", "core: cannot elaborate `==` on a value of type `()`"},
+			{"arithmetic", "fn main() { let b = true + 1 }\n", "core: cannot elaborate `+` on a value of type `Bool`"},
+			{"negation", "fn main() { let b = -() }\n", "core: cannot elaborate `-` on a value of type `()`"},
 			{"inequality", "fn main() { let f = main\n f != f }\n", "core: cannot elaborate `!=` on a value of type `() -> ()`"},
 		} {
 			p := testsupport.Analyze(t, row.src)
@@ -709,8 +767,8 @@ fn last() {}
 		p := testsupport.Analyze(t, "fn main() {}\n")
 		s, f := p.Session, p.Frontend
 		prog := s.Lower(f)
-		if prog == nil || !prog.HasMain || prog.Funs.Len() != 2 {
-			t.Fatalf("Lower returned %+v, want the Program of print and main", prog)
+		if prog == nil || !prog.HasMain || prog.Funs.Len() != 6 {
+			t.Fatalf("Lower returned %+v, want the Program of the five functions of the prelude and main", prog)
 		}
 
 		// The debug hook of the pass: the panic comes before the elaboration.

@@ -475,7 +475,7 @@ func (r *resolver) name(e syntax.Expr) Res {
 func (r *resolver) expr(id syntax.ExprID) {
 	e := r.m.Exprs.Get(id)
 	switch e.Kind {
-	case syntax.ExprInt, syntax.ExprBool, syntax.ExprUnit, syntax.ExprError:
+	case syntax.ExprInt, syntax.ExprFloat, syntax.ExprBool, syntax.ExprUnit, syntax.ExprError:
 		// No names inside.
 	case syntax.ExprName:
 		r.res.ExprRes[id] = r.name(e)

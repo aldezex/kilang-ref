@@ -170,6 +170,14 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		}
 		d = d.WithSecondary(diag.Label{Span: r.Because, Message: text})
 	}
+	// An Int literal where a Float is expected: the same number written as a Float
+	// is the edit, and it is certain because the checker only offers it for a
+	// number that a Float holds exactly (see exactAsFloat). Nothing else is offered
+	// for a type that does not fit, because which of the two is wrong is for the
+	// author to say; here a literal has no other meaning.
+	if r.IntAsFloat != "" {
+		d = d.WithHelp("write the number as a `Float`: `" + r.IntAsFloat + "`").WithFixIt(diag.Replace(foundAt, r.IntAsFloat))
+	}
 	switch r.Kind {
 	case ReasonAnnotation, ReasonLetAnnotation:
 		because("expected because of this annotation")

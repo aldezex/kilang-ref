@@ -42,17 +42,24 @@ const (
 	BuiltinUnit
 )
 
+// The builtins of Part II come after BuiltinUnit, in the order the sessions add
+// them, so that no builtin of Part I changes its value.
+const (
+	// BuiltinFloat is `Float`, the 64-bit IEEE number.
+	BuiltinFloat Builtin = BuiltinUnit + 1
+)
+
 // numBuiltins is the number of builtin types: the size of the table that maps
-// each Builtin to its TypeID. BuiltinUnit is the last constant, so a builtin
+// each Builtin to its TypeID. BuiltinFloat is the last constant, so a builtin
 // added after it has to move this line too.
-const numBuiltins = int(BuiltinUnit) + 1
+const numBuiltins = int(BuiltinFloat) + 1
 
 // TypeKind says what a Type is, and so which of its fields mean something.
 type TypeKind uint8
 
 // The kinds of type.
 const (
-	// TypeBuiltin is `Int`, `Bool` or `()`: Type.Builtin says which.
+	// TypeBuiltin is `Int`, `Bool`, `()` or `Float`: Type.Builtin says which.
 	TypeBuiltin TypeKind = iota
 	// TypeFun is a function type: Type.Params, Type.Ret and Type.Effects.
 	TypeFun
@@ -331,7 +338,7 @@ func (t *TypeTable) Occurs(v TypeVarID, in TypeID) bool {
 }
 
 // Show writes the type id the way a diagnostic shows it: `Int`, `Bool`, `()`,
-// `(Int, Bool) -> Int`, `() -> ()`; the error type is `{error}`. A variable
+// `Float`, `(Int, Bool) -> Int`, `() -> ()`; the error type is `{error}`. A variable
 // that has been bound shows what it is bound to. One that has not shows as a
 // name made up on the spot: `a` for the first unbound variable that the text
 // mentions, then `b`… up to `z`, and then `a1`, `b1`… The same variable has
@@ -446,6 +453,8 @@ func builtinName(b Builtin) string {
 		return "Bool"
 	case BuiltinUnit:
 		return "()"
+	case BuiltinFloat:
+		return "Float"
 	default:
 		panic("unreachable")
 	}

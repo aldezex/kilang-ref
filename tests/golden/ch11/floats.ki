@@ -1,0 +1,26 @@
+// test: T11.32
+// run: run
+// expect-stdout:
+// | 1.0
+// | 0.1
+// | 1000000.0
+// | 1e21
+// | NaN
+// | inf
+// | -inf
+// | 0.30000000000000004
+// | 1.5e-7
+// | -0.0
+fn main() {
+  let zero = 0.0
+  printFloat(1.0)
+  printFloat(0.1)
+  printFloat(1000000.0)
+  printFloat(1e21)
+  printFloat(zero / zero)
+  printFloat(1.0 / zero)
+  printFloat(-1.0 / zero)
+  printFloat(0.1 + 0.2)
+  printFloat(1.5e-7)
+  printFloat(-zero)
+}
