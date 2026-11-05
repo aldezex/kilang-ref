@@ -315,7 +315,9 @@ func (h *cascadeHunt) program(src string, limit int) (*cascadeReport, error) {
 		}
 		edits = sample
 	}
-	lastLine := strings.Count(src, "\n") + 1
+	// The last line with text. ki puts the end of the file on the line after a final
+	// newline, so counting that one too would let an error at the end pass as far.
+	lastLine := strings.Count(strings.TrimRight(src, "\n"), "\n") + 1
 	r := &cascadeReport{Mutants: len(edits), Histogram: map[int]int{}}
 	for _, e := range edits {
 		if err := h.edit(src, e, lastLine, r); err != nil {

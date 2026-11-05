@@ -158,6 +158,14 @@ not json
 //	a line with ELSE    does the same as BRACE, and line 1 gets another error
 //	a line with ONEPAD  gives one error on the first added function, however many
 //	a line with GROWS   gives, for each added line, one error at line 1
+//	a line with FARCOL  gives one error at 2:7, then one at that line
+//	a line with PASTEND gives one error at that line and one past the last line
+//	a line with ATEND   gives one error at that line and one on the last line
+//	a line with NEARGROW gives one error at the next line and, for each added line,
+//	                    one error at line 1
+//	a line with FNPADS  gives one error on each added function, and none next to
+//	                    the edit
+//	the text `ONCE a`   gives one error on the first added function, however many
 //	ICE exits with 70, and HANG never ends
 const fakeKi = `#!/bin/sh
 f="$3"
@@ -165,6 +173,14 @@ grep -q ICE "$f" && exit 70
 grep -q HANG "$f" && exec sleep 60
 awk '
 function diag(n) { printf "{\"severity\":\"error\",\"code\":\"E1\",\"message\":\"m\",\"line\":%d,\"col\":1}\n", n; bad = 1 }
+function diagat(n, c) { printf "{\"severity\":\"error\",\"code\":\"E1\",\"message\":\"m\",\"line\":%d,\"col\":%d}\n", n, c; bad = 1 }
+/FARCOL/ { diagat(2, 7); diag(NR) }
+/PASTEND/ { diag(NR); pastend = 1 }
+/ATEND/ { diag(NR); atend = 1 }
+/NEARGROW/ { nextline = NR + 1; grows = 1 }
+/FNPADS/ { fnpads = 1 }
+fnpads && /fn bookxPad/ { diag(NR) }
+/ONCE a/ { onepad = 1 }
 function item(n, what, word) { printf "{\"severity\":\"error\",\"code\":\"E0201\",\"message\":\"expected %s, found \140%s\140\",\"line\":%d,\"col\":1}\n", what, word, n; bad = 1 }
 function closer(n, c) { printf "{\"severity\":\"error\",\"code\":\"E0202\",\"message\":\"unclosed delimiter\",\"line\":%d,\"col\":1,\"help\":\"close it with \140%s\140\"}\n", n, c; bad = 1 }
 /NEXT/ { nextline = NR + 1 }
@@ -188,7 +204,7 @@ grows && /bookx(Pad|Let)/ { diag(1) }
 /STRAY/ { diag(NR); diag(1) }
 /FAR/ { diag(1) }
 open && /bookx(Pad|Let)/ { diag(NR) }
-END { exit bad }
+END { if (pastend) diag(NR + 1); if (atend) diag(NR); exit bad }
 ' "$f" >&2
 `
 
@@ -358,11 +374,56 @@ func TestCascadeRun(t *testing.T) {
 				t.Errorf("%s starts an item", line)
 			}
 		}
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `1`", Line: 1}) {
+			t.Errorf("an E0201 about another token, on a line that starts with fn")
+		}
+		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `}`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 0}) {
+			t.Errorf("line 0 is no line")
+		}
 		if braceLimit([]kiDiagnostic{{Code: "E0202", Help: "close it with `)`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 1}) {
 			t.Errorf("an E0202 for a `)`")
 		}
 		if braceLimit([]kiDiagnostic{{Code: "E0201", Help: "close it with `}`"}}, "fn f\n")(kiDiagnostic{Code: "E0201", Message: "expected expression, found `fn`", Line: 1}) {
 			t.Errorf("an E0201 whose help names `}` is no E0202")
+		}
+	})
+
+	t.Run("a_far_error_may_come_first_and_is_named_by_line_and_column", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\nb\nc\nd\n", "FARCOL")
+		if code != exitOK || !strings.Contains(out, "p.ki:4:1: far: rep `d` -> `FARCOL`: an error at 2:7, and the edit is on line 4\n") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("past_the_last_line_is_not_far_and_the_last_line_is", func(t *testing.T) {
+		_, past, _ := cascadeRun(t, "a\nb\nc\nd\n", "PASTEND")
+		if strings.Contains(past, ": far:") {
+			t.Errorf("an error past the end, where a delimiter left open belongs, is listed:\n%s", past)
+		}
+		_, last, _ := cascadeRun(t, "a\nb\nc\nd\n", "ATEND")
+		if !strings.Contains(last, "p.ki:1:1: far: rep `a` -> `ATEND`: an error at 4:1, and the edit is on line 1\n") {
+			t.Errorf("an error on the last line is not listed:\n%s", last)
+		}
+	})
+
+	t.Run("an_error_next_to_the_edit_does_not_excuse_what_grows", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\n", "NEARGROW")
+		if code != exitFail || !strings.Contains(out, ": grows: rep `a` -> `NEARGROW`") || !strings.Contains(out, ": none on the added lines\n") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("what_grows_names_its_first_error_on_an_added_line", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\n", "FNPADS")
+		if code != exitFail || !strings.Contains(out, ": grows: rep `a` -> `FNPADS`") || strings.Contains(out, "none on the added lines") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
+		}
+	})
+
+	t.Run("one_finding_alone_fails", func(t *testing.T) {
+		code, out, _ := cascadeRun(t, "a\n", "ONCE")
+		if code != exitFail || !strings.Contains(out, " 0 grow, 1 at correct text, ") {
+			t.Errorf("code %d, stdout:\n%s", code, out)
 		}
 	})
 
