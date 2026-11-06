@@ -91,7 +91,8 @@ const checkFind = (o) => (r, label) => {
       need(!f.where.startsWith('book/ch'), name, 'owner code but where is the chapter text: ' + f.where)
       need(f.kind !== 'text', name, 'owner code cannot have kind text')
     }
-    need(f.severity !== 'Nit' || o.nits === true, name, 'only the truth readers report Nits')
+    // Only the truth readers grade Nits; another reader's Nit is kept as a Minor, not a reason to stop.
+    if (f.severity === 'Nit' && o.nits !== true) f.severity = 'Minor'
   }
 }
 const checkDone = (path) => (r, label) => {

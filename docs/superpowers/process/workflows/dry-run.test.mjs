@@ -148,7 +148,7 @@ test('a bad result is a stop too: owner, kind, Nit, emptiness, report path', asy
     none(w, LATER)
   }
   const nit = await chapter({}, { 'ch11:pass:apprentice': finds(F('pass-apprentice-1', 'Nit', 'prose', 'text', true)) })
-  assert.ok(nit.r.stopped, 'only the truth readers report Nits')
+  assert.ok(!nit.r.stopped, 'another reader\'s Nit is kept as a Minor, not a stop')
   const ok = await chapter({}, { [lens]: finds(F('pass-facts-1', 'Nit', 'prose', 'text', true)) })
   assert.equal(ok.r.status, 'ready-to-publish')
   assert.ok(!ok.w.called.includes('ch11:fix1'), 'a Nit starts nothing')
@@ -231,7 +231,7 @@ test('in the gate and the session reviews a false reason goes to the batch, not 
   assert.equal(review.r.stopped, 'ch11:batch')
   assert.match(review.r.reason, /left silently.*review-T50-1/)
   const nit = await chapter({}, { 'ch11:gate1:truth': finds(LIE('gate1-truth-1', 'Nit', 'code', 'other', false)) })
-  assert.ok(nit.r.stopped, 'only the truth readers report Nits, and the gate has none')
+  assert.ok(nit.w.called.includes('ch11:gate1:batch'), 'a gate Nit is kept as a Minor: a false one goes to the batch')
   const minor = await chapter({}, { 'ch11:gate1:truth': finds(LIE('gate1-truth-1', 'Minor', 'code', 'other', false)) })
   assert.ok(minor.w.called.includes('ch11:gate1:batch'))
   assert.match(minor.r.trace.find((x) => x.label === 'ch11:gate1:batch').prompt, /gate1-truth-1/)
