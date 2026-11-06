@@ -61,6 +61,11 @@ func (b *Builder) Con(sp base.Span, c CtorID, args []ExprID) ExprID {
 	return b.add(Expr{Kind: Con, Span: sp, Ctor: c, Args: base.AppendRange(&b.P.ExprPool, args)})
 }
 
+// Proj makes the read of the field number index of the value of target.
+func (b *Builder) Proj(sp base.Span, target ExprID, index uint32) ExprID {
+	return b.add(Expr{Kind: Proj, Span: sp, Target: target, Index: index})
+}
+
 // Prim makes a call of the primitive p with args, which the Builder copies like
 // Call does.
 func (b *Builder) Prim(sp base.Span, p Prim, args []ExprID) ExprID {

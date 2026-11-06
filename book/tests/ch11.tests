@@ -458,7 +458,7 @@ ref:     TestTypeNames/attributes_on_a_type
 kind:    unit (go test)      file: internal/core/elaborate_test.go
 case:    cada definición es una `Fun` con su id: la de un tipo es un relleno `()` y la de un constructor su envoltorio, con un parámetro por campo (con el nombre del campo, o `a0`, `a1`… por posición) y por cuerpo el `Con` del constructor sobre ellos
 input:   `Shape` con `Circle(r: Float)`, `None`, `Pair(Int, Bool)` y `Mixed(a: Int, Bool)`, un record `Point`, un alias `Meters` y `main`
-expect:  13 funciones para 13 definiciones en el orden `Shape Circle None Pair Mixed Point Meters main`; los tipos con cuerpo `()` y sin parámetros; `Circle(r@0)`, `None`, `Pair(a0@0, a1@1)` y `Mixed(a@0, a1@1)` con un marco del tamaño de sus parámetros y todo en el span del nombre; `Program.Ctors` con cuatro `Ctor` de tag, aridad y campos exactos, sin `Tuple`
+expect:  13 funciones para 13 definiciones en el orden `Shape Circle None Pair Mixed Point Meters main`; los tipos con cuerpo `()` y sin parámetros; `Circle(r@0)`, `None`, `Pair(a0@0, a1@1)` y `Mixed(a@0, a1@1)` con un marco del tamaño de sus parámetros y todo en el span del nombre; `Program.Ctors` con los cuatro `Ctor` de las variantes, de tag, aridad y campos exactos, y el del record `Point` detrás (`Record`, sin tag), sin `Tuple`
 why:     el envoltorio es lo que vale `let f = Circle`: sin sus parámetros su cuerpo usaría variables sin ligar y Lint daría un ICE en todo programa con un constructor con campos.
 ref:     TestElaborate/types_are_fillers_and_constructors_are_wrappers
 
@@ -552,10 +552,10 @@ ref:     TestDeclare/a_long_alias_chain_is_followed_without_recursion
 
 [T11.70] declare.alias_cycle_E0801                        level: core
 kind:    unit (go test)      file: internal/sema/declare_test.go
-case:    un ciclo de alias es un solo E0801, sobre el alias que va primero en el fuente y con una secundaria en cada uno de los demás en el orden del ciclo; los alias del ciclo y los que llevan a él tienen el tipo de error
-input:   ciclos de dos, de uno (`type A = A`) y de tres; una entrada por el medio (`R = N`, `M = N`, `N = M`); dos ciclos separados; un ciclo usado en `f(a: A) -> Int { a }`; y un ciclo de 4 000 alias
-expect:  por cada ciclo un E0801 «alias `A` refers to itself» con la primaria «this alias is part of a cycle», las secundarias «through `B`, defined here» y la nota; en la entrada por el medio, `M` primero y `N` de secundaria, y nada para `R`; en el ciclo usado, ese único error; una suma que se nombra a sí misma no es un ciclo; el ciclo largo, un solo error con 3 999 secundarias, de `A1` a `A3999`, que reservó como mucho 64 MiB
-why:     avisar por cada alias daría tres errores por un ciclo de tres; no avisar dejaría un alias sin fin.
+case:    un ciclo de alias es un solo E0801, sobre el alias que va primero en el fuente y con una secundaria en cada uno de los demás en el orden del ciclo; los alias que vuelven unos a otros de más de una manera son un solo ciclo y un solo E0801, con una secundaria en cada miembro; los alias del ciclo y los que llevan a él tienen el tipo de error
+input:   ciclos de dos, de uno (`type A = A`) y de tres; una entrada por el medio (`R = N`, `M = N`, `N = M`); dos ciclos separados; tres con más de un camino de vuelta (`A = (A, B)` con `B = (A, Int)` y `D = (A, Bool)`, `A = (B, C)` con `B = A` y `C = A`, y tres alias que se nombran todos entre sí); un ciclo usado en `f(a: A) -> Int { a }`; un ciclo de 4 000 alias, y una cadena de 4 000 alias que nombran todos al primero
+expect:  por cada ciclo un E0801 «alias `A` refers to itself» con la primaria «this alias is part of a cycle», las secundarias «through `B`, defined here» y la nota; en la entrada por el medio, `M` primero y `N` de secundaria, y nada para `R`; en las tres de más de un camino, un solo E0801 sobre `A`, con las secundarias `B` (y `C`), y nada para `D`; en el ciclo usado, ese único error; una suma que se nombra a sí misma no es un ciclo; el ciclo largo y la cadena larga, cada uno un solo error con 3 999 secundarias, de `A1` a `A3999`, que reservó como mucho 64 MiB
+why:     avisar por cada alias daría tres errores por un ciclo de tres, y por cada camino de vuelta, uno por camino; no avisar dejaría un alias sin fin.
 ref:     TestDeclare/alias_cycle_E0801
 
 [T11.71] declare.unknown_type_E0406                       level: core
@@ -781,3 +781,495 @@ input:   un `Con` de 1, 2, 3, 4, 5 y 9 argumentos y una llamada a una función d
 expect:  en los doce casos `Call` da true y deja 0 slots cobrados; el `Con` construye un `ConV` con tantos campos como argumentos
 why:     sin dar tamaño a la lista, `append` la agranda y la cuenta de la pila baja: lo mata el mutante que quita el `make`.
 ref:     TestMachineFrames/frames_balance_the_slots
+
+[T11.99] syntax.record_literals                           level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    un literal `Nombre { campo: valor, … }` se lee con sus campos en el orden escrito, con punning, con `..base`, con coma final, en varias líneas y vacío; también con el nombre en minúsculas, si tras la `{` vienen campos, y es la resolución la que dice que ese tipo no existe
+input:   13 literales, de `Point { x: 1.0, y: 2.0 }` a `Line { a: Point { x: 1.0 }, b: p }`; y `point { x: 1.0 }`, `point { x, y }` y `point { ..p }`
+expect:  el volcado del AST de cada uno: `(record Point (x x) (y y))` para el punning, `(record Point (x 3.0) (.. p))` para la base y `(record Point)` para el vacío y `(record point (x 1.0))` para el de minúsculas
+why:     si el punning o la base se leyeran mal, el comprobador vería otro programa y el error saldría lejos de lo que escribiste.
+ref:     TestDataParse/record_literals
+
+[T11.100] syntax.field_access_and_tuple_index             level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    `.` ata más fuerte que cualquier operador y se encadena en los dos órdenes; `n.0.1` y `n.1.1.0`, que el lexer parte en un `Float`, son dos y tres índices
+input:   17 filas, entre ellas `p.x.y`, `t.0(1)`, `n.0.1`, `n.1.1.0`, `n.1.2.3.4`, `-t.0`, `a + t.0 * 2`, `t . 0` y `t.4294967296`
+expect:  el volcado de cada una, por ejemplo `(index (index n 0) 1)`, `(neg (index t 0))` y `(+ a (* (index t 0) 2))`
+why:     si `n.0.1` se leyera como el `Float` `0.1`, no podrías escribir un acceso a tuplas anidadas sin paréntesis.
+ref:     TestDataParse/field_access_and_tuple_index
+
+[T11.101] syntax.tuples_and_the_tuple_type                level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    `()` sigue siendo la unidad y `(e)` un paréntesis; dos o más elementos son una tupla, de cualquier tamaño y anidada, y el tipo `(Int, Bool)` se lee igual
+input:   diez expresiones (`(1)`, `((1))`, `(1, true)`, una de 8 elementos, una anidada…) y los tipos de un parámetro, un retorno, un alias y un campo
+expect:  `1`, `1`, `(tuple 1 true)`, … y `(tuple Int (tuple Bool ()))`; el tipo `(Int, Bool)` va del `(` al `)` y tiene dos elementos con nombre, `Int` y `Bool`, cada uno en su sitio
+why:     si `(e)` se tomara por una tupla de uno, cada paréntesis cambiaría el tipo y `(a + b) * c` dejaría de compilar.
+ref:     TestDataParse/tuples_and_the_tuple_type
+
+[T11.102] syntax.no_record_literal_in_an_if_head          level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    en la condición de un `if`, fuera de todo delimitador, `Nombre {` es un nombre y el bloque; dentro de paréntesis, argumentos, tupla, bloque y ramas vuelve a ser un literal; un `{` en la línea siguiente nunca lo es; y lo que solo puede ser un literal (`{ x: …`, `{ x, …` o `{ ..p`) se lee como tal y es un E0201 con la edición de los paréntesis; un nombre en minúsculas en la cabeza no es un literal, como sí lo es fuera de ella
+input:   17 filas, entre ellas `if x == Origin { 1 } else { 2 }`, `if (Origin { x: 1 }) == o { … }`, `if g(Origin { x: 1 }) { … }`, `if (x) == Origin { … }` y `Origin` seguido de `{ 1 }` en la línea de abajo; `Point { x: 1.0, y: 2.0 }.x`, `Point { x, y: 2.0 }.x` y `Point { ..p }.x` en la cabeza de un `if`; `if x == Origin { y }`; `if b { x: 1 }`; y `P { x: 1 y: 2, … }` roto
+expect:  el volcado de cada fila: `(if (== x Origin) (block 1) (block 2))` con `Origin` como nombre, y `(record Origin (x 1))` donde es un literal; en los tres literales de la cabeza, un único E0201 «a record literal in the head of an `if` needs parentheses» sobre el literal, con su etiqueta, su ayuda y dos inserciones, `(` y `)`, que dejan el programa sin errores, y el literal en el árbol; `{ y }` es un bloque; el literal roto da solo su E0201 «expected `}`, found `y`»
+why:     sin la regla `Origin { 1 }` sería un literal, y sin su propio E0201 un literal en la cabeza daría cuatro errores, tres falsos.
+ref:     TestDataParse/no_record_literal_in_an_if_head
+
+[T11.103] syntax.record_and_tuple_nodes                   level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    los campos de los nodos que el impresor no enseña: los spans del literal, de su nombre y de sus llaves, el pun y su valor, la base, el span del acceso y el de la tupla
+input:   `Point { x, y: 2.0, ..p }.x` y `(1, true)`
+expect:  `Span` de `Point` a `}`, `NameSpan` en `Point`, `OpSpan` de `{` a `}`; el pun `x` con un `ExprName` del mismo span, `y` sin pun, la base `p`; el acceso acaba en la `x` final; la tupla va de `(` a `)` con 2 elementos
+why:     los diagnósticos de E0409 a E0413 se dibujan sobre estos spans: si uno cambia, la etiqueta cae en otro sitio.
+ref:     TestDataParse/record_and_tuple_nodes
+
+[T11.104] syntax.tuple_index_nodes_and_saturation         level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    cada índice de `n.0.1` es un nodo con su span, sus dígitos y su valor; uno que no cabe en 32 bits se queda en el mayor y `Name` guarda lo escrito; un número que el lexer rechazó, porque no cabe en un `Int`, está mal escrito o es un `Float` fuera de rango, ya lo dijo él y no es un índice
+input:   `n.0.1`; `t.4294967294`, `t.4294967295`, `t.4294967296`, `t.99999999999`, `t.99999999999.1`, `t.9223372036854775807`, `t.9223372036854775808.1`, `t.9223372036854775808` y otros diez que el lexer rechaza (`t.1_`, `t.1__`, `t.0_0_`, `t.0x_`, `t.0x1_`, `t.0b`, `t.1_.5`, `t.1.5_`, `t.1e5_` y `t.1e999`)
+expect:  dos nodos de índices 0 y 1 con spans 9..12 y 9..14 y dígitos en 11..12 y 13..14; `Index` 4294967294 y 4294967295 en los dos primeros y 4294967295 en los otros, sin diagnósticos; `Name` con los dígitos escritos; en `t.9223372036854775808` y en los diez que el lexer rechaza, un único diagnóstico, el del lexer (E0105, E0107 en los nueve mal escritos y E0109 en `t.1e999`), ningún nodo de índice y un nodo de error
+why:     `t.99999999999` tiene que decir `99999999999` en el error, no un número recortado a 32 bits.
+ref:     TestDataParse/tuple_index_nodes_and_saturation
+
+[T11.105] syntax.not_an_index_or_a_name_after_a_dot       level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    tras un `.` solo valen un nombre en minúscula o los dígitos de un índice escritos de una manera: `1e5`, `01`, `0x1`, `1_0`, `1.5e3`, `0.01`, un nombre en mayúscula, una palabra clave, un `(` o el final son E0201; con ceros a la izquierda, la ayuda y la edición escriben el índice sin ellos
+input:   nueve fuentes `fn f() { t.… }` y `t. }` y `t.0. }`; cuatro con ceros a la izquierda (`t.01`, `t.00`, `t.0.01` y `t.007.1`); y cinco sin ayuda (`t.1e5`, `t.0x1`, `t.1_0`, `t.1.5e3` y `t.A`)
+expect:  en cada una exactamente un E0201 `expected field name or tuple index, found …` con la primaria sobre el token que se encontró; la etiqueta dice «expected field name or tuple index here»; en las cuatro de los ceros, además, la ayuda «write the index without leading zeros: `1`» (`0`, `0.1` y `7.1` en las otras) y una edición que deja la fuente sin diagnósticos; en las cinco, ni ayuda ni edición
+why:     el lexer acepta `1e5` o `0x1` como números: el parser tiene que rechazarlos aquí, porque un índice se escribe de una sola manera.
+ref:     TestDataParse/not_an_index_or_a_name_after_a_dot_E0201
+
+[T11.106] syntax.tuple_and_record_mistakes                level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    un elemento y una coma es una expresión que falta, y un solo tipo entre paréntesis una `,` que falta, con su ayuda; una coma tras el último elemento, de una tupla o de su tipo, es otro elemento que falta, y la tupla es un nodo de error y no una tupla con un error dentro; dentro de las llaves de un literal un error es un E0201 y el resto del literal, hasta su propia `}`, se salta; si falta la `,` entre dos campos (o hay una `;` en su lugar) el E0201 trae la ayuda y la edición que la escriben, también cuando el campo siguiente es solo un nombre y está en su línea bajo el anterior o en la misma, y el resto se lee y el literal es un nodo de error; un nombre suelto que no está bajo el campo anterior ni lleva `:` no es un campo; un campo con mayúscula trae la ayuda de la regla y la edición que lo escribe con minúscula; un elemento que falta en medio de una tupla es el mismo error que el del final
+input:   `(1,)`, `(1, 2,)`, `(1, , 2)`, `(1, 2 3)`, `-> (Int)`, `-> (Int, Bool,)`, `-> (Int, Bool Int)`, `-> (Int, 1)`, seis literales rotos, `a { 1 }` con un nombre en minúscula, dos fuentes con `(1, 2,)` y con `(1,)` seguidos de `let b = 3`, y dos con un literal roto seguido de `let b = 3` y de otra función; `Point { x: 1 y: 2 }`, `Point { x: 1; y: 2 }` y `Point { x: 1 ..p }`; diez literales con la `,` o la `;` mal (entre ellos uno con un campo por línea, otro con un `;` y un salto de línea y cinco con un campo que es solo un nombre: en la línea de abajo, tras un campo con valor, en la misma línea, con su coma y bajo el campo anterior) y otro con tres campos y dos `;`; `Point { x y z }` y `Point { x: 1.0 y ..p }`; `Point { x: 1 y + 1 }`, un `y` solo en su línea que no está bajo `x: 1.0`, y un literal sin `}` seguido de una línea con `p`; `Point { X: 1.0 }` y `Point { x: 1.0, Yy: 2.0 }`
+expect:  un único E0201 con su mensaje y su posición en cada una (`expected newline, found `{`` para `a { 1 }`, `expected type, found `)`` para `(Int, Bool,)`, `expected `,` or `}`, found `y`` para `Point { x: 1 y: 2 }`), con la ayuda «a tuple type has two or more types, as in `(Int, Bool)`» para `(Int)`; en las de la `,` o la `;`, la ayuda «separate the fields with `,`» y una edición que escribe la `,` (en el sitio de la `;`) y deja la fuente sin diagnósticos, y el volcado de la del campo por línea es `(let p _ (error))` seguido de `(let b _ 3)`; en `x y z` y en `x: 1.0 y ..p` un único E0201, «expected `,` or `}`, found `y`»; en `y + 1` y en el `y` que no está bajo el campo anterior, un único «expected `}`, found `y`», y en el literal sin `}` un único «expected `}`, found `p`» con la etiqueta «unclosed `{` opened here»; en las de las mayúsculas, la ayuda «a field name starts with a lowercase letter» y una edición que deja `x` y `yy`; con la coma final el bloque es `(expr (error))` y `(let b _ 3)`; en las dos fuentes del literal un único E0201, y el `let b` y la función siguiente siguen en el árbol
+why:     si el salto no contara las llaves del literal, su `}` cerraría el bloque, saldría otro error en esa línea y `let b` quedaría fuera.
+ref:     TestDataParse/tuple_and_record_mistakes_E0201
+
+[T11.107] syntax.if_head_rule_does_not_outlive_it         level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    lo que la cabeza de un `if` apaga vuelve a estar encendido después, también tras un error anterior: los literales de después, y los de dentro de un grupo o de un campo, se leen
+input:   `fn f() { 1 + }` y una función con dos `if` seguidos de literales, una tupla de dos literales y un literal con un campo y una base que son literales
+expect:  un único diagnóstico y el volcado de la segunda función con los cinco literales leídos como `record`
+why:     si el `if` dejara la regla puesta, el primer literal tras él se leería como un nombre y un bloque, y el error saldría lejos.
+ref:     TestDataParse/the_rule_of_the_if_head_does_not_outlive_it
+
+[T11.108] syntax.access_continues_the_chain_operand       level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    la ayuda del E0203 solo reescribe los tres operandos si cada uno es un token: el tercero no lo es cuando le sigue un acceso (`z.w`), como cuando le sigue una llamada o un operador
+input:   `x < y <= z`, `x < y <= z.w` y `x < y <= z.0`
+expect:  un único E0203 en cada una; la ayuda es «use `&&`: `x < y && y <= z`» en la primera y la genérica «use `&&`: `a < b && b < c`» en las otras dos
+why:     una ayuda que reescribiera `x < y && y <= z` para `z.w` perdería el `.w` en lo que te propone.
+ref:     TestDataParse/an_access_continues_the_third_operand_of_a_chain
+
+[T11.109] syntax.many_elements_and_fields                 level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    los elementos de una tupla y los campos de un literal son un nivel cada uno mientras se leen y lo devuelven: 300 en fila no son 300 niveles
+input:   una tupla de 300 elementos, un tipo tupla de 300, un literal de 300 campos, el mismo con base y 300 updates seguidos
+expect:  ningún diagnóstico en ninguna
+why:     un nivel que no se devolviera haría que el elemento 257 de una tupla, o el update 257 de una función, fuera un E0204 falso.
+ref:     TestDataParse/many_elements_and_fields_are_not_many_levels
+
+[T11.110] syntax.end_of_file_inside_a_type_or_a_literal   level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    el final del fichero con el `(` de un tipo tupla, o el `{` de un literal, todavía abierto es E0202 sobre ese delimitador, y no un tipo o un campo que falta
+input:   `fn f() -> (`, `-> (Int,`, `-> (Int`, `fn f(x: (Int, (Bool,`, cinco literales cortados, de `Point {` a `Point { x: 1.0, y: Line { z: 2`, y uno con su campo solo en una línea y el fichero acabado justo tras su coma
+expect:  en las diez exactamente un E0202 con la primaria en el `(` o en la `{` que se abrió
+why:     el error tiene que estar donde abriste el paréntesis o la llave, no en un final de fichero que no dice qué falta.
+ref:     TestDataParse/the_end_of_the_file_inside_a_type_or_a_literal_is_E0202
+
+[T11.111] syntax.end_of_file_inside_a_broken_literal      level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    un literal roto y sin cerrar son dos errores: el de las llaves y el `{` que el salto hasta su `}` no encuentra, sobre ese `{`, con llaves propias dentro de lo que se salta o sin ellas, y se rompa en el primer campo o después
+input:   cinco fuentes: `Point { x 1, y: 2, z: 3`, `Point { x 1, y: Line { z: 2 }, w: 3`, `Point { x 1, y: Line { z: 2`, `Point { 1, y: 2` y `Point { , y: Line { z: 2`
+expect:  en cada una un E0201 y un E0202, y el E0202 sobre la `{` de `Point`
+why:     si el salto no avisara del `{` abierto, un fichero cortado a mitad de un literal roto callaría que le falta la llave.
+ref:     TestDataParse/the_end_of_the_file_inside_a_literal_that_went_wrong_is_E0202
+
+[T11.112] syntax.literal_error_node                       level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    lo que detiene a un literal salta el resto hasta su propia `}`, y una `,` que falta no lo detiene pero lo estropea: se lee hasta su `}` y el literal es, en los dos casos, un `ExprError` que lo cubre entero, del nombre a esa `}`
+input:   `Point { 1 }`, `Point { x: 1 y: 2 }`, `Point { ..p, x: 1 }`, uno con llaves dentro, dos con un valor y una base de 257 niveles y dos literales a 256 niveles de profundidad
+expect:  un `ExprError` con el span exacto del literal en cada una, dos (el literal y la sentencia abandonada) cuando el valor o la base pasan del límite
+why:     el resto del compilador ve este nodo: si no cubriera el literal entero, los errores de después caerían en mitad de él.
+ref:     TestDataParse/a_literal_that_could_not_be_read_is_an_error_node
+
+[T11.113] syntax.tuple_type_error_node                    level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    lo que detiene a un tipo tupla deja un `TypeError` que cubre lo leído, del `(` hasta el token anterior al que paró; con 257 niveles son 257 `TypeError`: el primero tiene el span vacío en el `(` 257 y el más externo cubre los 256 leídos
+input:   seis retornos rotos, de `(Int, 1)` a `((Int, Bool, 1), Int)`, y un parámetro de 257 niveles
+expect:  un `TypeError` con el span exacto en cada retorno; en el de 257 niveles, 257 `TypeError`, el primero con el span vacío en el `(` 257 y el mayor de 256 bytes
+why:     los pases de después leen un `TypeError` como un tipo ya señalado; sin su clase exacta leerían un nombre que no escribiste.
+ref:     TestDataParse/a_tuple_type_that_could_not_be_read_is_an_error_node
+
+[T11.114] syntax.removal_of_a_field_of_a_literal          level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    `FieldInit.Removal` cubre lo que borra la edición del E0411: el campo con su coma y los blancos que siguen, y los de antes si está solo en su línea; el último, con la coma de antes; el único, él solo; y es de una línea si ninguna cae dentro
+input:   los literales de la tabla: de dos y de tres campos, de uno, con coma final, con tabuladores, con puns, en varias líneas, con un campo que comparte línea con otro, con tabuladores y CRLF, y con un valor en varias líneas
+expect:  el texto de `Removal` y `RemovalOneLine` de cada campo: `x: 1.0, ` y `, y: 2.0` en `Point { x: 1.0, y: 2.0 }`, `a: 1` solo, `  a: 1,` con su sangría cuando el campo está solo en su línea, y `,\n  b: 2` con `RemovalOneLine` falso en varias líneas
+why:     una edición que borrara una coma de más o de menos dejaría un literal que no compila o dos campos pegados.
+ref:     TestDataParse/removal_of_a_field_of_a_literal
+
+[T11.115] syntax.nesting_of_tuple_types                   level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    cada `(` de un tipo tupla es un nivel de anidamiento: se leen 256, el 257 es un único E0204 aunque haya 10 000, y el error siguiente de la misma función se sigue dando
+input:   tipos de 256, 257 y 10 000 niveles en un parámetro seguidos de `fn g() {}`, 300 tipos tupla seguidos y 300 parámetros con uno, y uno de 257 en un `let` seguido de `let = 2` y de `let y = 1 +`
+expect:  con 256, con 300 en fila y con 300 parámetros ningún error; con 257 y con 10 000 exactamente un E0204 «type is nested too deeply» sobre el `(` 257, con la ayuda «split the type with `type` aliases» y no la de los `let`, y `g` leída, y `Analyze` da solo E0204; con el `let`, el E0204 y después «expected identifier, found `=`» y «expected expression, found `}`»
+why:     sin el límite, 10 000 niveles se aceptarían sin error, y un tipo abandonado no debe callar los errores siguientes.
+ref:     TestDataParse/nesting_of_tuple_types_E0204
+
+[T11.116] syntax.accesses_count_in_the_chain              level: core
+kind:    unit (go test)      file: internal/syntax/data_test.go
+case:    cada `.` es un eslabón de la cadena de una sentencia, como un operador o una llamada, y `t.0.1` son dos: se leen 1024 y 1025 son un único E0205
+input:   1024 y 1025 `.0`, 512 y 513 `.0.1`, 1023 `.0` y un `.0.1`, 1025 `.x`, 1023 `.x` y un `.0.1`, `1 +` delante de 1024 accesos y dos sentencias de 1024
+expect:  sin errores en las de 1024 eslabones y en las dos sentencias; exactamente un E0205 en las demás, con la primaria sobre el `.` 1025 o, si es el segundo índice de un `0.1`, sobre ese token
+why:     el límite hace que una cadena de 100 000 accesos sea un único error y no un árbol de 100 000 niveles: sin él se acepta sin error.
+ref:     TestDataParse/accesses_count_in_the_chain_E0205
+
+[T11.117] syntax.printer_data_expressions                 level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_data_test.go
+case:    el impresor del AST escribe un acceso, un índice, una tupla y un record, con o sin base, a partir de árboles hechos a mano
+input:   once árboles: `p.x`, un índice de `99999999999`, tuplas anidadas, records con campos, sin ellos, con base y con una base que no está, y un record dentro de una llamada
+expect:  `(field p x)`, `(index t 99999999999)` con los dígitos escritos y no el `Index`, `(tuple (tuple 1 2) () x)`, `(record Point (x 3.0) (.. p))` y sin `(..` cuando `HasBase` es falso
+why:     es el formato de `ki emit ast` para los nodos nuevos: si ignorara `HasBase`, escribiría una base que el programa no tiene.
+ref:     TestPrinterData/expressions
+
+[T11.118] syntax.printer_data_tuple_types                 level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_data_test.go
+case:    un tipo tupla se escribe `(tuple T T…)`, y se anida
+input:   un `let x: (Int, (Bool, ())) = y` hecho a mano
+expect:  `(fn f (params) (ret _) (block (let x (tuple Int (tuple Bool ())) y)))`
+why:     fija cómo se ve un tipo tupla en `ki emit ast`, que es lo que lees para comprobar que el parser entendió tu anotación.
+ref:     TestPrinterData/tuple_types
+
+[T11.119] check.types_of_records_and_tuples               level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un literal tiene el tipo de su record, en cualquier orden de campos, con pun, con base o por un alias; `p.x`, el del campo; una tupla, la de los tipos de sus elementos; dos records con campos del mismo nombre no se mezclan; y un campo repetido en un record es un E0302
+input:   13 expresiones de `Point` y de tuplas anidadas, y `a.w`, `b.w` y `b.v` de dos records `A` y `B` con los mismos nombres de campo; `type C { v: Int, v: Bool, w: Int }` con `c.v`, `c.w` y `C { v: 1, w: 2 }`; y `type C { v: Int, v: Nope }`
+expect:  `Point`, `Float`, `(Int, Bool)`, `Bool`, `(Int, Int)`, `(Int, (Bool, Float))`, `(Bool, Float)`; `a.w` es `Bool`, `b.w` es `Float` y `b.v` es `()`, sin error; en `C`, un solo E0302 «`v` is defined more than once» sobre la segunda `v`, con «first defined here» sobre la primera, `c.v` y `c.w` son `Int` y el literal no echa en falta nada ni sobra `w`; en el último, además, el E0406 de `Nope`
+why:     con un solo espacio de campos, `b.w` tomaría el tipo de `A`; y con el repetido como campo, cada literal daría un E0410 falso.
+ref:     TestDataCheck/types_of_records_and_tuples
+
+[T11.120] check.values_are_checked_against_the_fields     level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    cada valor se comprueba contra el tipo de su campo, con la etiqueta de la declaración; la base, contra el record, sin declaración que señalar; y una tupla contra su anotación
+input:   `Point { x: 1, y: 2.0 }`, un pun `x` de tipo `Int`, `..s` con `s` un `Shape`, y `(1, 2)` y `(1, true, 2)` anotadas `(Int, Bool)`
+expect:  cinco E0401: «expected `Float`, found `Int`» con «the field is declared here» sobre `x: Float` (dos veces, y solo el del literal `1` con la edición que escribe `1.0`), «expected `Point`, found `Shape`» sin secundaria y las dos tuplas con «expected because of this annotation»
+why:     el error tiene que señalar el campo declarado: ves de dónde sale el tipo que se esperaba, no solo que algo no encaja.
+ref:     TestDataCheck/values_are_checked_against_the_fields_E0401
+
+[T11.121] check.unknown_field_E0409                       level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    `p.z` y `Point { z: … }` son E0409 con «unknown field», la declaración del tipo, y la pregunta y la edición cuando un campo se parece; en un literal no se propone un campo que ya se da, y no se añade un E0410
+input:   un acceso con `z` y otro con `whatever`, un literal con `z` y otro con un campo de más; `Point { z: 1.0 + true, x: false, y: 2.0 }`; dos programas con su edición, `Point { x: 1.0, w: 2.0 }` entre ellos; cuatro con su edición, `Point { xx, y }` con un campo desconocido, `Box { size }` con una variable desconocida, `Point { x: sizee, y: 2.0 }` con una variable que no es un pun y `Point { x, ..pq }`; seis con un pun que no es ni variable ni campo (`Point { xx, y }` con `x` e `y` variables, el mismo por un alias, `Box { sizee }` con una variable `sizes`, `Point { x: 1.0, xx }`, `Item { cont }` con una función `count` que es también un campo, y el mismo con un parámetro `count`), dos con un tipo que el resolutor no sabe cuál es (uno que no existe y dos alias en círculo) y `Point { x: 1.0, w: q }` con `q` desconocida; un tipo del preludio
+expect:  cuatro diagnósticos exactos, con la ayuda «did you mean `x`?» solo donde un campo se parece; en el de `z: 1.0 + true`, el E0409 y los dos E0401 del valor y de `x: false`; la edición deja `p.x` y `Point { x: 1.0, y: 2.0 }`, y los programas sin errores; en esos cuatro un solo diagnóstico, E0409 o E0301, cuya edición deja `Point { x: xx, y }`, `Box { size: sizes }`, `Point { x: size, y: 2.0 }` (sin repetir el campo) y `Point { x, ..p }`, sin errores; en los seis del pun sin variable ni campo, un E0301 y un E0409, y el E0409 nunca con edición: en los dos primeros los dos con la ayuda «did you mean `x`?» y el E0301 con una edición que escribe `x` sola y deja `Point { x, y }` sin errores; en el tercero solo el E0409 tiene ayuda, «did you mean `size`?», y ninguno tiene edición; en el cuarto ninguno de los dos tiene ayuda; en el quinto, donde `count` es una función y no una variable, solo el E0409 tiene ayuda, «did you mean `count`?», y ninguno tiene edición; en el sexto, con un parámetro `count`, los dos tienen esa ayuda y la edición del E0301 escribe `count` sola y deja `Item { count }` sin errores; en los dos del tipo que no se sabe, la edición del E0301 es `xx: x`; en `w: q`, el E0409 conserva su edición, que escribe `y` sobre `w`; con un tipo del preludio no hay etiqueta secundaria
+why:     una sugerencia que repitiera un campo ya escrito te llevaría de este error al E0411.
+ref:     TestDataCheck/unknown_field_E0409
+
+[T11.122] check.missing_fields_E0410                      level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un literal sin base que no da todos los campos da un único error sobre su `}` que los lista, con una etiqueta en la declaración de cada uno hasta ocho y «and N more»; con `..base` o con un campo desconocido no hay E0410
+input:   siete literales (faltan uno, dos de tres, dos, tres, ocho, nueve y uno con la `}` en su línea) y tres programas más
+expect:  el título, la etiqueta y las secundarias exactos de cada fila, con la nota «a record literal names every field, or ends with `..base`»; con base no hay errores, con un campo desconocido solo E0409 y con un campo dos veces E0411 y E0410
+why:     un error por cada campo que falta te inundaría por una sola omisión; uno solo, con la lista, dice qué escribir.
+ref:     TestDataCheck/missing_fields_E0410
+
+[T11.123] check.field_given_twice_E0411                   level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un campo repetido es E0411 con la etiqueta en el segundo, otra en el primero y la ayuda «remove one of them»; la edición borra el segundo con su coma solo si cabe en una línea, y con su sangría si está solo en su línea; los dos valores se comprueban
+input:   cuatro literales (en medio, el último, y en varias líneas con la coma en la línea de antes y en su línea), uno con `x` tres veces y uno con `x: true` en el segundo
+expect:  un E0411 exacto por fila, con la edición `x: 2.0, `, `, x: 2.0` o, solo en su línea, `  x: 2.0,` con su sangría (sin edición con el salto de línea dentro); aplicada deja un programa sin errores; tres veces son dos errores; el valor `true` da además un E0401
+why:     una edición que dejara la coma sobrante dejaría un literal que no compila.
+ref:     TestDataCheck/field_given_twice_E0411
+
+[T11.124] check.not_a_record_E0412                        level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    leer un campo de algo que no es un record, o nombrar un literal con ello, es E0412: una suma con su nota, un tipo predefinido, una tupla, la unidad, un alias de una suma o de un predefinido, y un valor de tipo todavía sin conocer como `a`
+input:   diez usos: `s.r` de un `Shape`, `n.x` de un `Int`, `(1, 2).x`, `().x`, `Shape { … }`, `Int { … }`, `Meters { … }`, `Alias { … }`, `j.r` y `q.x` de un parámetro sin tipo; y un tipo del preludio
+expect:  diez E0412 exactos, con «has no fields to access», la etiqueta de la declaración (la del alias en `Meters` y `Alias`) y la nota de `match` solo para las sumas; con un tipo del preludio, sin etiqueta secundaria
+why:     `Shape` no tiene campos hasta que un `match` dice qué variante es: la nota te manda a `match` en vez de dejarte buscar un campo.
+ref:     TestDataCheck/not_a_record_E0412
+
+[T11.125] check.no_element_E0413                          level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un índice pasado del final de una tupla, o sobre algo que no lo es, es E0413 con la etiqueta de qué elementos hay; el mensaje y la etiqueta escriben el índice como se escribió, aunque no quepa en 32 bits
+input:   `t2.2`, `t3.3`, `t8.8`, `t2.99999999999`, `t2.4294967295`, `t2.4294967296`, `5.0.0`, `p.0`, `().0`, `side.0` de una función y `q.0` de un parámetro sin tipo; y `t.9223372036854775807` y `t.9223372036854775808` sobre `(1, 2)`
+expect:  once E0413 exactos: «only `.0` and `.1` exist», «only `.0`, `.1` and `.2` exist», «only `.0` to `.7` exist», y «not a tuple» con la nota «only a tuple has elements `.0`, `.1`…» para lo demás, también para `side.0` aunque su tipo tenga un parámetro; `t8.7` no da error; el mayor `Int` es un único E0413, y el siguiente solo el E0105 del lexer
+why:     el error tiene que decir el índice que escribiste: `t.99999999999` no es `t.4294967295`.
+ref:     TestDataCheck/no_element_E0413
+
+[T11.126] check.a_receiver_is_known_from_what_came_before_it  level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    el tipo del receptor tiene que conocerse al leer el acceso, de izquierda a derecha, y las funciones se leen en el orden del fichero: un parámetro sin tipo es E0412 con el tipo `a`, y uno que una línea anterior, o una llamada de una función que va antes, hizo tupla o record vale
+input:   tres funciones con un parámetro sin anotar: `t.0` y `q.x` después de un `if` que lo iguala a una tupla y a un `Point`, y `q.x` antes de ese `if`; y `fn get(p) -> Float { p.x }` y un `main` que la llama con un `Point`, en los dos órdenes
+expect:  las dos primeras sin errores; la tercera un único E0412 «`a` is not a record» sobre la `x` de `q.x`; con `get` antes, el mismo E0412 sobre la `x` de `p.x`, y con `main` antes, ningún error
+why:     es la regla 1 de la inferencia: el acceso no mira hacia delante, pero sí lo que ya sabe la variable por una línea anterior.
+ref:     TestDataCheck/a_receiver_is_known_from_what_came_before_it
+
+[T11.127] check.types_in_messages_are_written_after_the_cap  level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    una vez lleno el sink, el compilador no escribe el tipo ni busca la ayuda de un mensaje: 100 E0412 o E0413 sobre una función de 1500 parámetros, 100 E0409 sobre un record de 3000 campos o 100 E0403 sobre una tupla de 20 000 elementos, cuestan, tras 100 errores baratos, a lo sumo la cuarta parte
+input:   `big.x` y `big.0` repetidos 100 veces con `big` de 1500 parámetros, `w.fieldx` repetido 100 veces con `w` de un record `Wide` de 3000 campos, y `t(1)` repetido 100 veces con `t` una tupla de 20 000 unos, solos y tras una función con 100 errores baratos
+expect:  solos, 100 errores del código y el sink con sitio y más de 10 MB; tras los baratos, el sink lleno y a lo sumo la cuarta parte de lo reservado
+why:     un fichero con miles de accesos a una función grande haría escribir su tipo miles de veces, para mensajes que se tiran.
+ref:     TestDataCheck/types_in_messages_are_written_after_the_cap
+
+[T11.128] check.literal_names                             level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    el nombre de un literal se busca entre los tipos como el de una anotación: uno que no existe es E0406, con su ayuda si hay uno parecido, y sus valores se comprueban igual
+input:   `Unknown { x: Circle(true) }`, `Pint { x: 1.0, y: 2.0 }`, un alias de un record `P { x: 1.0, y: 2.0 }`, `Qwerty`, `Int` y un alias de `Float` con la anotación `Int` y con `Bool`, `Qwerty { x: 1, ..c.qq }`; la edición de `Pint`; `point { x: 1.0, y: 2.0 }` con `Point` declarado y la edición que lo escribe con mayúscula; y, de un `type Foo { x: , }` que el parser no pudo leer, `Foo { x: 1 }` y `Foo { x: nosuch }`; y cuatro literales de alias que tienen el tipo de error: dos de un alias en un ciclo, uno de ellos con la anotación `Int`, uno de `Strin` y uno de un `type Pt { x: Float,` sin acabar
+expect:  once diagnósticos exactos: E0406 sin ayuda para `Unknown` y `Qwerty`, el E0401 de `true` con «the field is declared here», E0406 con «did you mean `Point`?», E0412 para `Int` y para `Meters` y el E0409 de `c.qq`; el alias del record no da error, ninguna anotación da un E0401 y la edición deja un programa limpio, también la de `point`, que es un único E0406 con «did you mean `Point`?» y nada más; con `Foo`, el E0201 del parser y el E0301 de `nosuch`, nada más; con los alias, solo el E0201, el E0801 y el E0406 de sus declaraciones, y ningún E0412
+why:     `Pint` tiene que sugerir `Point` como cualquier tipo escrito mal, y un alias de un record tiene que valer como el record.
+ref:     TestDataCheck/literal_names
+
+[T11.129] check.an_unknown_field_is_one_error             level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un campo que no existe tiene el tipo de error, que encaja en todas partes: en una suma, un argumento, un receptor, una condición, un valor de campo, un elemento, un índice y un `let` anotado es un E0409 y nada más
+input:   quince usos de `p.z`, de `Point { z: … }.x`, de `p.z.0` y de `p.z.w`, los dos últimos con las anotaciones `Bool` e `Int`, y el tipo de ese literal
+expect:  quince E0409 y ningún otro código; el literal con un campo desconocido sigue teniendo el tipo `Point`
+why:     es el Review Focus 3: un campo mal escrito da un error, no una cascada en cada expresión que lo usa.
+ref:     TestDataCheck/an_unknown_field_is_one_error
+
+[T11.130] check.tuple_types_and_aliases                   level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un alias que vuelve a sí mismo por una tupla es E0801 una vez, aunque la tupla lo nombre varias veces; el que lleva a un ciclo no da error propio, un nombre que no es tipo dentro de una tupla es E0406 y una tupla no es una función
+input:   `type A = (A, Int)`, `A2 = (Int, A2)`, `B = (C, Int)` con `C = B`, `D = (A, Bool)`, `Tree = (Tree, Tree, Tree)`, `P = (Q, Q)` con `Q = (P, P, Int)`, `let a: (Int, Bol)`, `let c: D = (1, 2)` y `t(1)`
+expect:  siete diagnósticos exactos: E0801 de `A`, de `A2`, de `B` a través de `C`, de `Tree` y de `P` a través de `Q`, E0406 con «did you mean `Bool`?» y E0403 de `t` con «`t` is bound here»; `D` no da error
+why:     `type A = (A, Int)` es un tipo infinito: tiene que ser un error de alias y no una expansión sin fin.
+ref:     TestDataCheck/tuple_types_and_aliases
+
+[T11.131] types.tuples_hash_cons                          level: core
+kind:    unit (go test)      file: internal/sema/tuples_internal_test.go
+case:    `Tuple` construye cada tupla una vez, como `Fun` y `Data`: los mismos elementos dan el mismo id y cualquier diferencia otro; guarda su propia copia; y exige dos elementos o más
+input:   diez tipos distintos con `Int`, `Bool` y variables, `[1, 12]` y `[11, 2]`, y `Tuple` con 0, 1 y 2 elementos
+expect:  ningún par comparte id; llamar otra vez con los mismos elementos da el mismo id aunque quien llamó reutilizó su lista; el nodo es `TypeTuple` con sus `Params` y sin `Args`; con 0 y con 1 elementos hay un pánico y con 2 no
+why:     dos tuplas con los mismos elementos tienen que ser el mismo id: `Unify` y `Occurs` cuentan con ello para no recorrer un par dos veces.
+ref:     TestTuples/hash_cons
+
+[T11.132] types.show_tuples                               level: core
+kind:    unit (go test)      file: internal/sema/tuples_internal_test.go
+case:    `Show` escribe una tupla entre paréntesis con `, `, con las variables `a`, `b`… de todo el tipo; la corta con `…` si es larga y acaba también con 100 000 niveles
+input:   ocho tipos, de `(Int, Bool)` a `(a, b, a)` y `({error}, Int)`, una tupla de 200 elementos y una anidada 100 000 veces
+expect:  `(Int, Bool)`, `(Int, Bool, ())`, `((Int, Bool), ((), (Int, Bool)))`, `((Int) -> Bool, Int)`, `Box<(Int, Bool)>`, `(a, b, a)`; los dos largos acaban en `…` y no pasan de `MaxTypeText` más la marca, dentro de `within`
+why:     los mensajes del comprobador escriben los tipos con `Show`: una tupla mal escrita saldría mal en cada diagnóstico.
+ref:     TestTuples/show
+
+[T11.133] types.occurs_through_tuples                     level: core
+kind:    unit (go test)      file: internal/sema/tuples_internal_test.go
+case:    `Occurs` mira dentro de las tuplas a cualquier profundidad, y una de 40 niveles que repite el nivel de abajo dos veces no cuesta 2^40
+input:   `(Int, (Int, x))` con `x` y con `y`, y tuplas de 40 niveles sobre `x` y sobre `y`
+expect:  true y false para la primera; true y false para las de 40 niveles dentro de `within`, que falla a los diez segundos
+why:     sin mirar dentro de las tuplas, `a ~ (Int, a)` ligaría `a` a un tipo infinito en vez de dar E0405.
+ref:     TestTuples/occurs_through_tuples
+
+[T11.134] unify.tuples                                    level: core
+kind:    unit (go test)      file: internal/sema/tuples_internal_test.go
+case:    dos tuplas se unifican elemento a elemento, en orden; las longitudes distintas no unifican aunque una sea prefijo de la otra; lo ligado antes del fallo se queda, y 40 niveles repetidos no cuestan 2^40
+input:   los desajustes (tuplas de un mismo tamaño con un elemento distinto, tuplas de longitud distinta cada una prefijo de la otra, y una tupla con `Int`, con `()` y con una función, también una de tantos parámetros como elementos, y al revés salvo con `()`), `(a, Int)` con `(Bool, Int)`, `(Int, (a, b))` con `(Int, (Bool, ()))`, `(a, Int)` con `(Bool, Bool)`, `((a, b), (a, b))` con `((Int, Int), (Int, Bool))` y al revés, `a` con `(Int, a)` y dos tuplas de 40 niveles
+expect:  un E0401 con los dos tipos enteros en cada desajuste, también en las dos filas con la misma tupla dos veces en un lado; `a` ligada a `Bool` en el primero y en el tercero; un E0405 con la nota «`a` would have to be `(Int, a)`, which has no finite size»; los de 40 niveles dentro de `within`
+why:     `(a, Int)` con `(Bool, Int)` tiene que ligar `a`; si `Unify` no bajara por las tuplas, nunca unificarían.
+ref:     TestTuples/unify
+
+[T11.135] elaborate.record_literal_and_field              level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    un literal con los campos en el orden de la declaración es un `Con` del constructor del record, con los valores como se escriben, y `p.y` es un `Proj` del número del campo
+input:   `Point { x: 1.0, y: 2.0 }`, el pun `Point { x, y }`, `p.y`, `p.x`, `Point { x: p.y, y: p.x }` y `q.y` de un parámetro que una línea anterior hizo `Point`
+expect:  `Point(1.0, 2.0)`, `Point(x@0, y@1)`, `p@0.1`, `p@0.0` y `Point(p@0.1, p@0.0)`, sin ningún `Let`; la lectura de `q` acaba en `q@0.1`
+why:     un record es un `Con` y un acceso un `Proj`: oráculo y backends comparten una sola forma para los datos.
+ref:     TestDataCore/record_literal_and_field_are_a_con_and_a_proj
+
+[T11.136] elaborate.update_none_one_all                   level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    un update es un `Con` nuevo: cada valor se liga a una variable con el nombre de su campo, en el orden escrito, luego la base a `base`, y los campos que no se dan son un `Proj` de la base, que se lee una sola vez
+input:   `Point { ..o }`, `{ x: 3.0, ..o }`, `{ y: 3.0, ..o }`, `{ x: 3.0, y: 4.0, ..o }` y `{ y: 4.0, x: 3.0, ..o }`
+expect:  `let base@1 = o@0; Point(base@1.0, base@1.1)` con ninguno, y con uno `let x@1 = 3.0; let base@2 = o@0; Point(x@1, base@2.1)`; con todos, el `Con` solo con las variables; `= o@0` aparece una vez en cada una
+why:     el oráculo no actualiza en el sitio: el update es un `Con` nuevo, y la base se evalúa una vez aunque aporte varios campos.
+ref:     TestDataCore/update_with_none_one_and_all_the_fields
+
+[T11.137] elaborate.values_keep_the_order                 level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    un literal que escribe los campos en otro orden que el de la declaración liga cada valor primero, en el orden escrito, y uno en orden no liga nada; la base va después de los valores
+input:   `R { a: side(1), b: side(2), c: side(3) }`, `R { c: side(1), a: side(2), b: side(3) }`, `R { b: side(1), a: side(2), c: side(3) }` y dos updates con `side` en los valores y la base
+expect:  `R(@side(1), @side(2), @side(3))` sin `Let`; `let c@0 = @side(1); let a@1 = @side(2); let b@2 = @side(3); R(a@1, b@2, c@0)`, y lo mismo con el último campo en su sitio; y los `Let` de los valores antes que el de la base
+why:     un `Con` evalúa en el orden de la declaración: sin ligar antes, `R { c: f(), a: g() }` llamaría antes a `g`.
+ref:     TestDataCore/values_keep_the_order_they_are_written_in
+
+[T11.138] elaborate.tuples_are_cons_by_arity              level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    una tupla es un `Con` del constructor de su aridad, que se crea la primera vez que se necesita, no tiene nombre ni etiqueta, y va tras los constructores de las declaraciones y de los records
+input:   tuplas de 3, 2, 2, de dos pares y un trío, y de 8 elementos, con un `Shape` y un record `Point` declarados
+expect:  las formas `(1, true, 2.0)`, `(1, true)`, `((1, 2), (3, 4, 5))` y `(1, 2, 3, 4, 5, 6, 7, 8)`; los `Ctor` posteriores al tercero son `Tuple` sin nombre ni campos, de aridades 3, 2 y 8; el tercero es el record `Point`
+why:     una tupla no tiene nombre: se distingue por su aridad, y cada aridad existe una sola vez en `Program.Ctors`.
+ref:     TestDataCore/tuples_are_cons_of_one_constructor_for_each_arity
+
+[T11.139] elaborate.tuple_index_is_a_proj                 level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    `t.0` es un `Proj` de 0, `n.0.1` son dos, el segundo del primero, y el campo de un elemento es un `Proj` de un `Proj`
+input:   `t.0`, `t.1`, `n.0.1`, `t.1.y` sobre `(Int, Point)` y `(1, 2).1`
+expect:  `t@0.0`, `t@0.1`, `n@0.0.1`, `t@0.1.1` y `(1, 2).1`
+why:     los índices son posiciones fijas: el oráculo no necesita tipos para leer un elemento, solo el número que el comprobador validó.
+ref:     TestDataCore/tuple_index_is_a_proj
+
+[T11.140] elaborate.node_spans                            level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    una tupla y un literal están en todo lo escrito, una lectura en todo el acceso; los `Let` de un update, en el campo y su valor y en la base; la variable de un campo dado, en su nombre; y las variables de un update se ligan donde el programa escribió lo que guardan
+input:   seis funciones: una tupla, `t.0`, `p.y`, un literal, un update `Point { y: 4.0, ..o }` y `{ let a = (1, 2)
+ a }.0`
+expect:  la lista exacta de nodos con su texto fuente, por ejemplo `let@y: 4.0`, `let@o`, `con@Point { y: 4.0, ..o }`, `proj@Point { y: 4.0, ..o }` y `var@y`; y las variables `y@y` y `base@o`
+why:     los pánicos y los errores del oráculo se dibujan sobre estos spans: un nodo en el sitio equivocado subraya otro texto.
+ref:     TestDataCore/nodes_have_the_span_of_their_syntax
+
+[T11.141] core.print_of_reads                             level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    `Print` escribe un índice en decimal, también de dos cifras, y una lectura cuyo objetivo es un `Let` escribe el `Let` entre paréntesis, con su cuerpo una sangría más adentro, y la lectura tras el `)`; así la lectura de un `Let` y un `Let` cuya última expresión es una lectura no salen iguales
+input:   `t.10` sobre una tupla de 12 elementos, `{ let a = (1, 2)
+ a }.0`, y dos funciones: `let a = { let u = (1, 2)
+ u }.0` seguido de `a`, y `let a = { let u = (1, 2)
+ u.0 }` seguido de `a`
+expect:  el texto exacto: `t.10`; `(let a = (1, 2);` con `a).0` en la línea siguiente, con cuatro espacios; y en las dos funciones `let a = (let u = (1, 2);` con `u).0;` en la línea siguiente, y `let a = let u = (1, 2);` con `u.0;` en la línea siguiente, que son textos distintos
+why:     fija cómo `ki emit core` enseña una lectura: un índice de dos cifras no puede salir en otra base ni dos árboles distintos verse iguales.
+ref:     TestDataCore/print_of_reads
+
+[T11.142] core.builder_proj                               level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    `Builder.Proj` guarda el objetivo, el índice y el span, y acepta el mayor índice
+input:   un `Proj` del índice 3 sobre un literal, y otro del índice `MaxUint32`
+expect:  el `Expr` con tipo `Proj`, `Target`, `Index` y span exactos; el segundo conserva 4294967295
+why:     el índice es lo que decide qué campo se lee: un `Proj` que lo perdiera leería siempre el primero.
+ref:     TestDataCore/builder_creates_proj
+
+[T11.143] core.lint_print_and_subexprs_cross_a_proj       level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    un `Proj` tiene su objetivo como único hijo: `Lint` encuentra una violación dentro, `Subexprs` lo visita y `Print` escribe `objetivo.índice`; una tupla con mal número de argumentos se llama «tuple constructor» y un record por su tipo
+input:   un `Proj` de una variable que nadie liga, una tupla con 1 argumento, un `Point` con 3, y `t.1.1.y + p.x` y una tupla con un record dentro
+expect:  la violación «unbound variable»; «tuple constructor with 1 argument(s), but it takes 2» y «constructor `Point` with 3 argument(s), but it takes 2»; el texto exacto del Core impreso; 7 expresiones visitadas
+why:     un `Proj` que `Lint` no cruzara dejaría pasar una variable sin ligar dentro de un acceso.
+ref:     TestDataCore/lint_print_and_subexprs_cross_a_proj
+
+[T11.144] core.deep_reads_no_recursion                    level: core
+kind:    unit (go test)      file: internal/core/data_test.go
+case:    `Lint`, `Subexprs` y `Print` cruzan 100 000 lecturas de campo, cada una el objetivo de la siguiente, con la pila de Go limitada a 1 MiB
+input:   `t.0.0…0` con 100 000 `Proj`, hecho a mano con el `Builder`
+expect:  `Lint` sin violaciones, `Subexprs` visita 100 001 expresiones y `Print` escribe `fn deep(t) =` y `t` con 100 000 `.0`
+why:     el parser acota lo que lees (E0205), pero un `Program` hecho a mano no: los recorridos no pueden depender de ese límite.
+ref:     TestDataCore/deep_reads_no_recursion
+
+[T11.145] machine.records_and_tuples_have_their_values    level: core
+kind:    unit (go test)      file: internal/interp/data_test.go
+case:    el oráculo construye y lee records y tuplas: un literal en cualquier orden, un pun, un update con ninguno, uno y todos los campos, tuplas de 2 y de 8, y los elementos que un acceso elige a cualquier nivel
+input:   19 funciones, de `lit` y `swapped` a `readDeep` y `recordOfTuples`, cada una con el valor escrito por `Show`
+expect:  `Point { x: 1.0, y: 2.0 }`, `Point { x: 3.0, y: 2.0 }`, `R { a: 1, b: 20, c: 3 }`, `(1, true)`, `((1, 2), (3, (true, 4.5)))`, `8`, `true`, `2` y `8.0`
+why:     es la salida real del oráculo: un `Proj` que leyera otro índice cambiaría el valor sin que ningún tipo lo notara.
+ref:     TestDataRun/records_and_tuples_have_their_values
+
+[T11.146] machine.update_keeps_the_order_and_reads_the_base_once  level: core
+kind:    unit (go test)      file: internal/interp/data_test.go
+case:    los valores de un literal se evalúan en el orden escrito, cada uno una vez, y la base después, una sola vez aunque dé varios campos; el update no cambia la base
+input:   un `main` con cuatro literales de `R` cuyas funciones imprimen (`p` y `mk`), y un update de un `o` cuyos campos se imprimen después
+expect:  `RunMain` da `Halt{0}` y stdout es `1`, `2`, `100`, `100`, `3` a `8`, `100`, `7`, `0` y `8`, uno por línea
+why:     si la base se evaluara una vez por campo, o se actualizara en sitio, un programa con efectos imprimiría otra cosa.
+ref:     TestDataRun/an_update_keeps_the_order_and_reads_the_base_once
+
+[T11.147] machine.tuple_elements_run_left_to_right        level: core
+kind:    unit (go test)      file: internal/interp/data_test.go
+case:    los elementos de una tupla se evalúan de izquierda a derecha, cada uno una vez, y los de dentro de un elemento antes que el siguiente; una lectura evalúa su objetivo una vez
+input:   `(p(1), (p(2), p(3)), p(4))`, `pair(p(5), p(6)).1` y `(p(7), p(8)).0`, con `p` que imprime su argumento
+expect:  `RunMain` da `Halt{0}` y stdout es de `1` a `8`, uno por línea
+why:     si un elemento se evaluara dos veces o fuera de orden, la salida de un programa con efectos cambiaría de un backend a otro.
+ref:     TestDataRun/tuple_elements_run_left_to_right
+
+[T11.148] machine.a_read_is_a_step_and_a_frame            level: core
+kind:    unit (go test)      file: internal/interp/data_test.go
+case:    un `Proj` es el nodo, su objetivo y un marco que elige el campo, y cada lectura anidada añade un nodo y un marco
+input:   `(1, 2).1` y `((1, 2), 3).0.1`
+expect:  7 y 13 pasos
+why:     los pasos miden lo que hace la máquina: un marco de más o de menos cambia el comportamiento sin que ninguna salida lo muestre.
+ref:     TestDataRun/a_read_is_a_step_and_a_frame
+
+[T11.149] value.show_tuples_and_records                   level: core
+kind:    unit (go test)      file: internal/interp/value_data_internal_test.go
+case:    `Show` escribe una tupla sin nombre entre paréntesis y un record con su nombre y sus campos entre llaves, cada uno con el suyo; una variante con campos con nombre se escribe como las demás; y 100 000 niveles no usan la pila de Go
+input:   los valores de una tabla, de `(1, true)` a `Line { from: Point { … }, to: … }`, con un record sin campos y una variante `Rect` con nombres, y 100 000 tuplas y records anidados con la pila limitada a 1 MiB
+expect:  `(1, true)`, `Point { x: 1.0, y: 2.0 }`, `Point { x: -0.0, y: NaN }`, `Empty` y `Rect(2.0, 3.0)`; los dos de 100 000 niveles exactos
+why:     sin los nombres de campo, `Show` escribiría un record como `Point(1.0, 2.0)`, que se lee como una variante, y no como una tupla ni como un record.
+ref:     TestShowData/tuples_and_records
+
+[T11.150] run.records_golden                              level: core
+kind:    run                 file: tests/golden/ch11/records.ki
+case:    `ki run` de un programa con un record, un update y una tupla: imprime los campos antes y después de actualizar
+input:   `Point { x: 1.0, y: 2.0 }`, `moved` con `Point { x: 3.0, ..p }`, `show` que imprime los dos campos, y un par `(b, 7)` leído con `.1` y `.0.y`
+expect:  sale con 0, stderr vacío y stdout exactamente `1.0`, `2.0`, `3.0`, `2.0`, `7` y `2.0`, uno por línea
+why:     es el hito de records del capítulo: ves que el update cambia `x` y deja `y`, y que `a` sigue valiendo lo que valía.
+ref:     tests/golden/ch11/records.ki
+
+[T11.151] emit.records_core_golden                        level: core
+kind:    golden              file: tests/golden/ch11/records_core.ki
+case:    `ki emit core` muestra el `Con` de un record, el update como `Let` más `Con` con `Proj`, la tupla y su lectura
+input:   `type Point`, `moved` con `Point { x: 3.0, ..p }` y un `main` con un literal, una tupla `(b.y, true)`, `t.0` y `Point { y: c, x: 0.5 }`
+expect:  stdout exactamente el Core del fichero: el relleno `Point`, `moved` con `let x = 3.0; let base = p; Point(x, base.1)`, y un `main` con `Point(1.0, 2.0)`, `(b.1, true)`, `t.0` y el literal en otro orden con sus `let`
+why:     es lo que ejecutas para ver cómo el compilador baja los datos: el update no cambia nada en sitio, construye otro `Con`.
+ref:     tests/golden/ch11/records_core.ki
+
+[T11.152] check.unknown_field_render                      level: core
+kind:    diag                file: tests/errors/ch11/unknown_field_render.ki
+case:    `ki check` sobre `p.z` dibuja el E0409 con «unknown field», la declaración del tipo, la ayuda y la edición
+input:   `type Point { x: Float, y: Float }` y un `main` con `printFloat(p.z)`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 12 líneas, con la secundaria «`Point` is defined here» separada por `...`, la ayuda «did you mean `x`?» y el diff de la edición, sin nota
+why:     es cómo se ve el E0409 con el binario: una etiqueta o una ayuda cambiadas se notan aquí.
+ref:     tests/errors/ch11/unknown_field_render.ki
+
+[T11.153] check.missing_field_render                      level: core
+kind:    diag                file: tests/errors/ch11/missing_field_render.ki
+case:    `ki check` sobre un literal al que le faltan dos campos dibuja el E0410 con una etiqueta en cada declaración y la nota
+input:   `type Point { x: Float, y: Float, z: Float }` y `Point { x: 1.0 }`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 10 líneas: «missing fields `y` and `z` in `Point { … }`», las dos etiquetas «declared here» en la misma línea, la primaria «`y` and `z` are not given» bajo la `}` y la nota, sin ayuda
+why:     es un diagnóstico con dos etiquetas secundarias en una misma línea: aquí se ve que el dibujo las separa.
+ref:     tests/errors/ch11/missing_field_render.ki
+
+[T11.154] check.given_twice_render                        level: core
+kind:    diag                file: tests/errors/ch11/given_twice_render.ki
+case:    `ki check` sobre un campo repetido dibuja el E0411 con la primaria en el segundo, la secundaria en el primero, la ayuda y la edición que lo borra
+input:   `Point { x: 1.0, x: 2.0, y: 3.0 }`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 10 líneas, con «given again here», «first given here», la ayuda «remove one of them» y el diff que deja `Point { x: 1.0, y: 3.0 }`
+why:     es cómo se ve el E0411 con el binario, con la edición que borra el campo y su coma.
+ref:     tests/errors/ch11/given_twice_render.ki
+
+[T11.155] check.not_record_render                         level: core
+kind:    diag                file: tests/errors/ch11/not_record_render.ki
+case:    `ki check` sobre `s.r` con `s` un `Shape` dibuja el E0412 con la declaración del tipo y la nota de `match`
+input:   `type Shape { Circle(r: Float), Square(side: Float) }` y `printFloat(s.r)`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano, con «has no fields to access» bajo `r`, «`Shape` is defined here» y la nota «only a record has fields; a sum type is taken apart with `match`», sin ayuda
+why:     es cómo se ve el E0412 con el binario: la nota es lo que te dice que un `Shape` se abre con `match`.
+ref:     tests/errors/ch11/not_record_render.ki
+
+[T11.156] check.no_element_render                         level: core
+kind:    diag                file: tests/errors/ch11/no_element_render.ki
+case:    `ki check` sobre `t.2` con `t` un `(Int, Bool)` dibuja el E0413 con qué elementos hay
+input:   `let t = (1, true)` y `print(t.2)`
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 5 líneas: «`(Int, Bool)` has no element `2`» y la etiqueta «only `.0` and `.1` exist» bajo el `2`, sin nota ni ayuda
+why:     es cómo se ve el E0413 con el binario: la etiqueta dice qué índices valen en vez de solo que el tuyo no.
+ref:     tests/errors/ch11/no_element_render.ki
+
+[T11.157] check.a_trailing_comma_in_a_tuple_is_one_error  level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    una coma tras el último elemento de una tupla, o un elemento que falta en medio, es solo el E0201 del parser: ningún sitio que espere una tupla de otra aridad añade un E0401 ni un E0402
+input:   `(1, true,)` con la anotación `(Int, Bool)`, `(1,)` con `Int`, `((1, 2,))` como argumento de un parámetro `(Int, Int)`, `(1, 2,)` con la anotación `(Int, Int, Int)`, `(Int, Bool,)` como anotación y `(1, , 2)` con la anotación `(Int, Int)`
+expect:  seis E0201 y ningún otro código
+why:     con el elemento que falta dentro de la tupla, `(1, true,)` tendría tres elementos y su E0401 se sumaría al E0201, que es el error de verdad.
+ref:     TestDataCheck/a_trailing_comma_in_a_tuple_is_one_error
+
+[T11.158] check.a_literal_in_an_if_head_is_one_error      level: core
+kind:    unit (go test)      file: internal/sema/data_test.go
+case:    un literal de record sin paréntesis en la cabeza de un `if` es solo el E0201 del parser: el comprobador lo lee como el literal que es y no añade un constructor desconocido, un nombre desconocido ni un E0412
+input:   `if Point { x: 1.0, y: 2.0 }.x > p.x { … }` con `Point` declarado, y el mismo con un campo `z` que `Point` no tiene
+expect:  un único E0201 en el primero; en el segundo el E0201 y el E0409 de `z`, y nada más
+why:     sin él, un literal en un `if` daría cuatro errores, y tres, el E0306, el E0301 y el E0412, serían falsos.
+ref:     TestDataCheck/a_literal_in_an_if_head_is_one_error
+
+[T11.159] syntax.a_body_missing_its_brace_is_the_brace    level: core
+kind:    unit (go test)      file: internal/syntax/parser_type_test.go
+case:    un item que empieza donde debería ir un variante o un campo es la `}` que falta: un E0201 «expected `}`, found `fn`» con la `{` que sigue abierta y la edición que escribe la `}`, y no un «expected identifier» sobre el item siguiente
+input:   cinco fuentes: un `type` de variantes, uno de campos y uno sin nada en el cuerpo, cada uno seguido de `fn f() {}`; uno seguido de otro `type`; y uno seguido de un atributo y una función
+expect:  en cada una exactamente un E0201 «expected `}`, found» el token que empieza el item, con «unclosed `{` opened here» sobre la `{`, la ayuda «close it with `}`» y una inserción de `}` justo tras el último token leído
+why:     si el error nombrara el identificador que falta, apuntaría a un `fn` que está bien y no a la llave que olvidaste, como dice el de un literal.
+ref:     TestParseType/a_body_missing_its_brace_is_the_brace

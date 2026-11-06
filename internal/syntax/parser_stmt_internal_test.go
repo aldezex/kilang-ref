@@ -276,8 +276,11 @@ var e0201Sites = []struct {
 	{"fn f(x y) {}", "y", 0, "expected `)`, found `y`"},
 	{"fn f() { (1 2) }", "2", 0, "expected `)`, found `2`"},
 	{"fn f() { g(1 2) }", "2", 0, "expected `)`, found `2`"},
-	{"fn f() -> (Int) {}", "Int", 0, "expected `)`, found `Int`"},
+	{"fn f() -> (Int, Bool Int) {}", "Int", 1, "expected `)`, found `Int`"},
+	{"fn f() { (1, 2 3) }", "3", 0, "expected `)`, found `3`"},
 	{"#[a(\"x\" \"y\")] fn f() {}", "\"y\"", 0, "expected `)`, found `\"y\"`"},
+	// `,`: a tuple type has two or more types
+	{"fn f() -> (Int) {}", ")", 1, "expected `,`, found `)`"},
 	// `{`
 	{"fn f() { if a }", "}", 0, "expected `{`, found `}`"},
 	{"fn f() { if a\n{ 1 } }", "\n", 0, "expected `{`, found newline"},
@@ -788,11 +791,11 @@ func TestParseStmt(t *testing.T) {
 			{"fn f() { (1 !x) }", "!", "expected `)`, found `!`", 0, "(", 1, "", 0},
 			{"fn f() { (1 { 2 }) }", "{", "expected `)`, found `{`", 1, "(", 1, "", 0},
 			{"fn f() {\n  let a = g(1\n  h(2)\n}\n", "h", "expected `)`, found `h`", 0, "(", 1, "", 0},
-			{"fn f() { (1, 2) }", ",", "expected `)`, found `,`", 0, "(", 1, "", 0},
+			{"fn f() { (1, 2 3) }", "3", "expected `)`, found `3`", 0, "(", 1, "", 0},
 			{"fn f(x y) {}", "y", "expected `)`, found `y`", 0, "(", 0, "", 0},
 			{"fn f(x Int) {}", "Int", "expected `)`, found `Int`", 0, "(", 0, "", 0},
 			{"fn f(x = 1) {}", "=", "expected `)`, found `=`", 0, "(", 0, "", 0},
-			{"fn f() -> (Int) {}", "Int", "expected `)`, found `Int`", 0, "(", 1, "", 0},
+			{"fn f() -> (Int, Bool Int) {}", "Int", "expected `)`, found `Int`", 1, "(", 1, "", 0},
 			{"#[a(\"x\" \"y\")] fn f() {}", "\"y\"", "expected `)`, found `\"y\"`", 0, "(", 0, "", 0},
 		} {
 			wantCloser(t, row, false)

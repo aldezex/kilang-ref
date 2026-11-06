@@ -395,6 +395,14 @@ func (c *checker) infer(id syntax.ExprID) TypeID {
 		ty = c.binary(e)
 	case syntax.ExprUnary:
 		ty = c.unary(e)
+	case syntax.ExprField:
+		ty = c.field(e)
+	case syntax.ExprTupleIndex:
+		ty = c.tupleIndex(e)
+	case syntax.ExprRecord:
+		ty = c.record(e)
+	case syntax.ExprTuple:
+		ty = c.tuple(e)
 	case syntax.ExprIf:
 		ty = c.inferIf(e)
 	case syntax.ExprBlock:
@@ -979,7 +987,7 @@ func (c *checker) call(e syntax.Expr) TypeID {
 	case TypeErr:
 		c.inferAll(args)
 		return c.errT
-	case TypeBuiltin, TypeData:
+	case TypeBuiltin, TypeData, TypeTuple:
 		// A constructor with no fields is a value of its type, not a function.
 		c.notCallableError(e, ct)
 		c.inferAll(args)
@@ -1111,6 +1119,12 @@ func (c *checker) arityError(e syntax.Expr, fn Type) {
 // function never gets here; one that is a constructor without fields does, and
 // has no secondary label: its definition is not a variable.)
 func (c *checker) notCallableError(e syntax.Expr, ty TypeID) {
+	// Once the sink has dropped an error it drops this one too, and the type of the
+	// callee is written before anything else: it is a tuple of any size now, and
+	// Show pushes all of its elements before it gets to the cut (see arityError).
+	if c.sink.Truncated() {
+		return
+	}
 	callee := c.m.Exprs.Get(e.Callee)
 	d := diag.NewError(diag.E(403), "cannot call a value of type `"+c.tp.Types.Show(ty)+"`",
 		diag.Label{Span: callee.Span, Message: "not a function"})

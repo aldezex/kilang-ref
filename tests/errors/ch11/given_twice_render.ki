@@ -1,0 +1,18 @@
+// test: T11.154
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0411]: field `x` is given twice
+// |   --> tests/errors/ch11/given_twice_render.ki:17:27
+// |    |
+// | 17 |   let p = Point { x: 1.0, x: 2.0, y: 3.0 }
+// |    |                           ^ given again here
+// |    |                   - first given here
+// |    = help: remove one of them
+// |    |
+// | 17 -   let p = Point { x: 1.0, x: 2.0, y: 3.0 }
+// | 17 +   let p = Point { x: 1.0, y: 3.0 }
+type Point { x: Float, y: Float }
+fn main() {
+  let p = Point { x: 1.0, x: 2.0, y: 3.0 }
+}

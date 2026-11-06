@@ -68,6 +68,13 @@ type parser struct {
 	// see MaxNesting. Unlike chain it belongs to no expression, because the
 	// statements of a nested block are inside the levels around the block.
 	depth int
+	// noRecord says that the expression being read is the condition of an `if`
+	// (or of another head, once `match`, `for` and `while` exist) outside any
+	// delimiter, where `Name {` does not start a record literal: the `{` is the
+	// block that follows the head (see condition and primary). Inside a
+	// parenthesis, the arguments of a call, a block and the braces of a record it
+	// is false again.
+	noRecord bool
 
 	// errs counts the mistakes found so far, those that were reported and those
 	// that were not (see detect). reported says that a mistake has been reported,
@@ -76,9 +83,10 @@ type parser struct {
 	reported     bool
 	lastReported int
 
-	// in is only read, to tell the attribute `extern` from the others (see
-	// hasExtern): the parser takes the names of everything else as the Symbols
-	// the lexer interned. sink receives the diagnostics: E0201 to E0205.
+	// in tells the attribute `extern` from the others (see hasExtern) and interns
+	// the digits of a tuple index (see tupleIndexes): the parser takes the names of
+	// everything else as the Symbols the lexer interned. sink receives the
+	// diagnostics: E0201 to E0205.
 	in   *base.Interner
 	sink *diag.Sink
 }
@@ -468,22 +476,90 @@ func (p *parser) param() (Param, bool) {
 }
 
 // typeExpr reads a type: an UpperIdent (`Int`, `Bool`; whether the name exists
-// is for name resolution to say) or `()`. If the tokens at the cursor are
-// neither, it reports E0201 (`type` for a token that is not a `(`, `)` for a
-// `(` that is not closed) and returns a TypeError, which covers whatever it
+// is for name resolution to say), `()`, or a tuple, `(Int, Bool)`, which is two
+// or more types between parentheses. If the tokens at the cursor are none of
+// those, it reports E0201 (`type` for a token that is not a `(`, `)` for a `(`
+// that is not closed) and returns a TypeError, which covers whatever it
 // consumed: nothing at all for a token that is not a `(`, so that the `)` that
 // ends a parameter list is still there for the caller.
+//
+// A tuple holds types, which may be tuples, so a type nests as deep as the
+// program writes it, and every pass after the parser walks it. Each `(` takes a
+// level of nesting, as in an expression (see enter), so the 257th is E0204, once,
+// and the type is a TypeError. The count of nesting is the one of the place the
+// type is in, but whether the type was abandoned is not: a type is read with a
+// chainState of its own and the one around it is given back, because only
+// exprOrSkip gives back the state of an expression, and a type that is read
+// outside one (the signature of a function, an annotation) would otherwise leave
+// the enclosing state abandoned, and with it silent every mistake that comes
+// after.
 func (p *parser) typeExpr() TypeExprID {
+	outer := p.chain
+	p.chain = chainState{}
+	id := p.typeNode()
+	p.chain = outer
+	return id
+}
+
+// typeNode is typeExpr without the state of its own: the elements of a tuple are
+// read by it, so they share the one of the tuple.
+func (p *parser) typeNode() TypeExprID {
 	start := p.tok().Span
 	if t, ok := p.eat(UpperIdent); ok {
 		return p.m.Types.Push(TypeExpr{Kind: TypeNamed, Span: t.Span, Name: base.Symbol(t.Payload)})
 	}
-	if open, ok := p.eat(LParen); ok {
-		if p.expectClose(RParen, "`)`", open) {
-			return p.m.Types.Push(TypeExpr{Kind: TypeUnit, Span: p.spanFrom(start)})
-		}
-	} else {
+	if !p.at(LParen) {
 		p.expected("type")
+		return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(start)})
 	}
-	return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(start)})
+	if !p.enterType() {
+		return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(start)})
+	}
+	id := p.parenType()
+	p.leave()
+	return id
+}
+
+// parenType reads what starts with a `(` in a type, the cursor being at it: `()`,
+// or the elements of a tuple and the `)`. A tuple has two or more elements: a
+// `(` and one type with no comma is E0201 `,` at the `)` (the form that a
+// function type, which comes with the generics, is written with is not a tuple).
+// A trailing comma is not allowed either.
+//
+// An element that could not be read has been reported already, so the tuple
+// stops there and is a TypeError that covers what was consumed.
+func (p *parser) parenType() TypeExprID {
+	open := p.advance()
+	if _, ok := p.eat(RParen); ok {
+		return p.m.Types.Push(TypeExpr{Kind: TypeUnit, Span: p.spanFrom(open.Span)})
+	}
+	var elems []TypeExprID
+	for {
+		// The file ends with the `(` still open: that is E0202, as it is for any
+		// other delimiter (see expectClose), and not a type that is missing.
+		if p.at(Eof) {
+			p.unclosed(open)
+			return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(open.Span)})
+		}
+		e := p.typeNode()
+		if p.m.Types.Get(e).Kind == TypeError {
+			return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(open.Span)})
+		}
+		elems = append(elems, e)
+		if _, ok := p.eat(Comma); !ok {
+			break
+		}
+	}
+	if len(elems) == 1 && p.at(RParen) {
+		p.expectedWith("`,`", func(d diag.Diagnostic) diag.Diagnostic {
+			return d.WithHelp("a tuple type has two or more types, as in `(Int, Bool)`")
+		})
+		return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(open.Span)})
+	}
+	if !p.expectClose(RParen, "`)`", open) {
+		return p.m.Types.Push(TypeExpr{Kind: TypeError, Span: p.spanFrom(open.Span)})
+	}
+	return p.m.Types.Push(TypeExpr{
+		Kind: TypeTuple, Span: p.spanFrom(open.Span), Elems: base.AppendRange(&p.m.TypePool, elems),
+	})
 }

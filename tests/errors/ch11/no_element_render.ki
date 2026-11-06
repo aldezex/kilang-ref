@@ -1,0 +1,13 @@
+// test: T11.156
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0413]: `(Int, Bool)` has no element `2`
+// |   --> tests/errors/ch11/no_element_render.ki:12:11
+// |    |
+// | 12 |   print(t.2)
+// |    |           ^ only `.0` and `.1` exist
+fn main() {
+  let t = (1, true)
+  print(t.2)
+}

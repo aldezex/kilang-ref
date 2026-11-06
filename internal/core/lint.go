@@ -20,6 +20,8 @@ func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 		return append(buf, p.Args(e.Args)...)
 	case PrimCall, Con:
 		return append(buf, p.Args(e.Args)...)
+	case Proj:
+		return append(buf, e.Target)
 	case Let:
 		return append(buf, e.Init, e.Body)
 	case Match:
@@ -85,7 +87,9 @@ func (p *Program) Subexprs(root ExprID) iter.Seq[ExprID] {
 //   - a call of a FunRef has as many arguments as that function has
 //     parameters, and a PrimCall as many as Prim.Arity says (a call through a
 //     variable is not checked: Lint does not know what the variable holds);
-//   - a Con has as many arguments as its constructor has fields (Ctor.Arity);
+//   - a Con has as many arguments as its constructor has fields (Ctor.Arity); a
+//     Proj has nothing of its own to check, because Core does not know how many
+//     fields the value of its target has;
 //   - a Match has the arms true and false, or a wildcard arm;
 //   - a function either has a body and no extern name, or an extern name and no
 //     body, and it walks the body of a function only if it has one;
@@ -250,8 +254,16 @@ func (l *linter) check(e *Expr, frame uint32) {
 	case Con:
 		ctor := l.p.Ctors.Get(e.Ctor)
 		if got := len(l.p.Args(e.Args)); got != int(ctor.Arity) {
-			l.report("constructor `%s` with %d argument(s), but it takes %d", l.in.String(ctor.Name), got, ctor.Arity)
+			// A tuple has no name: it is told by its arity.
+			name := "constructor `" + l.in.String(ctor.Name) + "`"
+			if ctor.Tuple {
+				name = "tuple constructor"
+			}
+			l.report("%s with %d argument(s), but it takes %d", name, got, ctor.Arity)
 		}
+	case Proj:
+		// Core has no types, so nothing says how many fields the value of the
+		// target has: there is nothing to check of the node itself.
 	case Let:
 		l.slot(e.Var, frame)
 	case Match:

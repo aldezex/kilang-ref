@@ -1,0 +1,18 @@
+// test: T11.155
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0412]: `Shape` is not a record
+// |   --> tests/errors/ch11/not_record_render.ki:17:16
+// |    |
+// | 14 | type Shape { Circle(r: Float), Square(side: Float) }
+// |    |      ----- `Shape` is defined here
+// |    ...
+// | 17 |   printFloat(s.r)
+// |    |                ^ has no fields to access
+// |    = note: only a record has fields; a sum type is taken apart with `match`
+type Shape { Circle(r: Float), Square(side: Float) }
+fn main() {
+  let s = Circle(1.0)
+  printFloat(s.r)
+}

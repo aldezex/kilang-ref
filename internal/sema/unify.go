@@ -32,8 +32,9 @@ type Unifier struct {
 // then the result, and the first part that does not match is the mistake: it
 // is reported once, with the two types in the label, and the rest is not looked
 // at. Two applications of the same declared type are unified argument by
-// argument in the same way; two of different declarations, or a declared type
-// and any other kind, do not match. The variables that were bound before that stay bound, and the
+// argument in the same way, and two tuples element by element (they match only
+// if they have the same number of elements); two of different declarations, or a
+// declared type and any other kind, do not match. The variables that were bound before that stay bound, and the
 // label shows them as what they are bound to. Function types with different
 // numbers of parameters do not match. The effect rows of two function types
 // are not compared: in Part I every function has the empty row (EmptyRow).
@@ -66,14 +67,12 @@ type Unifier struct {
 // program.
 func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) bool {
 	t := u.Types
-	// pair is two types that have to become the same.
-	type pair struct{ expected, found TypeID }
-	todo := []pair{{expected, found}}
-	// expanded holds the pairs of function types, and of applications of one
-	// declared type, whose parts are already on the stack or done. Only they have
-	// parts, so only they can be met by many paths; a builtin or a variable is
+	todo := []typePair{{expected, found}}
+	// expanded holds the pairs of function types, of tuples and of applications of
+	// one declared type, whose parts are already on the stack or done. Only they
+	// have parts, so only they can be met by many paths; a builtin or a variable is
 	// answered on the spot.
-	var expanded map[pair]struct{}
+	var expanded pairSet
 	for len(todo) > 0 {
 		p := todo[len(todo)-1]
 		todo = todo[:len(todo)-1]
@@ -105,35 +104,33 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 			// The pair is resolved, so the same two types meet here whatever
 			// path led to them. The parts of the first visit are on the stack
 			// or finished, and a failure among them has already ended Unify.
-			key := pair{e, f}
-			if _, done := expanded[key]; done {
+			if !expanded.add(typePair{e, f}) {
 				continue
 			}
-			if expanded == nil {
-				expanded = make(map[pair]struct{})
-			}
-			expanded[key] = struct{}{}
 			// The stack gives back the last pair pushed first, so the result
 			// goes in first and the parameters from the last to the first.
-			todo = append(todo, pair{en.Ret, fn.Ret})
-			for i := len(en.Params) - 1; i >= 0; i-- {
-				todo = append(todo, pair{en.Params[i], fn.Params[i]})
+			todo = append(todo, typePair{en.Ret, fn.Ret})
+			todo = pushParts(todo, en.Params, fn.Params)
+		case en.Kind == TypeTuple && fn.Kind == TypeTuple:
+			if len(en.Params) != len(fn.Params) {
+				u.mismatch(expected, found, foundAt, r)
+				return false
 			}
+			// A pair of tuples is taken apart once, as a pair of function types
+			// is: the table builds equal tuples once, so one can hold the same
+			// tuple twice at every level.
+			if !expanded.add(typePair{e, f}) {
+				continue
+			}
+			todo = pushParts(todo, en.Params, fn.Params)
 		case en.Kind == TypeData && fn.Kind == TypeData && en.Def == fn.Def && len(en.Args) == len(fn.Args):
 			// The same declaration applied to arguments that are not the same
 			// types, so far as the ids tell: the arguments are what is compared. The
 			// pair is looked at once, as a pair of function types is.
-			key := pair{e, f}
-			if _, done := expanded[key]; done {
+			if !expanded.add(typePair{e, f}) {
 				continue
 			}
-			if expanded == nil {
-				expanded = make(map[pair]struct{})
-			}
-			expanded[key] = struct{}{}
-			for i := len(en.Args) - 1; i >= 0; i-- {
-				todo = append(todo, pair{en.Args[i], fn.Args[i]})
-			}
+			todo = pushParts(todo, en.Args, fn.Args)
 		default:
 			// Two different builtin types, a builtin and a function, or any other
 			// two kinds that are not the same: two different declared types, a
@@ -143,6 +140,38 @@ func (u *Unifier) Unify(expected, found TypeID, foundAt base.Span, r Reason) boo
 		}
 	}
 	return true
+}
+
+// typePair is two types that have to become the same.
+type typePair struct{ expected, found TypeID }
+
+// pairSet is a set of pairs of types. Its zero value is the empty set, and it
+// makes its map when the first pair is added: most comparisons never meet a pair
+// that has parts.
+type pairSet map[typePair]struct{}
+
+// add puts key in the set and reports whether it was not there. Unify takes a
+// pair apart only when it is: the same pair met again is already on the stack or
+// done.
+func (s *pairSet) add(key typePair) bool {
+	if _, done := (*s)[key]; done {
+		return false
+	}
+	if *s == nil {
+		*s = make(pairSet)
+	}
+	(*s)[key] = struct{}{}
+	return true
+}
+
+// pushParts puts the pairs of the parts of two types on todo, from the last to
+// the first, so that the stack gives back the first pair first. expected and
+// found have the same length: the caller has seen to it.
+func pushParts(todo []typePair, expected, found []TypeID) []typePair {
+	for i := len(expected) - 1; i >= 0; i-- {
+		todo = append(todo, typePair{expected[i], found[i]})
+	}
+	return todo
 }
 
 // bind makes the unbound variable v, which is the type vType, stand for the
@@ -205,7 +234,7 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		because("expected because of the return type")
 	case ReasonArgument:
 		because("the parameter is declared here")
-	case ReasonCtorArg:
+	case ReasonCtorArg, ReasonField:
 		because("the field is declared here")
 	case ReasonIfBranches:
 		because("the other branch has type `" + shown[0] + "`")

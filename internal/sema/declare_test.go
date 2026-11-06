@@ -299,6 +299,22 @@ func TestDeclare(t *testing.T) {
 					aliasCycle("B", spanIn(t, p, src, "type B", "B"), aliasAt{"C", spanIn(t, p, src, "type C", "C")}),
 				}
 			}},
+			// Aliases that lead back to each other in more than one way are one cycle and
+			// one error, with a label on each member in the order the walk met them
+			// (here that is not a path): `A` stands for itself and for `B`, and `B` for
+			// `A`, so there are two ways round and one mistake. An alias that only leads
+			// into them, as `D` does, has the error type and nothing said about it.
+			{"two_ways_round", "type A = (A, B)\ntype B = (A, Int)\ntype D = (A, Bool)\nfn main() {}", func(p *testsupport.Program, src string) []diag.Diagnostic {
+				return []diag.Diagnostic{aliasCycle("A", spanIn(t, p, src, "type A", "A"), aliasAt{"B", spanIn(t, p, src, "type B", "B")})}
+			}},
+			{"two_ways_back_to_the_first", "type A = (B, C)\ntype B = A\ntype C = A\nfn main() {}", func(p *testsupport.Program, src string) []diag.Diagnostic {
+				return []diag.Diagnostic{aliasCycle("A", spanIn(t, p, src, "type A", "A"),
+					aliasAt{"B", spanIn(t, p, src, "type B", "B")}, aliasAt{"C", spanIn(t, p, src, "type C", "C")})}
+			}},
+			{"each_leads_to_the_others", "type A = (B, C)\ntype B = (A, C)\ntype C = (A, B)\nfn main() {}", func(p *testsupport.Program, src string) []diag.Diagnostic {
+				return []diag.Diagnostic{aliasCycle("A", spanIn(t, p, src, "type A", "A"),
+					aliasAt{"B", spanIn(t, p, src, "type B", "B")}, aliasAt{"C", spanIn(t, p, src, "type C", "C")})}
+			}},
 		}
 		for _, row := range rows {
 			p := testsupport.Analyze(t, row.src)
@@ -344,6 +360,30 @@ func TestDeclare(t *testing.T) {
 		}
 		if used := after.TotalAlloc - before.TotalAlloc; used > 64<<20 {
 			t.Errorf("a cycle of %d aliases allocated %d bytes, want at most 64 MiB (%d)", n, used, 64<<20)
+		}
+
+		// Every alias of a long chain mentions the first, which closes a cycle with each
+		// of the ones before it: still one error, with the same labels, and not one for
+		// each way back, which would be the most the sink takes and a label for each
+		// alias in each of them.
+		var chord strings.Builder
+		for i := range n - 1 {
+			fmt.Fprintf(&chord, "type A%d = (A%d, A0)\n", i, i+1)
+		}
+		fmt.Fprintf(&chord, "type A%d = A0\nfn main() {}\n", n-1)
+		runtime.ReadMemStats(&before)
+		p = testsupport.Analyze(t, chord.String())
+		runtime.ReadMemStats(&after)
+		got = p.Session.Sink.All()
+		if len(got) != 1 || got[0].Code != diag.E(801) || len(got[0].Secondary) != n-1 {
+			t.Fatalf("a chain of %d aliases that all mention the first gives %d diagnostics (the first with %d secondary labels), want one with %d",
+				n, len(got), len(got[0].Secondary), n-1)
+		}
+		if first, last := got[0].Secondary[0].Message, got[0].Secondary[n-2].Message; first != "through `A1`, defined here" || last != "through `A3999`, defined here" {
+			t.Errorf("the labels run from %q to %q, want A1 to A3999", first, last)
+		}
+		if used := after.TotalAlloc - before.TotalAlloc; used > 64<<20 {
+			t.Errorf("a chain of %d aliases that all mention the first allocated %d bytes, want at most 64 MiB (%d)", n, used, 64<<20)
 		}
 	})
 

@@ -23,8 +23,9 @@ import (
 // looks like a variant spelled wrong.
 //
 // Every list is read with a loop, so the size of a type (spec Review Focus 2:
-// 10 000 variants) costs no depth of Go's stack, and a type declaration has no
-// nested types yet.
+// 10 000 variants) costs no depth of Go's stack. The types inside a declaration,
+// in an alias or a field, nest only as tuple types do (see parenType), and each
+// level of those counts against MaxNesting.
 
 // typeItem reads a `type` declaration, the cursor being at the `type` keyword,
 // into it, an ItemType whose attributes and `pub` item has read already. start is

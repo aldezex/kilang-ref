@@ -419,7 +419,8 @@ func TestParser(t *testing.T) {
 
 		// The error nodes. A type that is missing has an empty span where it
 		// should start, so the `)` that follows it is not part of it; one that
-		// starts with `(` covers that parenthesis, which is consumed; an item
+		// starts with `(` covers the tokens consumed, which stop short of the one
+		// that is not what a tuple type needs (here the `)` after `Int`); an item
 		// that stops making sense covers every token read until then; and a
 		// token that cannot start an item is an item of its own.
 		const noType = "fn f(x: ) {}"
@@ -431,7 +432,7 @@ func TestParser(t *testing.T) {
 		const parenType = "fn f() -> (Int) {}"
 		m, id, _, _ = parseFile(t, parenType)
 		it = m.ItemNodes.Get(m.Items[0])
-		if got, want := m.Types.Get(it.Ret).Span, spanAt(parenType, "(Int", 1); got != want {
+		if got, want := m.Types.Get(it.Ret).Span, spanAt(parenType, "(Int", 4); got != want {
 			t.Errorf("type that starts with a parenthesis: span %v, want %v", got, want)
 		}
 		// An item that goes wrong after its name keeps the name and its span,

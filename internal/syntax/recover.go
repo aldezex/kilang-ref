@@ -198,15 +198,28 @@ func (p *parser) expectClose(k TokenKind, what string, open Token) bool {
 // read nothing and return an error node. It also returns false, and reports
 // nothing, if the expression is already abandoned.
 func (p *parser) enter() bool {
+	return p.enterWith("expression", "split the expression with `let` bindings")
+}
+
+// enterType is enter for a level of a tuple type, whose E0204 says `type` and
+// has the help that fits a type: `let` bindings cannot split it, an alias can.
+func (p *parser) enterType() bool {
+	return p.enterWith("type", "split the type with `type` aliases")
+}
+
+// enterWith is enter with the word that names the construct in the title of the
+// E0204 (`expression is nested too deeply`) and the help that it gets when the
+// level is past the limit.
+func (p *parser) enterWith(what, help string) bool {
 	if p.chain.abandoned {
 		return false
 	}
 	if p.depth == MaxNesting {
 		p.chain.abandoned = true
-		p.report(diag.NewError(diag.E(204), "expression is nested too deeply",
+		p.report(diag.NewError(diag.E(204), what+" is nested too deeply",
 			diag.Label{Span: p.tok().Span, Message: "nesting level " + strconv.Itoa(MaxNesting+1) + " starts here"}).
 			WithNote("the limit is " + strconv.Itoa(MaxNesting)).
-			WithHelp("split the expression with `let` bindings"))
+			WithHelp(help))
 		return false
 	}
 	p.depth++

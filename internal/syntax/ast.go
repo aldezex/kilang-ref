@@ -196,11 +196,22 @@ const (
 	TypeError
 )
 
-// TypeExpr is a type as the program writes it. Name is set for TypeNamed only.
+// The kinds of Part II come after TypeError, in the order the sessions add them,
+// so that no kind of Part I changes its value.
+const (
+	// TypeTuple is `(Int, Bool)`: two or more types between parentheses. Elems
+	// holds them.
+	TypeTuple TypeExprKind = TypeError + 1
+)
+
+// TypeExpr is a type as the program writes it. Name is set for TypeNamed only,
+// and Elems, a range over Module.TypePool (read it with Module.TypeList), for
+// TypeTuple only. The Span of a tuple runs from its `(` to its `)`.
 type TypeExpr struct {
-	Kind TypeExprKind
-	Span base.Span
-	Name base.Symbol
+	Kind  TypeExprKind
+	Span  base.Span
+	Name  base.Symbol
+	Elems base.ListRange
 }
 
 // StmtKind says what a Stmt is.
@@ -308,6 +319,19 @@ const (
 	ExprFloat // Float
 )
 
+// The kinds of chapter 11, session 4: field access, tuple index, record literal
+// and tuple. They follow ExprFloat with no gap, which is why they are a block of
+// their own: in the one above `iota` is already 11 at this line, and the values
+// would start at 22. The first line is written `X + 1 + iota`, and the others
+// repeat it, so each is one more; a first line without iota would give every
+// name the same value.
+const (
+	ExprField      ExprKind = ExprFloat + 1 + iota // Target, Name, NameSpan: `p.x`
+	ExprTupleIndex                                 // Target, Index, Name, OpSpan: `t.0`
+	ExprRecord                                     // Name, NameSpan, Fields, Base, HasBase, OpSpan: `Point { x: 1.0, ..p }`
+	ExprTuple                                      // Args: `(1, true)`
+)
+
 // Expr is an expression. Every kind uses a few of the fields (see ExprKind)
 // and leaves the rest zero, which keeps the node flat at the price of fields
 // that do not apply. Always check Kind before reading one.
@@ -356,6 +380,48 @@ type Expr struct {
 	Stmts   base.ListRange
 	Tail    ExprID
 	HasTail bool
+
+	// Target is the expression that a field access (`p.x`) or a tuple index
+	// (`t.0`) reads from. NameSpan is the span of the name after the dot of an
+	// ExprField, and of the type name of an ExprRecord (Name is the name in
+	// both). For an ExprTupleIndex, Index is the number, saturated at
+	// math.MaxUint32 when what is written does not fit (no tuple has so many
+	// elements, so a saturated index is out of range in any case), Name is the
+	// digits as written, interned, so that a message can say the index that the
+	// program has and not the one that was kept, and OpSpan is the digits.
+	Target   ExprID
+	Index    uint32
+	NameSpan base.Span
+
+	// The fields of an ExprRecord: Fields is a range over Module.FieldInitPool
+	// (read it with FieldInits), in the order they are written, and Base is the
+	// expression after the `..` of `Point { x: 3.0, ..p }`, meaningful only when
+	// HasBase is true. OpSpan is the braces and what is between them, from the
+	// `{` to the `}`, so the closing brace is its last byte.
+	Fields  base.ListRange
+	Base    ExprID
+	HasBase bool
+}
+
+// FieldInit is one field that a record literal gives: `x: 1.0`, or `x` for
+// `{ x, y }`, which gives the field x the value of the variable x (punning).
+// Span is the name of the field, and Value the expression that gives it: for a
+// pun it is an ExprName, with the span of the name, which name resolution
+// resolves like any other.
+//
+// Removal is what an edit that removes this field from the literal deletes: the
+// field with the comma after it and the blanks after the comma, or, for a field
+// with no comma after it, the field and the comma before it. A field that is the
+// only one, with no comma on either side, is the field alone. RemovalOneLine says
+// that no line break lies inside Removal, so an edit over it stays on one line
+// (the way Attr.OneLine does for an attribute).
+type FieldInit struct {
+	Name           base.Symbol
+	Span           base.Span
+	Value          ExprID
+	Pun            bool
+	Removal        base.Span
+	RemovalOneLine bool
 }
 
 // Module is the syntax tree of one file.
@@ -376,6 +442,10 @@ type Module struct {
 	AttrPool    []Attr
 	VariantPool []Variant
 	FieldPool   []Field
+	// FieldInitPool holds the fields of the record literals, and TypePool the
+	// elements of the tuple types.
+	FieldInitPool []FieldInit
+	TypePool      []TypeExprID
 }
 
 // ExprList returns the expressions that r selects in ExprPool. The caller must
@@ -398,3 +468,11 @@ func (m *Module) Variants(r base.ListRange) []Variant { return base.Slice(m.Vari
 
 // Fields returns the fields that r selects in FieldPool.
 func (m *Module) Fields(r base.ListRange) []Field { return base.Slice(m.FieldPool, r) }
+
+// FieldInits returns the fields of a record literal that r selects in
+// FieldInitPool.
+func (m *Module) FieldInits(r base.ListRange) []FieldInit { return base.Slice(m.FieldInitPool, r) }
+
+// TypeList returns the types that r selects in TypePool: the elements of a tuple
+// type.
+func (m *Module) TypeList(r base.ListRange) []TypeExprID { return base.Slice(m.TypePool, r) }

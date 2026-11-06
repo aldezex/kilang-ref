@@ -297,6 +297,10 @@ type resolver struct {
 	// there and is the name of one of them is `let x = x`, which gets an
 	// explanation of its own (see name).
 	initializing []letName
+	// punIn is the record literal whose pun, `P { x }`, is being walked: the name
+	// there is the field as well as the variable (see name and punEdit). It is nil
+	// everywhere else.
+	punIn *syntax.Expr
 }
 
 // moduleName is a name in the name space of one module.
@@ -399,10 +403,17 @@ func (r *resolver) add(space map[base.Symbol]DefID, def Def) {
 		space[def.Name] = id
 		return
 	}
-	r.sink.Report(diag.NewError(diag.E(302), "`"+r.in.String(def.Name)+"` is defined more than once",
-		diag.Label{Span: def.Span, Message: "redefined here"}).
-		WithSecondary(diag.Label{Span: r.rp.Defs.Get(first).Span, Message: "first defined here"}).
-		WithHelp("rename one of them, or delete the second"))
+	r.sink.Report(redefinedError(r.in.String(def.Name), def.Span, r.rp.Defs.Get(first).Span))
+}
+
+// redefinedError is the E0302 for the name that is defined again at at, with the
+// first definition at first: a function, a type, a constructor, or the field of
+// a record (see declarer.members).
+func redefinedError(name string, at, first base.Span) diag.Diagnostic {
+	return diag.NewError(diag.E(302), "`"+name+"` is defined more than once",
+		diag.Label{Span: at, Message: "redefined here"}).
+		WithSecondary(diag.Label{Span: first, Message: "first defined here"}).
+		WithHelp("rename one of them, or delete the second")
 }
 
 // attributes checks the attributes of the function or type it of module m and
@@ -580,11 +591,95 @@ func (r *resolver) name(e syntax.Expr) Res {
 	// pay for thousands of suggestions that nobody reads.
 	if !r.sink.Truncated() {
 		if best, ok := suggest(name, r.candidates()); ok {
-			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(e.Span, best))
+			// The name of a pun, `P { x }`, is also the name of the field, so the
+			// edit that writes the variable only would change the field too (see
+			// punEdit); a pun may have no edit that mends it.
+			text, fix := best, true
+			if r.punIn != nil {
+				text, fix = r.punEdit(*r.punIn, e.Name, best)
+			}
+			if fix {
+				d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(e.Span, text))
+			}
 		}
 	}
 	r.sink.Report(d)
 	return Res{Kind: ResError}
+}
+
+// punEdit returns the text that mends the pun `name` of the record literal rec,
+// whose variable is unknown and looks like best, and whether any text does. The
+// name is the field as well as the variable, and the edit has to leave both names
+// right. If `name` is a field of the record, only the variable is wrong, and the
+// edit writes the field and gives it best as its value: `name: best`. The same
+// when the resolver cannot tell what the record is (it reads the declarations as
+// they were parsed, and the type may be one that does not exist, a sum or a
+// builtin: the checker reports that). If `name` is not a field, the name is wrong
+// twice, and the checker reports the field too (E0409), with no edit because
+// the variable is unknown. The edit that this resolver offers then writes `best`
+// alone, which mends both names if best is a variable (a function is not what a
+// pun reads) and also a field that the literal does not give already. When it is
+// not, there is no edit here: a field and a variable that are two names, such as
+// `size: sizes`, would mend them, but the field would have to be chosen too, and
+// that is the question that E0409 asks on its own. Whether the value has the type
+// of the field is the checker's.
+func (r *resolver) punEdit(rec syntax.Expr, name base.Symbol, best string) (string, bool) {
+	fields, known := r.literalFields(r.mod, rec.Name)
+	if !known || fields[name] {
+		return r.in.String(name) + ": " + best, true
+	}
+	field, ok := r.in.Lookup([]byte(best))
+	if !ok || !fields[field] {
+		return "", false
+	}
+	// A function with the name of a field is a candidate too, but the variable
+	// that a pun reads is a local one: when a local has the name, it is that one.
+	if _, variable := r.scope.lookup(field); !variable {
+		return "", false
+	}
+	for _, f := range r.m.FieldInits(rec.Fields) {
+		if f.Name == field {
+			return "", false
+		}
+	}
+	return best, true
+}
+
+// literalFields returns the names of the fields of the record that a literal
+// written with the type name `name`, in module mod, builds, and whether the
+// resolver can tell. It reads the declarations as the parser made them, because
+// the checker, which knows the types, runs after it. An alias is followed to what
+// it stands for, as long as that is a name; a name that is not a type, a type that
+// is not a record and an alias that leads to either are not known. The aliases
+// are followed as many times as there are definitions, which is more than any
+// chain that ends and leaves a cycle.
+func (r *resolver) literalFields(mod ModuleIdx, name base.Symbol) (map[base.Symbol]bool, bool) {
+	for range r.rp.Defs.Len() + 1 {
+		res, ok := r.rp.LookupType(mod, name)
+		if !ok || res.Kind != ResDef {
+			return nil, false
+		}
+		def := r.rp.Defs.Get(res.Def)
+		m := r.mods[def.Module]
+		it := m.ItemNodes.Get(def.Item)
+		switch it.Form {
+		case syntax.TypeFormRecord:
+			fields := make(map[base.Symbol]bool)
+			for _, f := range m.Fields(it.Fields) {
+				fields[f.Name] = true
+			}
+			return fields, true
+		case syntax.TypeFormAlias:
+			te := m.Types.Get(it.Alias)
+			if te.Kind != syntax.TypeNamed {
+				return nil, false
+			}
+			mod, name = def.Module, te.Name
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 // startsUpper reports whether name starts with an uppercase letter, which is what
@@ -633,6 +728,27 @@ func (r *resolver) expr(id syntax.ExprID) {
 		r.expr(e.Rhs)
 	case syntax.ExprUnary:
 		r.expr(e.Operand)
+	case syntax.ExprField, syntax.ExprTupleIndex:
+		r.expr(e.Target)
+	case syntax.ExprTuple:
+		for _, el := range r.m.ExprList(e.Args) {
+			r.expr(el)
+		}
+	case syntax.ExprRecord:
+		// The name of the type is not a name of the values: the checker looks it
+		// up among the types. The fields come in the order they are written, and
+		// the base after them.
+		for _, f := range r.m.FieldInits(e.Fields) {
+			r.punIn = nil
+			if f.Pun {
+				r.punIn = &e
+			}
+			r.expr(f.Value)
+			r.punIn = nil
+		}
+		if e.HasBase {
+			r.expr(e.Base)
+		}
 	case syntax.ExprIf:
 		r.expr(e.Cond)
 		r.expr(e.Then)

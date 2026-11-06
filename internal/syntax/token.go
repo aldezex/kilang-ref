@@ -51,10 +51,11 @@ type TokenBuffer struct {
 	// quote the token in front of it when it reports an error (see text).
 	src []byte
 
-	// reportedNumbers holds the Span.Lo of each Int token whose literal Lex
-	// reported, E0105 or E0107, in the order of the tokens. Such a token has the
-	// value 0, which is not the number that was written; a 0 that was written
-	// (`0`, `0x0`, `0_0`) is not in it. See reportedNumber. Only Lex sets it.
+	// reportedNumbers holds the Span.Lo of each Int or Float token whose literal
+	// Lex reported (E0105, E0107 or E0109), in the order of the tokens. Such a
+	// token has the value 0, which is not the number that was written; a 0 that
+	// was written (`0`, `0x0`, `0_0`, `0.0`) is not in it. See reportedNumber.
+	// Only Lex sets it.
 	reportedNumbers []uint32
 
 	// endsInComment says that the file ends inside a comment: its last line
@@ -87,11 +88,12 @@ func (tb *TokenBuffer) inUnterminatedLiteral(at uint32) bool {
 	return tb.unterminatedLiteral.Lo < at && at <= tb.unterminatedLiteral.Hi
 }
 
-// reportedNumber says whether Lex reported the literal of t, an Int token of tb
-// (E0105, because the number does not fit in 64 bits, or E0107, because it is
-// malformed). The token then holds the value 0 whatever was written, so what the
-// parser makes of it must not be a second error about the same digits. t must
-// be a token of tb, and tb a buffer that Lex returned.
+// reportedNumber says whether Lex reported the literal of t, an Int or a Float
+// token of tb (E0105, because the number does not fit in 64 bits, E0107, because
+// it is malformed, or E0109, because a Float is out of range). The token then
+// holds the value 0 whatever was written, so what the parser makes of it must
+// not be a second error about the same digits. t must be a token of tb, and tb a
+// buffer that Lex returned.
 func (tb *TokenBuffer) reportedNumber(t Token) bool {
 	_, found := slices.BinarySearch(tb.reportedNumbers, t.Span.Lo)
 	return found

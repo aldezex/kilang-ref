@@ -149,6 +149,7 @@ const (
 
 	LitFloat // Float
 	Con      // Ctor, Args: `K(ē)`, the value of the constructor Ctor built from the values of Args
+	Proj     // Target, Index: `e.i`, the field number Index of the value of Target
 )
 
 // PatKind is the kind of pattern of one arm of a Match.
@@ -182,6 +183,13 @@ type Expr struct {
 	Prim  Prim
 	// Ctor is the constructor that a Con builds.
 	Ctor CtorID
+	// A Proj reads the field number Index (from 0) of the value of Target, which
+	// is a value that a constructor built: a record, a tuple, or any value of a
+	// declared type with that many fields. Core has no types, so nothing here says
+	// that Target has such a field: Lint cannot check it, and the machine takes
+	// the checker's word for it.
+	Target ExprID
+	Index  uint32
 
 	// Callee is what a Call calls. Args holds the arguments of a Call, of a
 	// PrimCall and of a Con: a range over Program.ExprPool, read with
@@ -226,15 +234,20 @@ type Fun struct {
 // many values it is built from, and a Con that gives another number is what Lint
 // refuses. Tag tells the constructors of one type apart: its position among them,
 // from 0. Tuple marks a constructor that builds a tuple, which has no name of its
-// own and exists once for each arity; the elaboration makes none yet. Fields
-// holds the names of the fields when the declaration gives them, and is nil
-// otherwise (a field with no name has base.NoSymbol in it when a constructor
-// names only some).
+// own (Name is base.NoSymbol) and exists once for each arity, added by the
+// elaboration as the tuples that the program writes need it. Record marks the
+// only constructor of a record, which has the name of the record and always has
+// Fields, so that a value of it is written with the names of its fields, `Point {
+// x: 1.0, y: 2.0 }`, and the value of a variant that names its fields is not
+// (`Rect(2.0, 3.0)`). Fields holds the names of the fields when the declaration
+// gives them, and is nil otherwise (a field with no name has base.NoSymbol in it
+// when a constructor names only some).
 type Ctor struct {
 	Name   base.Symbol
 	Tag    uint32
 	Arity  uint32
 	Tuple  bool
+	Record bool
 	Fields []base.Symbol
 }
 

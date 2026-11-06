@@ -351,6 +351,28 @@ func TestParseType(t *testing.T) {
 		}
 	})
 
+	t.Run("a_body_missing_its_brace_is_the_brace", func(t *testing.T) {
+		// Another item starts where an item of the body should: the `}` is what is
+		// missing, and the error says so as it does for a literal, with the `{` that
+		// is still open and the edit that writes the `}` right after the last token
+		// read, and not that an identifier was expected at the next item.
+		for _, row := range []struct{ name, src, found, last string }{
+			{"a sum", "type A {\n  B\n  C(Int)\n\nfn f() {}", "fn", "C(Int)"},
+			{"a record", "type A {\n  x: Int\n  y: Int\nfn f() {}", "fn", "y: Int"},
+			{"a body with nothing in it", "type A {\nfn f() {}", "fn", "{"},
+			{"followed by a type", "type A { B\ntype C = Int", "type", "B"},
+			{"an attribute starts the next item", "type A { B\n#[extern(\"x\")] fn f() {}", "#", "B"},
+		} {
+			r := recParse(t, row.src)
+			found := strings.Index(r.src, "\n"+row.found) + 1
+			at := strings.Index(r.src, row.last) + len(row.last)
+			want := recE0201Opened(r.span(found, found+len(row.found)), "expected `}`, found `"+row.found+"`", r.at(t, "{", 0), "{")
+			want.Help = "close it with `}`"
+			want.Fixits = []diag.FixIt{{Span: base.Span{File: want.Primary.Span.File, Lo: uint32(at), Hi: uint32(at)}, Replacement: "}"}}
+			r.wantDiags(t, row.name, want)
+		}
+	})
+
 	t.Run("a_broken_type_keeps_what_was_read", func(t *testing.T) {
 		// The name of the type, and the names of the variants read before the
 		// mistake, outlive it: name resolution needs them to say nothing more

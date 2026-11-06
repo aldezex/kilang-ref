@@ -1,0 +1,24 @@
+// test: T11.150
+// run: run
+// expect-stdout:
+// | 1.0
+// | 2.0
+// | 3.0
+// | 2.0
+// | 7
+// | 2.0
+type Point { x: Float, y: Float }
+fn show(p: Point) {
+  printFloat(p.x)
+  printFloat(p.y)
+}
+fn moved(p: Point) -> Point { Point { x: 3.0, ..p } }
+fn main() {
+  let a = Point { x: 1.0, y: 2.0 }
+  let b = moved(a)
+  show(a)
+  show(b)
+  let pair = (b, 7)
+  print(pair.1)
+  printFloat(pair.0.y)
+}

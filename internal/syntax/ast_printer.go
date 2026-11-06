@@ -20,15 +20,24 @@ import (
 //	(if C T [E])             (OP L R)              (neg E)    (not E)
 //	(call F ARGS...)         42    true    ()      NAME       (error)
 //	1.5                      a Float, written as kirt/fmtnum writes it: 2.0, 1e21
+//	(field E NAME)           (index E N)           (tuple E E...)
+//	(record NAME (FNAME E)... [(.. E)])
 //
-// where T is a type (`Int`, `()`, `(error)`) and `_` stands for a type that the
-// program did not write. The arguments of an attribute are quoted as
+// where T is a type (`Int`, `()`, `(error)`, `(tuple T T...)`) and `_` stands for
+// a type that the program did not write. The arguments of an attribute are quoted as
 // strconv.Quote does. An attribute list that is empty is left out.
 //
 // A type lists its variants, each with its fields, or its fields, or the type
 // it stands for. A field is `(FNAME T)`, and FNAME is `_` for a positional one:
 // `type Option { None, Some(Int) }` is `(type Option (sum (None) (Some (_ Int))))`
 // and `type Point { x: Float }` is `(type Point (record (x Float)))`.
+//
+// `p.x` is `(field p x)` and `t.0` is `(index t 0)`, with the index as it is
+// written, so that one too large for a tuple shows as it is. A record literal
+// lists its fields in the order they are written, `Point { x: 1.0, ..p }` being
+// `(record Point (x 1.0) (.. p))`, and a field that is only a name, `{ x }`, is
+// `(x x)`: the printer does not keep the difference between the two.
+// `(1, true)` is `(tuple 1 true)`.
 //
 // Parse produces every one of these forms; the printer's own tests build their
 // trees by hand, so that they do not depend on the parser.
@@ -173,6 +182,13 @@ func (pr *printer) optType(id TypeExprID, has bool) {
 		pr.str("()")
 	case TypeError:
 		pr.str("(error)")
+	case TypeTuple:
+		pr.str("(tuple")
+		for _, e := range pr.m.TypeList(t.Elems) {
+			pr.str(" ")
+			pr.optType(e, true)
+		}
+		pr.str(")")
 	default:
 		panic("unreachable")
 	}
@@ -250,6 +266,41 @@ func (pr *printer) expr(id ExprID) {
 		if e.HasTail {
 			pr.str(" ")
 			pr.expr(e.Tail)
+		}
+		pr.str(")")
+	case ExprField:
+		pr.str("(field ")
+		pr.expr(e.Target)
+		pr.str(" ")
+		pr.sym(e.Name)
+		pr.str(")")
+	case ExprTupleIndex:
+		pr.str("(index ")
+		pr.expr(e.Target)
+		pr.str(" ")
+		pr.sym(e.Name)
+		pr.str(")")
+	case ExprRecord:
+		pr.str("(record ")
+		pr.sym(e.Name)
+		for _, f := range pr.m.FieldInits(e.Fields) {
+			pr.str(" (")
+			pr.sym(f.Name)
+			pr.str(" ")
+			pr.expr(f.Value)
+			pr.str(")")
+		}
+		if e.HasBase {
+			pr.str(" (.. ")
+			pr.expr(e.Base)
+			pr.str(")")
+		}
+		pr.str(")")
+	case ExprTuple:
+		pr.str("(tuple")
+		for _, el := range pr.m.ExprList(e.Args) {
+			pr.str(" ")
+			pr.expr(el)
 		}
 		pr.str(")")
 	case ExprError:

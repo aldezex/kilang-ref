@@ -54,6 +54,13 @@ const (
 	// variant. It is ReasonArgument for a constructor, which has no parameter to
 	// point at but a field.
 	ReasonCtorArg ReasonKind = ReasonOperand + 1
+	// ReasonField is the value of a field in a record literal, checked against
+	// the type of the field. Because is the field, as the declaration of the
+	// record writes it. It is what ReasonCtorArg is for a variant. The base of an
+	// update (`Point { x: 3.0, ..p }`) has this kind too, with no Because: nothing
+	// in the program explains why the base is a `Point`, and Unify takes the zero
+	// Span for no place at all.
+	ReasonField ReasonKind = ReasonCtorArg + 1
 )
 
 // Reason is why a type is expected, given to Unify so that the error it may

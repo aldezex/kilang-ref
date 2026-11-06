@@ -31,7 +31,7 @@ import (
 // frame is one frame of the continuation: what the machine must do with the
 // next value it computes. It is a sealed interface like Value, and applyFrame
 // has the type switch over its kinds: letFrame, primFrame, argFrame, conFrame,
-// matchFrame and retFrame.
+// projFrame, matchFrame and retFrame.
 type frame interface{ frame() }
 
 // letFrame waits for the value of the Init of a Let. When it arrives, the value
@@ -77,6 +77,12 @@ type conFrame struct {
 }
 
 func (conFrame) frame() {}
+
+// projFrame waits for the value of the target of the Proj expression proj. When it
+// arrives, the field that the Proj names is the value.
+type projFrame struct{ proj core.ExprID }
+
+func (projFrame) frame() {}
 
 // matchFrame waits for the value of the scrutinee of the Match expression
 // match. When it arrives, the arm that fits becomes the control.
@@ -332,8 +338,9 @@ func (m *Machine) env() []Value { return m.envs[len(m.envs)-1] }
 // returns its value; a Let evaluates its Init under a letFrame that remembers
 // what to do next; a PrimCall starts on its first argument under a primFrame; a
 // Call starts on its callee under an argFrame; a Con with no arguments returns
-// its value and one with arguments starts on its first under a conFrame; and a
-// Match starts on its scrutinee under a matchFrame.
+// its value and one with arguments starts on its first under a conFrame; a Proj
+// starts on its target under a projFrame; and a Match starts on its scrutinee
+// under a matchFrame.
 func (m *Machine) step(id core.ExprID) {
 	x := m.prog.Exprs.Get(id)
 	switch x.Kind {
@@ -379,6 +386,9 @@ func (m *Machine) step(id core.ExprID) {
 		m.slots += len(args)
 		m.push(conFrame{con: id, vals: make([]Value, 0, len(args))})
 		m.eval(args[0])
+	case core.Proj:
+		m.push(projFrame{proj: id})
+		m.eval(x.Target)
 	case core.Match:
 		m.push(matchFrame{match: id})
 		m.eval(x.Scrutinee)
@@ -397,7 +407,9 @@ func (m *Machine) step(id core.ExprID) {
 // or of an argument: either the next argument is evaluated, or the call is made
 // (see enter). For a conFrame, v is the value of an argument: either the next
 // argument is evaluated, or the value that the constructor builds is returned,
-// with the values as its fields. For a matchFrame, v is the scrutinee, and the arm that fits
+// with the values as its fields. For a projFrame, v is the value of the target, a
+// ConV that the type checker has made sure has the field, and the field is the
+// value returned. For a matchFrame, v is the scrutinee, and the arm that fits
 // becomes the control, again with nothing pushed, so a call in an arm is still
 // in tail position. For a retFrame, the function that made the call is
 // returning v.
@@ -447,6 +459,8 @@ func (m *Machine) applyFrame(f frame, v Value) {
 		}
 		m.slots -= cap(vals)
 		m.ret(ConV{Ctor: x.Ctor, Fields: vals})
+	case projFrame:
+		m.ret(v.(ConV).Fields[m.prog.Exprs.Get(f.proj).Index])
 	case matchFrame:
 		x := m.prog.Exprs.Get(f.match)
 		// The type checker has made the scrutinee a Bool, like the operands of a

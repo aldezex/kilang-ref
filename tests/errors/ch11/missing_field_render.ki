@@ -1,0 +1,18 @@
+// test: T11.153
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0410]: missing fields `y` and `z` in `Point { … }`
+// |   --> tests/errors/ch11/missing_field_render.ki:17:26
+// |    |
+// | 15 | type Point { x: Float, y: Float, z: Float }
+// |    |                        -------- declared here
+// |    |                                  -------- declared here
+// |    ...
+// | 17 |   let p = Point { x: 1.0 }
+// |    |                          ^ `y` and `z` are not given
+// |    = note: a record literal names every field, or ends with `..base`
+type Point { x: Float, y: Float, z: Float }
+fn main() {
+  let p = Point { x: 1.0 }
+}

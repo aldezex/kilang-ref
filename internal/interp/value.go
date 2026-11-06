@@ -58,7 +58,10 @@ func (ConV) value()   {}
 // the unit value as "()", any function as "<fn>", and a value that a constructor
 // built as the constructor's name followed by its fields in parentheses, each
 // written the same way ("Circle(1.0)", "Some(Circle(1.0))"), or the name alone
-// when it has no fields ("None"). It does not name a function, because a Value
+// when it has no fields ("None"). A tuple has no name, so it is its fields in
+// parentheses ("(1, true)"), and a record is its name and its fields between
+// braces, each with its name ("Point { x: 1.0, y: 2.0 }"): a variant that names
+// its fields is not, and is written as any other. It does not name a function, because a Value
 // does not know the name of its Fun. The name of a constructor is not in the value
 // either, only its id, so Show needs the Program that has the constructor and the
 // interner that spells its name; p and in may be nil for a value that holds no
@@ -95,14 +98,24 @@ func Show(v Value, p *core.Program, in *base.Interner) string {
 		case FunV:
 			out.WriteString("<fn>")
 		case ConV:
-			out.WriteString(in.String(p.Ctors.Get(v.Ctor).Name))
+			ctor := p.Ctors.Get(v.Ctor)
+			if !ctor.Tuple {
+				out.WriteString(in.String(ctor.Name))
+			}
 			if len(v.Fields) > 0 {
-				// "(" now; the rest goes on the stack, last piece first, so that it
-				// comes off in the order "f0, f1)".
-				out.WriteString("(")
-				todo = append(todo, piece{text: ")"})
+				// The opening now; the rest goes on the stack, last piece first, so
+				// that it comes off in the order "f0, f1)" or "x: f0, y: f1 }".
+				open, close := "(", ")"
+				if ctor.Record {
+					open, close = " { ", " }"
+				}
+				out.WriteString(open)
+				todo = append(todo, piece{text: close})
 				for i := len(v.Fields) - 1; i >= 0; i-- {
 					todo = append(todo, piece{v: v.Fields[i]})
+					if ctor.Record {
+						todo = append(todo, piece{text: in.String(ctor.Fields[i]) + ": "})
+					}
 					if i > 0 {
 						todo = append(todo, piece{text: ", "})
 					}

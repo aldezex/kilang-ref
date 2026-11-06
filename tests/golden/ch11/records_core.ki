@@ -1,0 +1,27 @@
+// test: T11.151
+// run: emit core
+// expect-stdout:
+// | fn Point() =
+// |   ()
+// | fn moved(p) =
+// |   let x = 3.0;
+// |   let base = p;
+// |   Point(x, base.1)
+// | fn main() =
+// |   let a = Point(1.0, 2.0);
+// |   let b = moved(a);
+// |   let t = (b.1, true);
+// |   let c = t.0;
+// |   let d = let y = c;
+// |     let x = 0.5;
+// |     Point(x, y);
+// |   ()
+type Point { x: Float, y: Float }
+fn moved(p: Point) -> Point { Point { x: 3.0, ..p } }
+fn main() {
+  let a = Point { x: 1.0, y: 2.0 }
+  let b = moved(a)
+  let t = (b.y, true)
+  let c = t.0
+  let d = Point { y: c, x: 0.5 }
+}

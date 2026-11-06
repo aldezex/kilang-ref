@@ -1,0 +1,21 @@
+// test: T11.152
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0409]: no field `z` on `Point`
+// |   --> tests/errors/ch11/unknown_field_render.ki:20:16
+// |    |
+// | 17 | type Point { x: Float, y: Float }
+// |    |      ----- `Point` is defined here
+// |    ...
+// | 20 |   printFloat(p.z)
+// |    |                ^ unknown field
+// |    = help: did you mean `x`?
+// |    |
+// | 20 -   printFloat(p.z)
+// | 20 +   printFloat(p.x)
+type Point { x: Float, y: Float }
+fn main() {
+  let p = Point { x: 1.0, y: 2.0 }
+  printFloat(p.z)
+}

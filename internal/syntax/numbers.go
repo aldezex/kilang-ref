@@ -30,10 +30,10 @@ import (
 // A literal has no sign: `-5` is a Minus token and a 5. Whatever the literal
 // gets wrong, the token keeps its kind (Int or Float) with the value 0, so the
 // parser sees a number where the programmer wrote one and adds no error of its
-// own. An Int that was reported is also recorded in the TokenBuffer (see
+// own. A number that was reported is also recorded in the TokenBuffer (see
 // TokenBuffer.reportedNumber), because its 0 is not the number written and the
-// parser makes no number of it. Each literal reports at most one diagnostic,
-// and its span is the whole literal.
+// parser makes no number of an Int that was reported, nor an index of any. Each
+// literal reports at most one diagnostic, and its span is the whole literal.
 
 // isDecDigit reports whether c is a decimal digit.
 func isDecDigit(c byte) bool { return c >= '0' && c <= '9' }
@@ -184,6 +184,7 @@ func (lx *lexer) emitInt(start int, text string, radix int) {
 // is not an error: ParseFloat returns 0 and the literal is 0, as in Go.
 func (lx *lexer) emitFloat(start int, text string) {
 	v, err := strconv.ParseFloat(text, 64)
+	reported := err != nil
 	if err != nil {
 		if !errors.Is(err, strconv.ErrRange) {
 			panic("unreachable: " + err.Error())
@@ -194,7 +195,7 @@ func (lx *lexer) emitFloat(start int, text string) {
 			WithHelp(outOfRangeHelp(text)))
 		v = 0
 	}
-	lx.pushFloat(start, v)
+	lx.pushFloat(start, v, reported)
 }
 
 // outOfRangeHelp is the help of an E0109 for the float literal text, as `number`
@@ -245,7 +246,7 @@ func (lx *lexer) malformed(start int, label, help string, isFloat bool, fixits .
 	}
 	lx.sink.Report(d)
 	if isFloat {
-		lx.pushFloat(start, 0)
+		lx.pushFloat(start, 0, true)
 		return
 	}
 	lx.pushInt(start, 0, true)
@@ -259,15 +260,23 @@ func (lx *lexer) malformed(start int, label, help string, isFloat bool, fixits .
 func (lx *lexer) pushInt(start int, v int64, reported bool) {
 	lx.tb.Ints = append(lx.tb.Ints, v)
 	lx.emit(Int, start, uint32(len(lx.tb.Ints)-1))
+	lx.noteReported(start, reported)
+}
+
+// pushFloat is pushInt for a Float, whose reports are E0107 and E0109.
+func (lx *lexer) pushFloat(start int, v float64, reported bool) {
+	lx.tb.Floats = append(lx.tb.Floats, v)
+	lx.emit(Float, start, uint32(len(lx.tb.Floats)-1))
+	lx.noteReported(start, reported)
+}
+
+// noteReported records the number token that starts at start, the one just
+// emitted, if reported says that Lex reported its literal. The numbers are
+// lexed in order, so the list stays sorted by the start of the token.
+func (lx *lexer) noteReported(start int, reported bool) {
 	if reported {
 		lx.tb.reportedNumbers = append(lx.tb.reportedNumbers, uint32(start))
 	}
-}
-
-// pushFloat is pushInt for a Float.
-func (lx *lexer) pushFloat(start int, v float64) {
-	lx.tb.Floats = append(lx.tb.Floats, v)
-	lx.emit(Float, start, uint32(len(lx.tb.Floats)-1))
 }
 
 // span returns the span from start to the current position.

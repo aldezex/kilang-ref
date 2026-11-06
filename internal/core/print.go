@@ -21,8 +21,11 @@ import (
 //     (`true => …`, `false => …`, `_ => …`) and a `}`;
 //   - a call or a primitive is `callee(a, b)` or `add_int(a, b)`, all in one
 //     line unless an operand takes several; a constructor is written the same
-//     way, with its name and its arguments (`Circle(1.0)`), and `None` with no
-//     parentheses when it has no arguments;
+//     way, with its name and its arguments (`Circle(1.0)`, and `Point(1.0, 2.0)`
+//     for a record), and `None` with no parentheses when it has no arguments; a
+//     tuple has no name, so it is its arguments in parentheses, `(1, true)`; a
+//     field read is the value, a dot and the number of the field, `p.0`, and a
+//     value that is a Let goes in parentheses, `(let u = (1, 2);` and `u).0`;
 //   - a Float literal is written as kirt/fmtnum writes it (`1.0`, `0.1`,
 //     `1e21`), so that it is never taken for an Int.
 //
@@ -213,10 +216,26 @@ func (pr *printer) node(t printTask) {
 		pr.out.WriteString(pr.in.String(pr.p.Funs.Get(e.Fun).Name))
 	case Con:
 		// The name of the constructor, and its arguments as a call has them; a
-		// constructor with none is the name alone, as the program writes it.
-		pr.out.WriteString(pr.in.String(pr.p.Ctors.Get(e.Ctor).Name))
+		// constructor with none is the name alone, as the program writes it. A
+		// tuple has no name: its arguments are all of it.
+		if ctor := pr.p.Ctors.Get(e.Ctor); !ctor.Tuple {
+			pr.out.WriteString(pr.in.String(ctor.Name))
+		}
 		if e.Args.Count > 0 {
 			pr.args(e.Args, t.ind)
+		}
+	case Proj:
+		// A Let ends in its body, so a dot written after it would read as a read of
+		// that body, and `({ let u = (1, 2); u }).0` would print like
+		// `{ let u = (1, 2); u.0 }`: a Let that is the target is in parentheses.
+		index := "." + strconv.FormatUint(uint64(e.Index), 10)
+		if pr.p.Exprs.Get(e.Target).Kind == Let {
+			pr.addText("(")
+			pr.addExpr(e.Target, t.ind, false)
+			pr.addText(")" + index)
+		} else {
+			pr.addExpr(e.Target, t.ind, false)
+			pr.addText(index)
 		}
 	case Call:
 		pr.addExpr(e.Callee, t.ind, false)

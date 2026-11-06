@@ -73,6 +73,8 @@ type Decls struct {
 	// iterated.
 	typeOf map[DefID]TypeDefID
 	ctorOf map[DefID]CtorID
+	// fieldOf is, for each record, where each of its fields is in TypeDef.Fields.
+	fieldOf map[TypeDefID]map[base.Symbol]int
 }
 
 // TypeDefOf returns the declared type that the definition def (a DefType) is,
@@ -87,6 +89,14 @@ func (d *Decls) TypeDefOf(def DefID) (TypeDefID, bool) {
 func (d *Decls) CtorOf(def DefID) (CtorID, bool) {
 	c, ok := d.ctorOf[def]
 	return c, ok
+}
+
+// FieldIndex returns where the field called name is among the fields of the record
+// td, and whether it has one. A record that declares the same name twice answers
+// with the first. It answers for a record only: a sum or an alias has no fields.
+func (d *Decls) FieldIndex(td TypeDefID, name base.Symbol) (int, bool) {
+	i, ok := d.fieldOf[td][name]
+	return i, ok
 }
 
 // Meaning is the type that the name of the declared type td stands for: the type
@@ -141,10 +151,13 @@ func (d *Decls) FieldSpan(mods []*syntax.Module, c CtorID, i int) base.Span {
 //     of an alias is the type of the last one, and an alias of a declared type is
 //     that type. A cycle of aliases (`type A = B` and `type B = A`, or `type A =
 //     A`) has no expansion: it is one E0801 for the cycle, on its first alias in
-//     the source, with a secondary label on each of the others; and the aliases
-//     in it, and any alias that stands for one of them, have the error type, which
-//     says nothing wherever it is used. A sum or a record that names itself is not
-//     a cycle: it holds its type by name, not by what the name expands to.
+//     the source, with a secondary label on each of the others; aliases that lead
+//     back to each other in more than one way (`type A = (A, B)` and `type B =
+//     (A, Int)`) are one cycle and one E0801, and not one for each way round; and
+//     the aliases in it, and any alias that stands for one of them, have the error
+//     type, which says nothing wherever it is used. A sum or a record that names
+//     itself is not a cycle: it holds its type by name, not by what the name
+//     expands to.
 //  3. The types of the fields of each constructor and each record are read from
 //     their type expressions.
 //
@@ -160,7 +173,10 @@ func (d *Decls) FieldSpan(mods []*syntax.Module, c CtorID, i int) base.Span {
 func Declare(mods []*syntax.Module, res *ResolvedProgram, in *base.Interner, sink *diag.Sink) *Decls {
 	d := &declarer{
 		mods: mods, res: res, in: in, sink: sink,
-		decls: &Decls{Types: NewTypeTable(), typeOf: make(map[DefID]TypeDefID), ctorOf: make(map[DefID]CtorID)},
+		decls: &Decls{
+			Types: NewTypeTable(), typeOf: make(map[DefID]TypeDefID), ctorOf: make(map[DefID]CtorID),
+			fieldOf: make(map[TypeDefID]map[base.Symbol]int),
+		},
 	}
 	d.reader = typeReader{mods: mods, res: res, in: in, sink: sink, decls: d.decls}
 	d.collect()
@@ -214,72 +230,123 @@ func (d *declarer) collect() {
 }
 
 // aliasFrame is a step of the walk over the aliases: the alias td, the aliases
-// that its target mentions, and how many of them have been looked at.
+// that its target mentions, how many of them have been looked at, and whether it
+// mentions itself.
 type aliasFrame struct {
 	td   TypeDefID
 	deps []TypeDefID
 	next int
+	self bool
 }
 
 // aliases is the second sweep: it expands every alias, depth first along what
 // each one mentions, with an explicit stack of the aliases that are being
-// expanded. An alias is expanded once every alias that it mentions is; meeting one
-// that is still being expanded is a cycle (see cycle).
+// expanded. An alias is expanded once every alias that it mentions is.
+//
+// The aliases that lead back to each other are found as Tarjan's algorithm finds
+// the strongly connected sets of a graph, in the same walk: each alias is numbered
+// as it is first met, and low is the lowest number that it, or anything it leads
+// to that is still waiting for its set to be complete, leads back to. An alias
+// whose low is lower than its own number is in a set with an alias met before it;
+// one whose low is its own is the first of its set, and when the walk leaves it
+// the set is whatever was met since (see cycle). Each set of two or more aliases,
+// or of one that mentions itself, is one cycle and one error, however many ways
+// there are round it: `type A = (A, B)` and `type B = (A, Int)` are one, and not
+// one for each way back to `A`.
 func (d *declarer) aliases() {
-	const (
-		unseen uint8 = iota
-		open         // on the stack: being expanded
-		done
-	)
 	n := d.decls.Defs.Len()
-	state := make([]uint8, n)
-	depth := make([]int, n) // the position of an open alias on the stack
+	number := make([]int, n) // 0: not met yet
+	low := make([]int, n)
+	waiting := make([]bool, n) // met, and its set is not complete
 	cyclic := make([]bool, n)
-	frame := func(td TypeDefID) aliasFrame {
+	var stack []aliasFrame // the aliases being expanded
+	var sets []TypeDefID   // the aliases that wait for their set to be complete, in the order they were met
+	met := 0
+	meet := func(td TypeDefID) {
+		met++
+		number[td], low[td], waiting[td] = met, met, true
+		sets = append(sets, td)
 		def := d.decls.Defs.Get(td)
-		return aliasFrame{td: td, deps: d.aliasRefs(def.Module, d.mods[def.Module].ItemNodes.Get(def.Item).Alias)}
+		stack = append(stack, aliasFrame{td: td, deps: d.aliasRefs(def.Module, d.mods[def.Module].ItemNodes.Get(def.Item).Alias)})
 	}
-	var stack []aliasFrame
 	for root := range TypeDefID(n) {
-		if d.decls.Defs.Get(root).Form != syntax.TypeFormAlias || state[root] != unseen {
+		if d.decls.Defs.Get(root).Form != syntax.TypeFormAlias || number[root] != 0 {
 			continue
 		}
-		state[root], depth[root] = open, 0
-		stack = append(stack[:0], frame(root))
+		meet(root)
 		for len(stack) > 0 {
 			top := &stack[len(stack)-1]
 			if top.next < len(top.deps) {
 				dep := top.deps[top.next]
 				top.next++
-				switch state[dep] {
-				case unseen:
-					state[dep], depth[dep] = open, len(stack)
-					stack = append(stack, frame(dep))
-				case open:
-					d.cycle(stack[depth[dep]:], cyclic)
+				switch {
+				case number[dep] == 0:
+					meet(dep)
+				case waiting[dep]:
+					// An alias that this one leads back to, or one that is in a set
+					// that this one is in.
+					low[top.td] = min(low[top.td], number[dep])
+					top.self = top.self || dep == top.td
 				}
 				continue
 			}
-			// Everything that this alias mentions has its expansion (or the error
-			// type, if it is in a cycle), so its own can be read.
-			def := d.decls.Defs.Get(top.td)
-			if !cyclic[top.td] {
-				target := d.mods[def.Module].ItemNodes.Get(def.Item).Alias
-				d.decls.Defs.Ptr(top.td).Alias = d.reader.typeOf(def.Module, target)
-			}
-			state[top.td] = done
+			done := *top
 			stack = stack[:len(stack)-1]
+			td := done.td
+			if low[td] < number[td] {
+				// An alias met before this one is in its set, which is not complete:
+				// the first of the set is the one the walk leaves last. The alias
+				// that met this one is on the stack still, and is in the set too.
+				cyclic[td] = true
+				parent := stack[len(stack)-1].td
+				low[parent] = min(low[parent], low[td])
+			} else {
+				// The first alias of its set: the walk leaves the set with it.
+				from := len(sets) - 1
+				for sets[from] != td {
+					from--
+				}
+				if members := sets[from:]; len(members) > 1 || done.self {
+					d.cycle(members, cyclic)
+				}
+				for _, m := range sets[from:] {
+					waiting[m] = false
+				}
+				sets = sets[:from]
+			}
+			// Everything that this alias mentions has its expansion (or the error
+			// type, if it is in a cycle), so its own can be read. An alias that
+			// mentions one that is in a cycle, or leads into one, leads into it
+			// too, and has the error type as a whole: a tuple that holds the error
+			// type is not the error type, and would make a mistake of its own where
+			// the alias is used.
+			def := d.decls.Defs.Get(td)
+			for _, dep := range done.deps {
+				if cyclic[dep] {
+					cyclic[td] = true
+				}
+			}
+			if !cyclic[td] {
+				target := d.mods[def.Module].ItemNodes.Get(def.Item).Alias
+				d.decls.Defs.Ptr(td).Alias = d.reader.typeOf(def.Module, target)
+			}
 		}
 	}
 }
 
 // aliasRefs returns the aliases that the type expression id of module mod
-// mentions, in the order they are written, each time it mentions one. It goes
-// down the structure of the type with a list of the parts still to look at, so
-// the forms that nest (tuples, functions, applications) will add their parts to
-// that list.
+// mentions, in the order they are first written, once each: `(A, A)` mentions A
+// once, because the walk asks which aliases a type depends on and a second
+// mention is the same dependency. The list is then as long as the aliases that a
+// type depends on, not as the number of times that it writes them, and the walk
+// does not meet one again. It changes no diagnostic: a set of aliases that lead
+// back to each other is one error (see cycle) however many mentions there are.
+// It goes down the structure of the type with a list of the parts still to look
+// at, so a tuple adds its elements to that list and the other forms that nest
+// (functions, applications) will add their parts.
 func (d *declarer) aliasRefs(mod ModuleIdx, id syntax.TypeExprID) []TypeDefID {
 	var refs []TypeDefID
+	mentioned := make(map[TypeDefID]bool)
 	todo := []syntax.TypeExprID{id}
 	for len(todo) > 0 {
 		te := d.mods[mod].Types.Get(todo[len(todo)-1])
@@ -287,12 +354,19 @@ func (d *declarer) aliasRefs(mod ModuleIdx, id syntax.TypeExprID) []TypeDefID {
 		switch te.Kind {
 		case syntax.TypeUnit, syntax.TypeError:
 			// Nothing inside.
+		case syntax.TypeTuple:
+			// The last element goes on first, so that the first comes off next.
+			elems := d.mods[mod].TypeList(te.Elems)
+			for i := len(elems) - 1; i >= 0; i-- {
+				todo = append(todo, elems[i])
+			}
 		case syntax.TypeNamed:
 			res, ok := d.res.LookupType(mod, te.Name)
 			if !ok || res.Kind != ResDef {
 				continue
 			}
-			if td := d.decls.typeOf[res.Def]; d.decls.Defs.Get(td).Form == syntax.TypeFormAlias {
+			if td := d.decls.typeOf[res.Def]; d.decls.Defs.Get(td).Form == syntax.TypeFormAlias && !mentioned[td] {
+				mentioned[td] = true
 				refs = append(refs, td)
 			}
 		default:
@@ -302,36 +376,38 @@ func (d *declarer) aliasRefs(mod ModuleIdx, id syntax.TypeExprID) []TypeDefID {
 	return refs
 }
 
-// cycle reports the cycle of aliases that is the end of the stack: members are
-// the aliases from the one that was met again to the one that met it, each
-// standing for the next and the last for the first. They are marked in cyclic, so
-// that none is expanded. The report is one E0801, on the member that comes first
-// in the source (the lowest TypeDefID), with a secondary label on each of the
-// others in the order the cycle goes through them; a cycle of one alias has no
-// secondary label. If the sink has dropped errors the report is not built: a
+// cycle reports the cycle that the aliases members make, in the order they were
+// met, and marks each as cyclic, so that none is expanded. The report is one E0801,
+// on the member that comes first in the source (the lowest TypeDefID), with a
+// secondary label on each of the others, in the order they were met after it, and
+// wrapping round: for a cycle in which each alias stands for the next, that is the
+// order the cycle goes through them. A set in which an alias is reached in several
+// ways (`type A = (A, B)`, `type B = (A, Int)`) is one error, and the labels are
+// its members in that order, which is not one path then. A cycle of one alias has
+// no secondary label. If the sink has dropped errors the report is not built: a
 // cycle of thousands of aliases would write thousands of labels for nobody.
 // The labels are one per member, however long the cycle (the row of E0801 has no
 // cap), so they are built in one slice that is the right size from the start:
 // adding them one by one with WithSecondary copies the whole list each time, and
 // the cost of one error grows with the square of the cycle.
-func (d *declarer) cycle(members []aliasFrame, cyclic []bool) {
+func (d *declarer) cycle(members []TypeDefID, cyclic []bool) {
 	first := 0
 	for i, m := range members {
-		cyclic[m.td] = true
-		if m.td < members[first].td {
+		cyclic[m] = true
+		if m < members[first] {
 			first = i
 		}
 	}
 	if d.sink.Truncated() {
 		return
 	}
-	primary := d.decls.Defs.Get(members[first].td)
+	primary := d.decls.Defs.Get(members[first])
 	diagnostic := diag.NewError(diag.E(801), "alias `"+d.in.String(primary.Name)+"` refers to itself",
 		diag.Label{Span: primary.Span, Message: "this alias is part of a cycle"})
 	if len(members) > 1 {
 		through := make([]diag.Label, 0, len(members)-1)
 		for k := 1; k < len(members); k++ {
-			other := d.decls.Defs.Get(members[(first+k)%len(members)].td)
+			other := d.decls.Defs.Get(members[(first+k)%len(members)])
 			through = append(through, diag.Label{Span: other.Span, Message: "through `" + d.in.String(other.Name) + "`, defined here"})
 		}
 		diagnostic.Secondary = through
@@ -363,9 +439,24 @@ func (d *declarer) members() {
 			}
 		case syntax.TypeFormRecord:
 			rec := d.decls.Defs.Ptr(id)
+			index := make(map[base.Symbol]int, it.Fields.Count)
+			firstAt := make(map[base.Symbol]base.Span, it.Fields.Count)
 			for _, f := range m.Fields(it.Fields) {
+				// A name declared twice is E0302 at the second, as for a type or a
+				// constructor, and the record keeps the first: the second is not one
+				// of its fields, so no literal of the record is missing it.
+				if _, dup := index[f.Name]; dup {
+					d.sink.Report(redefinedError(d.in.String(f.Name), f.NameSpan, firstAt[f.Name]))
+					// Its type is still read, so that a name in it that is not a type
+					// is reported now and not after the repeat is mended.
+					d.reader.typeOf(td.Module, f.Type)
+					continue
+				}
+				index[f.Name] = len(rec.Fields)
+				firstAt[f.Name] = f.NameSpan
 				rec.Fields = append(rec.Fields, FieldDef{Name: f.Name, Span: f.Span, Type: d.reader.typeOf(td.Module, f.Type)})
 			}
+			d.decls.fieldOf[id] = index
 		case syntax.TypeFormAlias:
 			// Expanded by the second sweep.
 		default:
@@ -394,7 +485,9 @@ type typeReader struct {
 // ResolvedProgram.LookupType); a declared type is what its name stands for (see
 // Decls.Meaning). One that the parser could not read after its name has the error
 // type, silently: the parser has said what is wrong. A name that is neither is
-// E0406, reported here, and has the error type.
+// E0406, reported here, and has the error type. A tuple is the tuple of the types
+// of its elements; it calls itself once for each level of tuples, which Parse
+// bounds (MaxNesting).
 func (r *typeReader) typeOf(mod ModuleIdx, id syntax.TypeExprID) TypeID {
 	tbl := r.decls.Types
 	te := r.mods[mod].Types.Get(id)
@@ -408,19 +501,21 @@ func (r *typeReader) typeOf(mod ModuleIdx, id syntax.TypeExprID) TypeID {
 			}
 			return r.decls.Meaning(r.decls.typeOf[res.Def])
 		}
-		switch r.in.String(te.Name) {
-		case "Int":
-			return tbl.Builtin(BuiltinInt)
-		case "Float":
-			return tbl.Builtin(BuiltinFloat)
-		case "Bool":
-			return tbl.Builtin(BuiltinBool)
+		if b, ok := builtinTypes[r.in.String(te.Name)]; ok {
+			return tbl.Builtin(b)
 		}
 		// Not a type that is in scope: reported here, once, where it is written,
 		// and the error type from then on, which says nothing more wherever it is
 		// used.
 		r.unknownTypeError(mod, te.Span, r.in.String(te.Name))
 		return tbl.Error()
+	case syntax.TypeTuple:
+		elems := r.mods[mod].TypeList(te.Elems)
+		types := make([]TypeID, len(elems))
+		for i, e := range elems {
+			types[i] = r.typeOf(mod, e)
+		}
+		return tbl.Tuple(types)
 	case syntax.TypeError:
 		return tbl.Error()
 	default:

@@ -63,7 +63,23 @@ import (
 //     one with fields that is written without a call is a FunRef to its wrapper,
 //     as a function's name is. Program.Ctors has one Ctor for each constructor of
 //     the declarations, in their order, so CtorID(c) is sema.CtorID(c): its Arity
-//     is the number of fields.
+//     is the number of fields. After those come the constructors that no variant
+//     declares: one for each record, in the order of the declarations (Record, with
+//     the name of the record and the names of the fields), and one for each arity of
+//     tuple that the program writes, in the order the elaboration meets them
+//     (Tuple, with no name).
+//   - A record literal is a Con of the constructor of its record, with the values in
+//     the order the record declares the fields, `p.x` is a Proj of the number of
+//     the field x, and `t.0` is a Proj of 0. A tuple is a Con of the tuple
+//     constructor of its arity. An update, `Point { x: 3.0, ..p }`, is a new Con:
+//     the base is read once, and a field that the literal does not give is a Proj
+//     of the base (the machine does not update a value in place). The values of the
+//     literal are evaluated in the order they are written, and the base after them,
+//     as the arguments of a call are, which a Con alone would not do for a literal
+//     that writes the fields in another order than they are declared in: when the
+//     literal has a base, or writes them out of order, each value is bound to a
+//     variable named as its field first, in the order they are written, the base is
+//     bound to `base` after them, and the Con and its Projs read the variables.
 //
 // Every node has the span of the syntax it comes from, except these: a PrimCall
 // has the span of its operator (OpSpan: that is where the machine reports an
@@ -86,19 +102,34 @@ import (
 //
 // It only reads mods, res and typed, apart from this: TypeTable.Resolve
 // compresses the paths of the type variables it follows, which changes how the
-// table is stored. It does add `_` to in, and `a0`, `a1`… when a constructor has a
-// field with no name.
+// table is stored. It does add `_` and `base` to in, and `a0`, `a1`… when a
+// constructor has a field with no name.
 func Elaborate(mods []*syntax.Module, res *sema.ResolvedProgram, typed *sema.TypedProgram, in *base.Interner) *Program {
 	e := &elaborator{
 		mods: mods, res: res, typed: typed, in: in,
 		underscore: in.InternString("_"),
+		baseName:   in.InternString("base"),
 		p:          &Program{},
+		records:    make(map[sema.TypeDefID]CtorID),
+		tuples:     make(map[int]CtorID),
 		varOf:      make([]VarID, res.Locals.Len()),
 	}
 	e.b = Builder{P: e.p}
 	// The constructors first, so that every Con the functions build has its Ctor.
 	for _, c := range typed.Decls.Ctors.All() {
 		e.p.Ctors.Push(Ctor{Name: c.Name, Tag: c.Tag, Arity: uint32(len(c.Args)), Fields: slices.Clone(c.Fields)})
+	}
+	// Then the one of each record, which has no variant: they follow the declared
+	// ones, so that the numbers of those do not change.
+	for id, td := range typed.Decls.Defs.All() {
+		if td.Form != syntax.TypeFormRecord {
+			continue
+		}
+		names := make([]base.Symbol, len(td.Fields))
+		for i, f := range td.Fields {
+			names[i] = f.Name
+		}
+		e.records[id] = e.p.Ctors.Push(Ctor{Name: td.Name, Arity: uint32(len(td.Fields)), Record: true, Fields: names})
 	}
 	// The Defs are in DefID order, so each Push gives the id of its Def.
 	for id, def := range res.Defs.All() {
@@ -114,8 +145,14 @@ type elaborator struct {
 	res   *sema.ResolvedProgram
 	typed *sema.TypedProgram
 	in    *base.Interner
-	// underscore is the name of the variable that an expression statement binds.
-	underscore base.Symbol
+	// underscore is the name of the variable that an expression statement binds,
+	// and baseName that of the variable that an update binds its base to.
+	underscore, baseName base.Symbol
+	// records is the constructor of each record, and tuples the one of each arity
+	// of tuple that has been written so far, which tupleCtor adds when it is first
+	// needed.
+	records map[sema.TypeDefID]CtorID
+	tuples  map[int]CtorID
 
 	p *Program
 	b Builder
@@ -270,11 +307,121 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 		return e.b.Match(x.Span, cond, []Arm{{Pat: PatTrue, Body: then}, {Pat: PatFalse, Body: otherwise}})
 	case syntax.ExprBlock:
 		return e.block(x)
+	case syntax.ExprTuple:
+		args := make([]ExprID, 0, x.Args.Count)
+		for _, a := range e.m.ExprList(x.Args) {
+			args = append(args, e.expr(a))
+		}
+		return e.b.Con(x.Span, e.tupleCtor(len(args)), args)
+	case syntax.ExprTupleIndex:
+		return e.b.Proj(x.Span, e.expr(x.Target), x.Index)
+	case syntax.ExprField:
+		td := e.recordOf(x.Target)
+		i, ok := e.typed.Decls.FieldIndex(td, x.Name)
+		if !ok {
+			panic("core: cannot elaborate a field that the record does not have")
+		}
+		return e.b.Proj(x.Span, e.expr(x.Target), uint32(i))
+	case syntax.ExprRecord:
+		return e.record(id, x)
 	case syntax.ExprError:
 		panic("core: cannot elaborate an expression that could not be read")
 	default:
 		panic("unreachable")
 	}
+}
+
+// tupleCtor returns the constructor of the tuples of n elements, making it the
+// first time: it has no name and no tag, it is Tuple, and it comes after the
+// constructors that are there already.
+func (e *elaborator) tupleCtor(n int) CtorID {
+	if c, ok := e.tuples[n]; ok {
+		return c
+	}
+	c := e.p.Ctors.Push(Ctor{Arity: uint32(n), Tuple: true})
+	e.tuples[n] = c
+	return c
+}
+
+// recordOf returns the record that the type of the expression id of the current
+// module is. The checker has made sure that it is one.
+func (e *elaborator) recordOf(id syntax.ExprID) sema.TypeDefID {
+	types := e.typed.Types
+	n := types.Node(types.Resolve(e.tm.ExprTypes[id]))
+	if n.Kind != sema.TypeData || e.typed.Decls.Defs.Get(n.Def).Form != syntax.TypeFormRecord {
+		panic("core: cannot elaborate the field of a value that is not a record: `" + types.Show(e.tm.ExprTypes[id]) + "`")
+	}
+	return n.Def
+}
+
+// record elaborates the record literal x, whose id is id. The literal is a Con of
+// the constructor of its record when its values can go straight to it: it has no
+// base, and it writes the fields in the order they are declared in, so the Con
+// evaluates them in the order they are written. Otherwise each value is bound to a
+// variable, named as its field, in the order they are written, then the base to
+// `base`, and the Con takes the variable of each field it was given and a Proj of
+// the base for each it was not.
+//
+// A literal that was accepted gives each field of the record at most once, which
+// is what lets it say, for each declared field, which written one it is.
+func (e *elaborator) record(id syntax.ExprID, x syntax.Expr) ExprID {
+	td := e.recordOf(id)
+	ctor := e.records[td]
+	fields := e.m.FieldInits(x.Fields)
+	// at[i] is the position, among the fields as they are written, of the one that
+	// gives the declared field i, or -1 if the literal does not give it.
+	at := make([]int, e.p.Ctors.Get(ctor).Arity)
+	for i := range at {
+		at[i] = -1
+	}
+	inOrder := true
+	for k, f := range fields {
+		i, ok := e.typed.Decls.FieldIndex(td, f.Name)
+		if !ok {
+			panic("core: cannot elaborate a field that the record does not have")
+		}
+		at[i] = k
+		inOrder = inOrder && i == k
+	}
+	if !x.HasBase && inOrder {
+		args := make([]ExprID, len(fields))
+		for k, f := range fields {
+			args[k] = e.expr(f.Value)
+		}
+		return e.b.Con(x.Span, ctor, args)
+	}
+
+	type binding struct {
+		sp   base.Span
+		v    VarID
+		init ExprID
+	}
+	binds := make([]binding, 0, len(fields)+1)
+	vars := make([]VarID, len(fields))
+	for k, f := range fields {
+		v := e.newVar(f.Name, f.Span)
+		vars[k] = v
+		sp := base.Span{File: f.Span.File, Lo: f.Span.Lo, Hi: e.m.Exprs.Get(f.Value).Span.Hi}
+		binds = append(binds, binding{sp, v, e.expr(f.Value)})
+	}
+	var baseVar VarID
+	if x.HasBase {
+		baseVar = e.newVar(e.baseName, e.m.Exprs.Get(x.Base).Span)
+		binds = append(binds, binding{e.m.Exprs.Get(x.Base).Span, baseVar, e.expr(x.Base)})
+	}
+	args := make([]ExprID, len(at))
+	for i, k := range at {
+		if k >= 0 {
+			args[i] = e.b.VarRef(fields[k].Span, vars[k])
+		} else {
+			args[i] = e.b.Proj(x.Span, e.b.VarRef(e.m.Exprs.Get(x.Base).Span, baseVar), uint32(i))
+		}
+	}
+	body := e.b.Con(x.Span, ctor, args)
+	for i := len(binds) - 1; i >= 0; i-- {
+		body = e.b.Let(binds[i].sp, binds[i].v, binds[i].init, body)
+	}
+	return body
 }
 
 // ctorOf returns the constructor that the expression id is the name of, and

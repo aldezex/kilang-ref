@@ -44,7 +44,8 @@ func elabVar(c *testsupport.Compiled, v core.VarID) string {
 // elabShape writes the expression id on one line, with the fields that decide
 // what it does and no spans: a literal as its value, a variable as name@slot, a
 // function as @name, a call as callee(args), a primitive as name(args), a
-// constructor as Name(args), or Name alone when it has no arguments, a Let as
+// constructor as Name(args), or Name alone when it has no arguments (a tuple has
+// no name: it is (args)), a field read as target.index, a Let as
 // `let v = init; body` and a Match as `match s { pattern => body; … }`. A test
 // compares the whole line, so a node of the wrong kind, a swapped pair of
 // children or a slot out of place shows as a different text. It recurses over
@@ -82,6 +83,8 @@ func elabShape(c *testsupport.Compiled, id core.ExprID) string {
 			return name
 		}
 		return name + "(" + args(e.Args) + ")"
+	case core.Proj:
+		return elabShape(c, e.Target) + "." + strconv.FormatUint(uint64(e.Index), 10)
 	case core.Let:
 		return "let " + elabVar(c, e.Var) + " = " + elabShape(c, e.Init) + "; " + elabShape(c, e.Body)
 	case core.Match:
@@ -749,7 +752,8 @@ fn last() {}
 		// the id of its Def. The Fun of a type has nothing to run: its body is `()`
 		// and it takes nothing, so that Lint does not call it an extern with no
 		// name; the record and the alias have the Fun of their type and none of a
-		// constructor. The Fun of a constructor is the function that it is when it
+		// constructor (the record has a Ctor, after the declared ones, and no Fun
+		// for it: its literal is a Con and nothing calls it). The Fun of a constructor is the function that it is when it
 		// is not called: a parameter for each field, in a slot each and named as the
 		// field is, or a0, a1… by position when it has no name, and the Con of the
 		// constructor on them as its body.
@@ -817,12 +821,14 @@ fn last() {}
 			{Name: sym("None"), Tag: 1, Arity: 0},
 			{Name: sym("Pair"), Tag: 2, Arity: 2},
 			{Name: sym("Mixed"), Tag: 3, Arity: 2, Fields: []base.Symbol{sym("a"), base.NoSymbol}},
+			// The record's, which no variant declares, comes after them.
+			{Name: sym("Point"), Arity: 1, Record: true, Fields: []base.Symbol{sym("x")}},
 		}
 		if p.Ctors.Len() != len(wantCtors) {
 			t.Fatalf("the Program has %d constructors, want %d", p.Ctors.Len(), len(wantCtors))
 		}
 		for i, w := range wantCtors {
-			if got := p.Ctors.Get(core.CtorID(i)); got.Name != w.Name || got.Tag != w.Tag || got.Arity != w.Arity || got.Tuple ||
+			if got := p.Ctors.Get(core.CtorID(i)); got.Name != w.Name || got.Tag != w.Tag || got.Arity != w.Arity || got.Tuple || got.Record != w.Record ||
 				!slices.Equal(got.Fields, w.Fields) || (got.Fields == nil) != (w.Fields == nil) {
 				t.Errorf("constructor %d is %+v, want %+v", i, got, w)
 			}

@@ -66,6 +66,10 @@ import (
 // block.
 func (p *parser) block() ExprID {
 	open := p.advance()
+	// A block is inside a delimiter: a record literal may start in it, even if
+	// the block is in the head of an `if`.
+	outerNoRecord := p.noRecord
+	p.noRecord = false
 	var stmts []StmtID
 	var tail ExprID
 	hasTail := false
@@ -125,6 +129,7 @@ func (p *parser) block() ExprID {
 			stmts = append(stmts, p.m.Stmts.Push(Stmt{Kind: StmtExpr, Span: p.m.Exprs.Get(e).Span, Expr: e}))
 		}
 	}
+	p.noRecord = outerNoRecord
 	// The statements are collected in a slice of their own and added to the
 	// pool when the list is complete: the blocks inside them add theirs first,
 	// and a ListRange must be contiguous.
