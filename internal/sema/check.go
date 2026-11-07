@@ -405,6 +405,12 @@ func (c *checker) infer(id syntax.ExprID) TypeID {
 		ty = c.tuple(e)
 	case syntax.ExprIf:
 		ty = c.inferIf(e)
+	case syntax.ExprMatch:
+		// Only the scrutinee is checked, until the session that types patterns
+		// and arms (ch12-s2): the match has the error type, which says nothing, so
+		// it adds no mistake wherever it is used.
+		c.infer(e.Scrutinee)
+		ty = c.errT
 	case syntax.ExprBlock:
 		c.stmts(e)
 		ty = c.unitT
@@ -442,6 +448,12 @@ func (c *checker) stmts(e syntax.Expr) {
 		s := c.m.Stmts.Get(id)
 		switch s.Kind {
 		case syntax.StmtLet:
+			if s.HasPat {
+				// No variable is bound until the session that types patterns
+				// (ch12-s2), and LetLocal holds no local for this statement.
+				c.infer(s.Expr)
+				continue
+			}
 			// With an annotation the initializer is checked against it, and
 			// the variable has the annotated type; without one the variable
 			// has the type of the initializer.

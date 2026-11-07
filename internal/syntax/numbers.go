@@ -169,10 +169,13 @@ func (lx *lexer) emitInt(start int, text string, radix int) {
 		if !errors.Is(err, strconv.ErrRange) {
 			panic("unreachable: " + err.Error())
 		}
+		// The lexer reports before the parser knows whether the literal is in an
+		// expression or in a pattern, and a pattern has no subtraction to write the
+		// smallest Int with, so the help says what each of them does.
 		lx.sink.Report(diag.NewError(diag.E(105), "integer literal is too large",
 			diag.Label{Span: lx.span(start), Message: "does not fit in a 64-bit `Int`"}).
 			WithNote("the largest `Int` is 9223372036854775807").
-			WithHelp("the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`"))
+			WithHelp("the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`; in the arm of a `match`, bind the value and compare it to that in a guard"))
 		v = 0
 	}
 	lx.pushInt(start, v, reported)

@@ -324,6 +324,8 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 		return e.b.Proj(x.Span, e.expr(x.Target), uint32(i))
 	case syntax.ExprRecord:
 		return e.record(id, x)
+	case syntax.ExprMatch:
+		panic("core: a match is not elaborated until ch12-s4")
 	case syntax.ExprError:
 		panic("core: cannot elaborate an expression that could not be read")
 	default:
@@ -550,6 +552,9 @@ func (e *elaborator) block(x syntax.Expr) ExprID {
 		s := e.m.Stmts.Get(id)
 		switch s.Kind {
 		case syntax.StmtLet:
+			if s.HasPat {
+				panic("core: a `let` with a pattern is not elaborated until ch12-s4")
+			}
 			v := e.bind(e.rm.LetLocal[id])
 			binds = append(binds, binding{s.Span, v, e.expr(s.Expr)})
 		case syntax.StmtExpr:

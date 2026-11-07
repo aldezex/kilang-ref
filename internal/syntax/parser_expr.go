@@ -150,23 +150,36 @@ func (p *parser) exprOrSkip(minBP int) (e ExprID, abandoned bool) {
 	return e, abandoned
 }
 
-// condition reads the condition of an if. It is a statement-level expression
-// with a count of its own, like the others, but not a statement: the if it is
-// in is part of an expression that goes on after it. If the condition is
-// abandoned, the statement was skipped to its end, with the rest of that if and
-// of whatever the if is in. So the expression around the if is abandoned too:
-// without that, an if inside the condition of another would look for its `{`
-// and the call that holds it for its `)` in the tokens after the end of the
-// statement, and report mistakes that are not in the program.
-func (p *parser) condition() (e ExprID, abandoned bool) {
-	// The `{` after the condition is the block of the if, so `Name {` in the
-	// condition, outside any delimiter, is a name and not a record literal; unless
-	// what follows the `{` is how no block starts, and then the literal is read and
-	// asked to have parentheses (see literalInHead).
-	outer := p.noRecord
-	p.noRecord = true
+// headWord says what the head of a construct, the expression before its `{`, is
+// called in the E0201 of a record literal there (see literalInHead): the text
+// that names the construct, and the one that says what its `{` starts.
+type headWord struct{ name, opens string }
+
+// The two constructs that have a head: the condition of an `if` and the scrutinee
+// of a `match`.
+var (
+	ifHead    = headWord{name: "an `if`", opens: "the block of the `if`"}
+	matchHead = headWord{name: "a `match`", opens: "the arms of the `match`"}
+)
+
+// condition reads the head of an if or of a match: the condition of the first, the
+// scrutinee of the second. It is a statement-level expression with a count of its
+// own, like the others, but not a statement: the construct it is in is part of an
+// expression that goes on after it. If the head is abandoned, the statement was
+// skipped to its end, with the rest of that if and of whatever the if is in. So
+// the expression around the if is abandoned too: without that, an if inside the
+// condition of another would look for its `{` and the call that holds it for its
+// `)` in the tokens after the end of the statement, and report mistakes that are
+// not in the program.
+func (p *parser) condition(head headWord) (e ExprID, abandoned bool) {
+	// The `{` after the head is the block of the if (or the arms of the match), so
+	// `Name {` in the head, outside any delimiter, is a name and not a record
+	// literal; unless what follows the `{` is how no block starts, and then the
+	// literal is read and asked to have parentheses (see literalInHead).
+	outer, outerHead := p.noRecord, p.head
+	p.noRecord, p.head = true, head
 	e, abandoned = p.exprOrSkip(0)
-	p.noRecord = outer
+	p.noRecord, p.head = outer, outerHead
 	if abandoned {
 		p.chain.abandoned = true
 	}
@@ -194,6 +207,9 @@ func (p *parser) pratt(minBP int) ExprID {
 	lhs := p.prefix()
 	for {
 		t := p.tok()
+		if p.startsLine(t) {
+			break
+		}
 		if t.Kind == LParen {
 			if !p.countChain(t.Span) {
 				break
@@ -203,7 +219,9 @@ func (p *parser) pratt(minBP int) ExprID {
 			// in them, even in the condition of an if.
 			outerNoRecord := p.noRecord
 			p.noRecord = false
+			p.parens++
 			args, ok := p.callArgs(t)
+			p.parens--
 			p.noRecord = outerNoRecord
 			if !ok {
 				lhs = p.errorExpr(start)
@@ -241,6 +259,23 @@ func (p *parser) pratt(minBP int) ExprID {
 		}
 	}
 	return lhs
+}
+
+// startsLine says whether the token t, which follows an operand, begins a line that
+// the line rule would have parted from the operand: it has a line break in front of
+// it, no Newline token (a Newline would have ended the operand already), and it is
+// none of the tokens that continue the line before (see continuesLine). The parser
+// is not inside a parenthesis that this expression opened (parens is 0), so the
+// lexer's reason for not putting a Newline there is a `(` or a `[` that an earlier
+// mistake left open, which hides every line break up to the `}` of the block (see
+// syncStatement). The line is then the next statement, as if its Newline were
+// there, and not a call of the operand (`let k = 1` and, on the next line,
+// `(b, a)`) or a subtraction from it (`- k`): the one mistake is one diagnostic and
+// the statements after it are the ones that the program has. Inside a parenthesis
+// that the expression itself opened a line break is only a space, and the operand
+// goes on.
+func (p *parser) startsLine(t Token) bool {
+	return t.NewlineBefore && p.parens == 0 && !continuesLine(t.Kind)
 }
 
 // chainedComparison deals with a comparison operator that comes right after a
@@ -376,7 +411,7 @@ func (p *parser) prefix() ExprID {
 
 // primary reads an expression that has no operator at its top: an integer,
 // float or boolean literal, a name, a record literal, `()`, a parenthesized
-// expression or a tuple, a block or an if. The other literals (strings and characters) come in later chapters, so
+// expression or a tuple, a block, an if or a match. The other literals (strings and characters) come in later chapters, so
 // for now their tokens are ones that cannot start an expression. A token
 // that cannot start an expression is E0201, and gives an ExprError with an
 // empty span at that token, which consumes nothing, so that a `)` or a `}` that
@@ -439,6 +474,8 @@ func (p *parser) primary() ExprID {
 		return b
 	case KwIf:
 		return p.ifExpr()
+	case KwMatch:
+		return p.matchExpr()
 	}
 	p.expected("expression")
 	return p.errorExpr(t.Span)
@@ -460,8 +497,8 @@ func (p *parser) kindAt(n int) TokenKind {
 }
 
 // literalInHead reads the record literal that name starts, the cursor being at its
-// `{`, in the head of an if, where a literal needs parentheses (the `{` of the
-// block is the one the head ends with). The literal is read as it is written, so
+// `{`, in the head of an if or of a match, where a literal needs parentheses (the
+// `{` of the block, or of the arms, is the one the head ends with). The literal is read as it is written, so
 // that what is in it is checked, and the mistake is one E0201 on it, with the edit
 // that wraps it, instead of the errors that reading the block would give: the name
 // before the `{` is no constructor (E0306), `x` is an unknown name (E0301), `:` is
@@ -475,9 +512,9 @@ func (p *parser) literalInHead(name Token) ExprID {
 		return id
 	}
 	n := lit.Span
-	p.report(diag.NewError(diag.E(201), "a record literal in the head of an `if` needs parentheses",
+	p.report(diag.NewError(diag.E(201), "a record literal in the head of "+p.head.name+" needs parentheses",
 		diag.Label{Span: n, Message: "this literal needs parentheses"}).
-		WithHelp("write the literal between parentheses: after a name, a `{` starts the block of the `if`").
+		WithHelp("write the literal between parentheses: after a name, a `{` starts " + p.head.opens).
 		WithFixIt(diag.Insert(n, "(")).
 		WithFixIt(diag.Insert(base.Span{File: n.File, Lo: n.Hi, Hi: n.Hi}, ")")))
 	return id
@@ -496,7 +533,9 @@ func (p *parser) group() ExprID {
 	}
 	outerNoRecord := p.noRecord
 	p.noRecord = false
+	p.parens++
 	e := p.groupBody()
+	p.parens--
 	p.noRecord = outerNoRecord
 	p.leave()
 	return e
@@ -926,18 +965,28 @@ func (p *parser) fieldInit() (FieldInit, bool) {
 
 // skipRecord consumes the rest of the record literal that name and open, its `{`,
 // begin, up to and including the `}` that closes it, and returns the error node
-// that the literal is. The braces that the skipped tokens open are matched with
-// their own `}`. If the file ends first, that is E0202 at the `{`.
+// that the literal is. See skipBraces.
 func (p *parser) skipRecord(name, open Token) ExprID {
+	p.skipBraces(open)
+	return p.errorExpr(name.Span)
+}
+
+// skipBraces consumes the tokens up to and including the `}` that closes the `{`
+// open, which is open and has been consumed. The braces that the skipped tokens
+// open are matched with their own `}`. If the file ends first, that is E0202 at
+// the `{`. Without it, the `}` that closes a literal or a pattern that went wrong
+// would be taken for the end of the block or the match around it (see
+// syncStatement, which does not count the brackets that were open before it).
+func (p *parser) skipBraces(open Token) {
 	var nested bracketStack
 	for {
 		switch k := p.tok().Kind; {
 		case k == Eof:
 			p.unclosed(open)
-			return p.errorExpr(name.Span)
+			return
 		case k == RBrace && nested.braces == 0:
 			p.advance()
-			return p.errorExpr(name.Span)
+			return
 		default:
 			trackBracket(&nested, k)
 			p.advance()

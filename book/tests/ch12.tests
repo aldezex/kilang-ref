@@ -1,0 +1,167 @@
+[T12.01] syntax.every_pattern_form_prints_as_written      level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    cada forma de patrón de la gramática (spec 5.3), sola y dentro de las demás, se lee y se escribe de vuelta tal como el programa la escribe
+input:   39 patrones: `_`, una variable, `0`, `-1`, `true`, `false`, constructores con y sin argumentos y anidados, records con puns, con patrón, con `..`, solo `..` y vacíos, tuplas, el paréntesis, listas con y sin `..t`, or-patrones (también uno con paréntesis a la izquierda y otro a la derecha) y uno que los mezcla todos; algunos sin espacios o en varias líneas
+expect:  el volcado de cada fuente con el patrón en su forma canónica, exacta: un paréntesis simple no deja nodo, pero el de un or-patrón dentro de otro se conserva (`(A | B) | C`, `A | (B | C)`), `Point {}` sale como `Point { }` y la coma tras el último argumento de un constructor se acepta
+why:     si el parser perdiera un `..t`, un `|` dentro de un argumento o un pun, el volcado cambiaría; compararlo entero es lo que lo delata.
+ref:     TestParsePat/every_pattern_form_prints_as_written
+
+[T12.02] syntax.pattern_nodes                             level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    cada nodo guarda lo que su forma promete: un literal dice qué carga es su valor, un record lo es aunque no nombre campos, un paréntesis es el patrón de dentro y una lista separa sus elementos de su resto
+input:   13 patrones para el tipo de nodo; `0`, `false`, `true`, cinco enteros (`-5`, `- 5`, el mayor `Int`, su opuesto y `-0`), `Some(Pair(a, 1), _)`, `None`, `Point { x, y: p, .. }`, `Point {}`, `Point { x }`, `[a, b, ..t]`, `[a, .._]`, `[a, b]` y `[..t]`
+expect:  el tipo de cada uno; `0` es `LitInt` con `Bool` falso y `false` es `LitBool` con `Int` 0; los enteros con su signo; los argumentos, los campos (un pun sin patrón), `Record`, `HasRest` y el patrón del resto (variable o comodín) en su sitio
+why:     `0` y `false` tienen la carga a cero los dos; sin `Lit` el comprobador no sabría si el patrón espera un `Int` o un `Bool`.
+ref:     TestParsePat/pattern_nodes
+
+[T12.03] syntax.an_or_pattern_of_three_is_one_node        level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    tres alternativas son un solo nodo con tres hijos, y un or-patrón entre paréntesis sigue siendo un nodo propio, a la izquierda, a la derecha y dentro de un argumento
+input:   `A | B | C`, `(A | B) | C`, `A | (B | C)` y `Some(A | B)`
+expect:  el primero, un `PatOr` con las tres alternativas `A`, `B` y `C` en orden; el segundo y el tercero, un `PatOr` de dos con un `PatOr` en el lado que lleva paréntesis; el cuarto, un constructor con un único argumento `PatOr`
+why:     con dos nodos anidados, E0703 se diría dos veces con otra etiqueta secundaria, y 100 000 alternativas serían un árbol de 100 000 niveles.
+ref:     TestParsePat/an_or_pattern_of_three_is_one_node
+
+[T12.04] syntax.spans_of_patterns                         level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un patrón cubre los tokens de que se leyó: sin los paréntesis que lo rodean, con su `)` o su `}` y con su signo; el nombre y cada campo tienen su span
+input:   18 patrones (`- 12`, `Some( x , y )`, `( a )`, `((a, b))`, `(A | B)`, `Point { .. }`…), cuatro nombres (`abc`, `Some`, `Point`, `None`), el resto de `[a, ..tail]` y de `[.._]`, y `Point { x, y: Some(p) }`
+expect:  el texto que cada span cubre, exacto: `a` para `( a )`, `(a, b)` para `((a, b))`, `A | B` para `(A | B)`; el nombre cubre solo `Some`; el resto cubre `tail` (y su nombre también) o `_`; los campos cubren `x` y `y: Some(p)`
+why:     las flechas de los errores de los pases siguientes caen en estos spans; un `)` dentro del patrón movería la flecha un carácter.
+ref:     TestParsePat/spans_of_patterns
+
+[T12.05] syntax.arms_and_guards                           level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un brazo es un patrón, una guarda opcional y un cuerpo, en el orden escrito; la guarda es una expresión hasta la `=>` y el brazo cubre desde su patrón hasta el final de su cuerpo
+input:   26 `match` (sin brazos, con uno y con dos, con guarda —sola, con una llamada y un record, sobre un or-patrón, y seguida de un brazo sin ella—, con cuerpos que son operaciones, bloque, `if`, `match` o record, con escrutinios que son llamada, campo, tupla, operación, `match` o un nombre en mayúscula seguido de los brazos, el `match` como operando, argumento, acceso, condición o inicializador, una cabeza que sigue siéndolo tras un `match`, y un record en un brazo o en una guarda de un `match` que es la cabeza de un `if`) y un `match` de dos brazos con guarda para los spans
+expect:  el volcado exacto de cada uno; los spans del primer brazo `Some(n) if n > 0 => n + 1`, de su guarda `n > 0`, de su cuerpo `n + 1`, del segundo brazo `_ => 0`, del `match` entero y del escrutinio `x`
+why:     una guarda que se comiera la `=>` o un brazo que perdiera su `if` cambiaría qué valores entran en cada brazo sin ningún error.
+ref:     TestParsePat/arms_and_guards
+
+[T12.06] syntax.let_with_a_pattern                        level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un `let` con un nombre es el de la Parte I; con cualquier otro patrón guarda el patrón y ningún nombre, y puede llevar tipo
+input:   15 sentencias: `let (a, b)`, `_`, un record, un record con `..`, una lista, un constructor, `0`, `true`, `false`, `-1`, uno con tipo, uno con un `match` como inicializador, `let x`, `let x: Int` y dos seguidos; y `let (a, b): (Int, Int) = t` seguido de `let c = 1` para los campos
+expect:  el volcado exacto de cada una; en la primera, `HasPat`, ningún nombre ni span de nombre, el tipo y los spans del patrón `(a, b)` y de la sentencia entera; en la segunda, el nombre `c` y ningún patrón
+why:     un `let (a, b)` leído como un nombre perdería las dos variables; el nombre vacío es lo que distingue las dos formas.
+ref:     TestParsePat/let_with_a_pattern
+
+[T12.07] syntax.the_line_rule_in_arms                     level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    los brazos acaban en un salto de línea o en `;`; un `=>` o un `|` al final de línea no completa la frase, y una línea que empieza por `|` no continúa la anterior
+input:   un `match` de seis brazos con líneas en blanco, un comentario, `B |` seguido de `C => 2`, un cuerpo de bloque en tres líneas, `E => 4; F => 5` y `_ =>` con el cuerpo en la línea de abajo; la `}` en la línea del último brazo; un `;` tras el último; dos `match` seguidos; un cuerpo que sigue con `.z` en la línea siguiente; y `A` y `| B => 1` en dos líneas
+expect:  el volcado exacto de cada uno; en el último, un único E0201 «expected `=>`, found newline» en el salto de línea tras `A`
+why:     si el parser cortara tras un `=>` o un `|` al final de línea, el cuerpo o la alternativa pasarían a ser otro brazo.
+ref:     TestParsePat/the_line_rule_in_arms
+
+[T12.08] syntax.large_matches_and_patterns_are_flat       level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un `match` de 100 001 brazos, y una tupla, una lista y un or-patrón de 100 000 elementos, se leen sin error y son un nodo con una lista de hijos, sin profundidad y con la pila de Go limitada a 1 MiB
+input:   un `match` de 100 000 brazos `Some(0) => 1` y uno `_ => 0`; una tupla `(A, A, …)`, una lista `[a, a, …, ..t]` y un or-patrón `A | A | …`, de 100 000 elementos cada uno; todo con la pila limitada a 1 MiB
+expect:  ningún diagnóstico; 100 001 brazos con el último un comodín; cada patrón grande es del tipo que toca con 100 000 argumentos, y la lista tiene resto
+why:     un nivel de profundidad por brazo o alternativa daría un E0204 falso; leídos por recursión, con la pila limitada acabarían el test.
+ref:     TestParsePat/large_matches_and_patterns_are_flat
+
+[T12.09] syntax.a_deep_pattern_is_one_e0204               level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    256 niveles de patrón se leen; el 257 es un único E0204 en el token que lo abre, con su nota y su ayuda, el brazo se salta y el siguiente se lee; cada nivel se devuelve, por bien o por mal
+input:   constructores, tuplas, paréntesis, listas y records anidados 256, 257 y 10 000 veces; 300 hermanos de cada forma en una tupla; tres brazos que fallan 200 niveles más abajo, por cada forma; un brazo de 300 niveles seguido de uno de 256; un `let` con una tupla de 300 niveles seguido de otra sentencia, y otro seguido de un `match` con un patrón de 300 niveles
+expect:  a 256, ningún diagnóstico y los de forma escrita se vuelven a imprimir idénticos; a 257 y a 10 000, exactamente el E0204 «pattern is nested too deeply» sobre el 257.º `(`, `[` o `{` («nesting level 257 starts here», nota «the limit is 256», ayuda «match the inner part with a second `match` in the body of the arm») y `(arm (error) (error))` seguido de `(arm _ 2)`; con hermanos y fallos, ningún E0204 de más; en el `let`, un único E0204 con la ayuda «match the inner part with a second `match` after the `let`» y la sentencia de después intacta, y con el `match` de después, ese E0204 y el del brazo, cada uno con su ayuda
+why:     sin límite, un millón de niveles acabaría con la pila de Go; sin devolver cada nivel, tres brazos rotos darían un falso E0204.
+ref:     TestParsePat/a_deep_pattern_is_one_e0204
+
+[T12.10] syntax.a_broken_arm_is_one_diagnostic_and_the_others_are_read  level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    tres brazos rotos son tres diagnósticos, no uno por el resto del `match` ni uno por token; el brazo roto sigue en la lista con un error donde falló, y los demás son los que el programa tiene; un `let`, un `fn` o una línea que solo una sentencia puede empezar (una llamada, un acceso, un operando, un `if`, un `match` o un bloque) no es un brazo y cierra el `match`, salvo que tenga un `=>` fuera de todo paréntesis y sin un `=` delante, el de un `let`: entonces es un brazo roto, empiece como empiece; los brazos que fallan quedan marcados como rotos
+input:   un `match` de siete brazos con `=> 2` sin patrón, `C 4` sin flecha y `[a, ..] => 6`; `A => 1 +` seguido de `B => 2`; un `match` sin su `}`; un `match` sin su `{`, o con un `)` en su lugar, seguido de 1, 3, 40 y 1 000 brazos, y otros que llegan al final del fichero: uno sin `{`, uno con un `)` en su lugar y uno con un `y` delante de la `{`; un `match` sin su `}` seguido de 1, 3 y 50 `let`, de un `fn`, de un `(` en lugar de la `}`, de un `let` tras un `;` en la línea del brazo y, sin `{`, de un `let`; un `match` sin su `}` seguido de 1, 3 y 50 sentencias que empiezan por una llamada, un acceso, un operando, un `if`, un `match` o un bloque; un nombre con un número detrás y un nombre solo, en un brazo; un `match` dentro del brazo de otro y una sentencia después; el cuerpo que se come los brazos de después con un `)` que falta; nueve líneas con `=>` que empiezan por un constructor en minúscula (también partido en dos líneas), una guarda sin `if`, un acceso, una llamada y una lista, un `let`, un `if`, un `match` y un bloque, como primer, segundo y último brazo de un `match` que es el inicializador de un `let`; y siete sentencias con un `=>` que no es de la línea (`f(a => 1)`, `f(a) [b => 1]`, `f(a)(b => 1)`, `f(a)) => 1`, `f(a); b => 1`, `let f = x => 1` y un `let y` con el fichero acabando en él) tras un brazo; y un `;` suelto al empezar un brazo
+expect:  los siete brazos exactos con sus errores y exactamente tres E0201 en `=>`, `4` y `]`; los spans de `B => 3` y de `C`; el `+` se come la línea siguiente, con lo que sale `(arm A (+ 1 B))` y el brazo de después es un error; el E0202 en la `{` del `match` con la `}` en el final del fichero; sin la `{`, un único E0201 y todos los brazos en el árbol, sean 1, 3, 40 o 1 000, y hasta el final del fichero ese E0201 y el E0202 de la `{` de la función (de la del `match` si estaba, tras el `y`), salvo con el `)`, que se queda en el E0201 porque el final del fichero está a menos de tres tokens; el `let` que empieza una línea cierra el `match` con un único E0201 «expected `}`, found `let`» y la edición que escribe la `}`, que deja un programa sin diagnósticos, sean 1, 3 o 50 las sentencias de después, leídas como sentencias; un `fn` en su lugar lo cierra con el mismo E0201 «found `fn`», y el `match` se queda con su único brazo; con el `(` en lugar de la `}`, un único E0201 por un patrón en el `let`, y lo mismo con el `let` tras un `;`; sin `{`, solo el E0201 de la `{`; con las sentencias, el mismo E0201 «expected `}`, found …» con la edición que escribe la `}` y que deja un programa sin diagnósticos, y todas en el árbol tras el `match`, sean 1, 3 o 50; el nombre con un número o solo es un único E0201 «expected `=>`» y los brazos de después se leen; con dos `match` anidados, un único E0201 y los dos cerrados; marcados como rotos (`Broken`) el 2.º, el 4.º y el 6.º de los siete brazos y el que se come los demás, y no los otros; en cada línea con `=>`, exactamente un E0201 («expected `=>`, found …» o «expected pattern, found …»), ese brazo marcado como roto y solo ese, los otros dos brazos leídos y el `match` cerrado por su propia `}`; en las siete sentencias, el primer error es el E0201 «expected `}`, found …» y el `match` se queda con su único brazo; y, por el `;`, un E0201 «expected pattern, found `;`» en el propio `;`
+why:     si el parser saltara hasta el final del `match` tras el primer error, los otros dos brazos rotos no se contarían y los buenos desaparecerían.
+ref:     TestParsePat/a_broken_arm_is_one_diagnostic_and_the_others_are_read
+
+[T12.11] syntax.a_pattern_that_cannot_be_read_covers_what_was_read  level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un patrón de error cubre los tokens que se consumieron para él, o un span vacío en el token encontrado si no se consumió ninguno; un `let` con un patrón cortado es una sentencia de error con lo leído
+input:   12 patrones rotos (`=> 1`, `A | => 1`, `- y => 1`, `Some(x => 1`, `(a, => 1`, `[a, ..] => 1`, `P { x: } => 1`, `1.5`, `-1.5` y tres números que el lexer rechaza, uno negativo) y `let (a, = 1`
+expect:  cada patrón es un `PatError` del fichero que cubre exactamente: nada, un span vacío en el `=>`; `A |`; `-`; `Some(x`; `(a,`; `[a, ..`; `P { x: }`; y el literal entero, con su signo, para los números; la sentencia cubre `let (a,`
+why:     los diagnósticos y las etiquetas de los pases siguientes se dibujan sobre estos spans; uno que no cubriera lo leído apuntaría a otro sitio.
+ref:     TestParsePat/a_pattern_that_cannot_be_read_covers_what_was_read
+
+[T12.12] syntax.e0201_sites_of_patterns                   level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    donde un patrón o su brazo se rompe hay un único E0201 con el token encontrado en la etiqueta primaria, y ocho finales de fichero dentro de un delimitador son un E0202 en el delimitador; un `..` solo en una lista y unos paréntesis vacíos dicen qué escribir, y un `match` sin su palabra es un solo error, con su edición; tras un paréntesis que nadie cierra, la línea que empieza por `(` o por `-` es la sentencia siguiente y no una llamada ni una resta, y dentro de un paréntesis abierto sigue siéndolo
+input:   49 fuentes rotas (sin patrón, `()`, una barra al principio, una cadena o un carácter, una coma final en una tupla o una lista, una tupla cortada, `Rect()`, nada tras `|`, un `-` sin número, delimitadores sin cerrar, un elemento tras el resto, campos mal escritos, un brazo sin flecha o sin cuerpo, una coma entre brazos, una guarda vacía, trece `match` sin `{` o con ella fuera de sitio —con la `{` en la línea de abajo, con tres brazos, con una variable como primer brazo, con un `)`, un `;` o la `}` del bloque en su lugar, con un `y` o un `)` delante de la `{`, con el primer brazo en la línea del escrutinio, con un bloque como cuerpo de ese brazo, dentro de una llamada, y con un bloque tras el `match` o en la línea de abajo dentro de una llamada—, tres con la `{` de unos brazos sin la palabra `match` delante (uno en un `let` y, con un bloque tras un nombre, el último) y dos `let`, y seis con una tupla, un grupo o una llamada sin cerrar seguidos de una línea que empieza por `(`, por `-` o por `.`, dentro de un bloque y dentro del bloque de un argumento), ocho ficheros que acaban dentro de `(`, `[` o `{`, `[a, ..]` y `[a, ..1]`; `Dot()`, `Rect()` y `()`; un `match` sin su palabra con 1, 3, 40 y 1 000 brazos, con la sentencia en dos líneas, y doce veces con una `{` que no abre brazos (seis con un bloque, cuatro con el fichero acabando tras ella y dos con la `{` en la línea de abajo o tras un `.`); y tres líneas que empiezan por `(` o por `-` dentro de un paréntesis abierto: una llamada, una resta y una tupla de llamadas
+expect:  en cada una exactamente un E0201 con ese mensaje y la etiqueta «expected … here» en el token; el árbol impreso con el error donde falló el brazo, o con todos los brazos del `match` cuando su `{` falta y los brazos están donde tocan; los ocho E0202 en su delimitador; para `[a, ..]`, la ayuda «write `.._` to skip the rest of the list» y la edición que inserta `_` y deja un programa sin diagnósticos; para `[a, ..1]`, ni ayuda ni edición; en `Dot()` y `Rect()`, la ayuda «write `Dot` alone if it has no fields, or a pattern for each field: `Dot(…)`» y ninguna edición, y en `()` ninguna ayuda; sin la palabra, un único E0201 «expected `match`, found `s`» en el primer token, con la ayuda y la edición que escribe `match ` (ninguna si la sentencia ocupa dos líneas), los brazos en el árbol de un `match` sobre ese valor, sean 1, 3, 40 o 1 000, y la edición deja un programa sin diagnósticos; una `{` que no abre brazos da primero el E0201 «expected newline, found `{`» y no hay `match`, también con el fichero acabando tras ella, y con la `{` en la línea de abajo o tras un `.` tampoco hay `match`; con el paréntesis sin cerrar, la línea de después es una sentencia del bloque (`(tuple b a)`, `(neg k)`, `(field k x)`); las tres líneas dentro de un paréntesis abierto, sin diagnósticos y como una llamada, una resta y una tupla de llamadas
+why:     un patrón roto leído a medias daría un árbol falso y un error sobre un token que está bien, lejos de la causa.
+ref:     TestParsePat/e0201_sites_of_patterns
+
+[T12.13] syntax.a_float_literal_is_e0706                  level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    un literal `Float` no es un patrón: un E0706 sobre el literal, con su nota y su ayuda y sin edición, escrita con el literal del programa y su signo, con un nombre que el fichero no escribe en ningún sitio; el brazo se lee hasta el final, y un error a menos de tres tokens del anterior no se repite
+input:   un `match x` con el brazo `1.5 =>` y otro `_ =>`; cinco literales (`-1.5`, `- 1.5`, `2.5e3`, `0.0`, `1_0.5`); seis posiciones (en un constructor, una tupla, una lista, un record, una alternativa dentro de una tupla y tras un `-`); un `let 1.5 = 1`; veintidós patrones con y sin un `x` ya escrito en el fichero (antes, después, en otra línea, en el escrutinio, en el cuerpo, en el inicializador, tras un `;`, como nombre de campo o como pun, al final del fichero) y con una guarda o un `if` que no son del patrón (la de otro brazo tras un `;` o en la línea de abajo, y un cuerpo que empieza por `if`); un `x` que el interner tiene por otro fichero y que ningún token de este escribe; una función con un parámetro `x`, con el brazo que la ayuda escribe; nueve brazos con una guarda, con una cadena de alternativas, con la cadena en una línea que no es la primera, con alternativas dentro de una lista o de un record o con un paréntesis tras la barra; `(1.5, 2.5)` y `P { x: 1.5, y: 2.5 }`; una tupla de 200 000 floats; y tres números que el lexer rechaza (`1e999`, `99999999999999999999` y `-9223372036854775808`)
+expect:  en cada una exactamente un E0706 «a `Float` literal cannot be a pattern» con «not a pattern» sobre el literal, la nota de `NaN != NaN` y «bind it and compare in a guard: `x if x == …`»; el patrón es `(error)` y el resto se imprime igual; en el `let`, la ayuda «a `let` has no guard: match the value with a `match` and compare in a guard: …»; el nombre es `x`, o `x1`, `x2`… si el fichero escribe uno así en cualquier sitio (el patrón, el escrutinio, la guarda, el cuerpo, el inicializador, un campo), y en la función con el parámetro `x` es `x1` y el brazo que la ayuda escribe no da ningún diagnóstico; con una guarda la ayuda es «bind it and add the comparison to the guard: `x if x == 2.5 && …`», y con una cadena de alternativas, también en una línea que no es la primera, «bind it and compare each alternative in a guard: `x if x == 2.5 || x == …`»; con las alternativas dentro de una lista, de un record o tras un paréntesis, la de un literal solo; una guarda o un `if` que no son del patrón no cambian la ayuda; el nombre es `x` aunque el interner lo tenga de otro fichero; `(1.5, 2.5)` da un solo E0706, el del primero, y el record da dos; la tupla de 200 000 floats da los 100 E0706 que guarda el sumidero y el test falla si no acaba en 10 segundos; en los tres números del lexer, solo el error del lexer, y en los dos enteros su ayuda, que acaba con la guarda del brazo para el menor `Int`
+why:     si `Float` fuera un patrón, `NaN` nunca casaría con su propio brazo y `0.0` y `-0.0` irían al mismo; el error lo impide.
+ref:     TestParsePat/a_float_literal_is_e0706
+
+[T12.14] syntax.a_record_literal_in_a_match_head_needs_parentheses  level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    en la cabeza de un `match`, como en la de un `if`, un literal de record necesita paréntesis y el error nombra el `match`; entre paréntesis, en un brazo o tras el `match` es un literal como siempre
+input:   `match Point { x: 1.0 } { _ => 1 }`; el mismo entre paréntesis; un record como cuerpo de un brazo y como sentencia tras el `match`; `match Origin { Origin => 1 }`; y un `if P { x: 1.0 }.x > 0.0 { … }` dentro de un brazo
+expect:  para el primero, un único E0201 «a record literal in the head of a `match` needs parentheses» sobre el literal, con la ayuda «… a `{` starts the arms of the `match`» y las dos inserciones de paréntesis, que dejan un programa sin diagnósticos; los otros se leen sin error; el del `if` dice «an `if`»
+why:     con la palabra de `if` en un `match`, el mensaje diría que la `{` abre el bloque de un `if` que no escribiste.
+ref:     TestParsePat/a_record_literal_in_a_match_head_needs_parentheses
+
+[T12.15] syntax.nesting_of_matches_is_bounded_by_e0204    level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    el escrutinio, la guarda y el cuerpo de cada brazo son un nivel de anidamiento: 256 `match` anidados se leen; pasado el límite, un único E0204 salta ese brazo y los demás se leen
+input:   256 `match` en cuerpos de brazos; 257 y 2 000 en un brazo seguido de `B => 2`; 300 `match` como escrutinio uno de otro; y 300 como guardas uno de otro
+expect:  a 256, ningún diagnóstico; en el resto, exactamente un E0204 «expression is nested too deeply» (en el brazo se leen 255 `match`, el brazo del 255.º tiene el único cuerpo de error, que cubre lo saltado, y `B => 2` queda intacto)
+why:     sin contar cada `match`, uno dentro de otro un millón de veces acabaría con la pila de Go en el parser y en cada pase.
+ref:     TestParsePat/nesting_of_matches_is_bounded_by_e0204
+
+[T12.16] syntax.printer_patterns                          level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_pat_test.go
+case:    el volcado escribe cada patrón como se escribe en Ki, a partir de árboles hechos a mano: el literal dice qué carga cuenta, un pun no enseña el patrón que no tiene, y un resto que no está no se escribe
+input:   24 patrones construidos a mano: comodín, variable, `0` con la carga de `Bool` puesta, `-5`, `false` con la de `Int` puesta, `true`, constructores, records (vacío, con pun y patrón, con un pun cuyo patrón no está, con `..` y solo `..`), tupla, listas (con resto, solo resto y un resto que no está), or-patrón de tres, uno anidado y el error
+expect:  el volcado exacto de cada uno dentro de un brazo: `0`, `false`, `P { x }`, `[a]`, `P { }`, `[.._]`, `1 | 2 | 3`, `Some((a, 0), (error))`…
+why:     si el volcado leyera la carga equivocada, `false` saldría como `0` y el árbol de un programa con ese patrón mentiría sobre él.
+ref:     TestPrinterPat/patterns
+
+[T12.17] syntax.printer_matches_and_lets                  level: core
+kind:    unit (go test)      file: internal/syntax/ast_printer_pat_test.go
+case:    el volcado escribe un `match` con sus brazos y guardas, y un `let` con un patrón en el sitio del nombre, a partir de árboles hechos a mano; una guarda o un patrón que no están no se escriben
+input:   ocho árboles a mano: un `match` sin brazos, con dos, con guarda, con una guarda que no está, con otro `match` en un brazo; y tres `let`: uno con un patrón y un nombre sobrante, uno con tipo y uno con nombre y un patrón sobrante
+expect:  `(match x)`, `(match x (arm 0 1) (arm n n))`, `(arm n (guard (> n 0)) n)`, `(arm n n)`, `(let (a, b) _ t)`, `(let _ Int 1)` y `(let x _ 1)`
+why:     un volcado que prefiriera el nombre al patrón escribiría `(let p _ t)` y no el `(a, b)` que el programa tiene.
+ref:     TestPrinterPat/matches_and_lets
+
+[T12.18] check.a_match_is_read_by_its_scrutinee_only      level: core
+kind:    unit (go test)      file: internal/sema/match_stub_test.go
+case:    hasta la sesión que liga y tipa los patrones, un `match` se resuelve y se comprueba solo por su escrutinio, sin pánico y sin falsos errores por las variables de sus brazos
+input:   diez programas: `match` correctos, sin brazos, con una variable del patrón en el cuerpo, con un nombre desconocido y una guarda en un brazo, con tipo que no encaja, como argumento y dentro de otro; y tres con el error en el escrutinio
+expect:  en los siete primeros ningún error; en los tres últimos exactamente un código: E0301 para el nombre desconocido, E0401 para `1 + true` y E0301 para el `match` dentro del escrutinio
+why:     si se resolvieran los brazos sin ligar sus patrones, cada variable de un patrón saldría como nombre desconocido en un programa correcto.
+ref:     TestMatchBeforeItsTypes/a_match_is_read_by_its_scrutinee_only
+
+[T12.19] check.a_let_with_a_pattern_is_read_by_its_initializer_only  level: core
+kind:    unit (go test)      file: internal/sema/match_stub_test.go
+case:    hasta esa sesión, un `let` con un patrón se resuelve y se comprueba solo por su inicializador, y no escribe el tipo en ninguna variable
+input:   siete programas: un `let` con una tupla, con `_`, con un patrón y otro `let` normal, con un nombre desconocido, con un tipo que no encaja, con un `match` en el inicializador y seguido de un `let` con un tipo que no encaja; y el tipo de la primera variable del programa con y sin un `let` con patrón
+expect:  ningún error en los tres primeros; en los otros cuatro exactamente E0301, E0401, E0301 y E0401; la primera variable (la del preludio) tiene el mismo tipo con y sin el `let`
+why:     un `let` con patrón no tiene variable y apunta a la 0; sin la guarda pisaría el tipo de una variable ajena.
+ref:     TestMatchBeforeItsTypes/a_let_with_a_pattern_is_read_by_its_initializer_only
+
+[T12.20] syntax.patterns_ast_dump                         level: core
+kind:    golden              file: tests/golden/ch12/patterns_ast.ki
+case:    `ki emit ast` imprime los patrones y los brazos de un programa con un `match` con guarda, un or-patrón y un `match` anidado, y dos `let` con patrón
+input:   un programa con `Shape` y `Point`, y una función con `let (a, _)`, `let Point { x, y: py, .. }` y un `match` de tres brazos: `Circle(r)` con guarda, `Rect(_, w) | Circle(w)` y `Unit` con otro `match` de `0 | -1` y `_`
+expect:  sale con 0 y stdout exactamente el volcado de los dos tipos y las dos funciones, con cada patrón escrito como en Ki dentro de su `(arm …)` o de su `(let …)`
+why:     es el volcado con el binario de verdad: el formato de brazos, guardas y patrones que enseña el libro es el que sale.
+ref:     tests/golden/ch12/patterns_ast.ki
+
+[T12.21] check.float_pattern_render                       level: core
+kind:    diag                file: tests/errors/ch12/float_pattern_render.ki
+case:    `ki check` sobre un `match` con un brazo `1.5` dibuja el E0706 con el literal subrayado, la nota de `NaN` y la ayuda de la guarda
+input:   una función `describe(x: Float)` con `1.5 => 1` y `_ => 0`, y un `main` vacío
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 7 líneas: «a `Float` literal cannot be a pattern», «not a pattern» bajo `1.5`, la nota de `NaN != NaN` y la ayuda «bind it and compare in a guard: `x1 if x1 == 1.5`», con `x1` porque el fichero ya tiene una `x`, sin edición
+why:     es cómo se ve el E0706 con el binario: la ayuda es lo que te dice que un `Float` se compara en una guarda.
+ref:     tests/errors/ch12/float_pattern_render.ki

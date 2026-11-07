@@ -65,6 +65,11 @@ func FuzzAnalyze(f *testing.F) {
 	f.Add("type S { A }\ntype S { A }\nfn f(s: Ss) { A }")
 	f.Add("#[extern(\"k\")] type T { A }\n#[inline] type U = Int")
 	f.Add("type S { A(, B }\nfn f(s: S) { A\n B }")
+	// Matches and `let`s with patterns, which name resolution and the type checker
+	// read by their scrutinee and their initializer only, and a Float pattern (E0706)
+	// that the parser reports.
+	f.Add("fn f(x: Int) -> Int { match x { 0 | 1 => 2\n n if n > 1 => n\n _ => 0 }\n}\nfn g() { let (a, b) = (1, 2)\n let _ = zzz }")
+	f.Add("fn f(x: Float) -> Int { match x { 1.5 => 1\n Some( => 2\n [a, ..] => 3 } }")
 	f.Fuzz(func(t *testing.T, src string) {
 		p := testsupport.Analyze(t, src)
 		sm := &p.Session.Sources

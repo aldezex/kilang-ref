@@ -12,8 +12,9 @@ import (
 // attributes, `pub`, the name, the parameters, the return type and a body, which
 // is a block, or is absent in a function marked `#[extern]`; and the `type`
 // declarations (parser_type.go). The expressions are read by parser_expr.go, the
-// blocks, `let` and `if` by parser_stmt.go, and recover.go says what the parser
-// does when the tokens stop making sense.
+// blocks, `let`, `if` and `match` by parser_stmt.go, the patterns of a `match` and
+// of a `let` by parser_pat.go, and recover.go says what the parser does when the
+// tokens stop making sense.
 //
 // Where they do, Parse reports E0201 to sink, at the token it found instead of
 // the one it needed (see expected), and goes on: the place becomes an error node
@@ -64,6 +65,13 @@ type parser struct {
 	// chain is the state of the statement-level expression that is being read;
 	// see expr in parser_expr.go.
 	chain chainState
+	// parens is how many of the parentheses that the expression being read has
+	// opened (a group, a tuple, the arguments of a call) are still open, counted
+	// from the innermost block: a block starts again at 0, because the line rule
+	// puts Newlines back inside its braces. It is what tells a line break that the
+	// lexer hid inside a bracket that this expression opened from one that it hid
+	// inside a bracket that an earlier mistake left open (see startsLine).
+	parens int
 	// depth is how many levels of nesting enclose the place that is being read:
 	// see MaxNesting. Unlike chain it belongs to no expression, because the
 	// statements of a nested block are inside the levels around the block.
@@ -75,6 +83,30 @@ type parser struct {
 	// parenthesis, the arguments of a call, a block and the braces of a record it
 	// is false again.
 	noRecord bool
+	// head says which construct's head is being read while noRecord is true: the
+	// `if` or the `match` that the E0201 of a record literal in the head names
+	// (see literalInHead). It means nothing when noRecord is false.
+	head headWord
+	// patDepth is how many levels of nesting enclose the place that is being read
+	// inside a pattern: see MaxPatternDepth. It is 0 outside patterns, which hold
+	// no expressions, so it is the count of the pattern and no more.
+	patDepth int
+	// patFrom is the index of the first token of the outermost pattern being read,
+	// and inLet says that it is the pattern of a `let` and not of an arm (see
+	// floatPat). Both mean something only while a pattern is being read.
+	patFrom int
+	inLet   bool
+	// patInfo is what the help of E0706 knows about the pattern being read, once it
+	// has looked (see shape).
+	patInfo patShape
+	shaped  bool
+	// names is the set of the names that the tokens of the file spell, which
+	// freshName collects when a help first needs one.
+	names map[base.Symbol]bool
+	// endedAt is 1 plus the index of the token at which a match ended because a
+	// statement began there (see matchArms), or 0: the cursor being still there,
+	// what a statement skips of itself after a mistake is empty (see skipRest).
+	endedAt int
 
 	// errs counts the mistakes found so far, those that were reported and those
 	// that were not (see detect). reported says that a mistake has been reported,
@@ -162,11 +194,13 @@ func (p *parser) found() string {
 // expected reports E0201, "expected <what>, found <token>", with its primary
 // label ("expected <what> here") on the token at the cursor, and consumes
 // nothing. what is one of the words that the message uses: `expression`,
-// `identifier`, `type`, `item`, `newline` and `string`, or a piece of
-// punctuation between backquotes, such as the `(` after the name of a function
-// or the `[` of an attribute. TestParseStmt/e0201_sites has a row for each
-// word. The word `{` is asked for by the branches of an if and by a function
-// that has no body and no `#[extern]`.
+// `identifier`, `type`, `item`, `newline`, `string`, `pattern`, `number` (after
+// the `-` of a negative literal pattern) and "identifier or `_`" (after the `..` of
+// a list pattern), or a piece of punctuation between backquotes, such as the `(`
+// after the name of a function or the `[` of an attribute. TestParseStmt/e0201_sites
+// has a row for each word. The word `{` is asked for by the branches of an if,
+// by the arms of a match and by a function that has no body and no `#[extern]`,
+// and `=>` by an arm that has no arrow.
 //
 // It reports nothing in three cases. The token found may be an Error token: the
 // lexer has reported that character or string already, and a second diagnostic

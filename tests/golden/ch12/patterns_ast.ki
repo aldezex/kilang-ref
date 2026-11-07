@@ -1,0 +1,26 @@
+// test: T12.20
+// run: emit ast
+// expect-stdout:
+// | (type Shape (sum (Circle (_ Float)) (Rect (_ Float) (_ Float)) (Unit)))
+// | (type Point (record (x Int) (y Int)))
+// | (fn describe (params (s Shape) (n Int) (t (tuple Int Bool)) (p Point)) (ret Int) (block (let (a, _) _ t) (let Point { x, y: py, .. } _ p) (match s (arm Circle(r) (guard (> n 0)) 1) (arm Rect(_, w) | Circle(w) 2) (arm Unit (match n (arm 0 | -1 3) (arm _ 4))))))
+// | (fn main (params) (ret _) (block))
+type Shape {
+  Circle(Float)
+  Rect(Float, Float)
+  Unit
+}
+type Point { x: Int, y: Int }
+fn describe(s: Shape, n: Int, t: (Int, Bool), p: Point) -> Int {
+  let (a, _) = t
+  let Point { x, y: py, .. } = p
+  match s {
+    Circle(r) if n > 0 => 1
+    Rect(_, w) | Circle(w) => 2
+    Unit => match n {
+      0 | -1 => 3
+      _ => 4
+    }
+  }
+}
+fn main() {}

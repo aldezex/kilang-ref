@@ -320,12 +320,13 @@ func TestNumbers(t *testing.T) {
 	})
 	t.Run("e0105_help_names_the_minimum", func(t *testing.T) {
 		// The most likely way to hit E0105 is to write the smallest Int, whose
-		// magnitude is one too many; the help shows the way to spell it. The
-		// same text goes with every literal that is too large, in decimal and
+		// magnitude is one too many; the help shows the way to spell it, and, for an
+		// arm of a `match`, which has no subtraction to write it with, how to match
+		// it. The same text goes with every literal that is too large, in decimal and
 		// in hexadecimal. There is no fix-it: the rewritten expression needs
 		// the minus sign in front of the literal, which the literal's span
 		// does not cover.
-		const help = "the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`"
+		const help = "the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`; in the arm of a `match`, bind the value and compare it to that in a guard"
 		for _, src := range []string{"9223372036854775808", "0x8000_0000_0000_0000", "99999999999999999999"} {
 			_, sink := lexAll(t, src)
 			diags := sink.All()

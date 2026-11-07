@@ -755,6 +755,11 @@ func (r *resolver) expr(id syntax.ExprID) {
 		if e.HasElse {
 			r.expr(e.Else)
 		}
+	case syntax.ExprMatch:
+		// Only the scrutinee, until the session that binds the variables of
+		// patterns (ch12-s2): the guard and the body of an arm name them, and
+		// resolving those now would report each one as an unknown name.
+		r.expr(e.Scrutinee)
 	case syntax.ExprBlock:
 		// A block is a scope inside the one around it. Its variables are the
 		// ones its `let`s bind, and they end with it, tail included.
@@ -777,6 +782,12 @@ func (r *resolver) stmt(id syntax.StmtID) {
 	s := r.m.Stmts.Get(id)
 	switch s.Kind {
 	case syntax.StmtLet:
+		if s.HasPat {
+			// Nothing is bound until the session that binds the variables of
+			// patterns (ch12-s2); the initializer's own names are still resolved.
+			r.expr(s.Expr)
+			return
+		}
 		// The initializer first: the variable is not bound, so not visible in
 		// it, until the initializer has been resolved.
 		r.initializing = append(r.initializing, letName{name: s.Name, span: s.NameSpan})

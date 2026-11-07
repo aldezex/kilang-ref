@@ -17,11 +17,13 @@ import (
 //	([pub ]type NAME [(attrs ...)] (record (FNAME T)...))
 //	([pub ]type NAME [(attrs ...)] (alias T))
 //	(block S... [tail])      (let NAME T|_ E)      (expr E)
+//	(let PAT T|_ E)          a `let` whose pattern is not a plain name
 //	(if C T [E])             (OP L R)              (neg E)    (not E)
 //	(call F ARGS...)         42    true    ()      NAME       (error)
 //	1.5                      a Float, written as kirt/fmtnum writes it: 2.0, 1e21
 //	(field E NAME)           (index E N)           (tuple E E...)
 //	(record NAME (FNAME E)... [(.. E)])
+//	(match E ARM...)       ARM is (arm PAT BODY) or (arm PAT (guard G) BODY)
 //
 // where T is a type (`Int`, `()`, `(error)`, `(tuple T T...)`) and `_` stands for
 // a type that the program did not write. The arguments of an attribute are quoted as
@@ -38,6 +40,16 @@ import (
 // `(record Point (x 1.0) (.. p))`, and a field that is only a name, `{ x }`, is
 // `(x x)`: the printer does not keep the difference between the two.
 // `(1, true)` is `(tuple 1 true)`.
+//
+// A match lists its arms in the order they are written, and an arm is its pattern,
+// its guard if it has one, and its body: `match x { 0 => 1\n n if n > 0 => n }` is
+// `(match x (arm 0 1) (arm n (guard (> n 0)) n))`. A PAT is written as the
+// program writes it (spec 5.3), with a single space after each comma and around
+// each `|`: `_`, `x`, `0`, `-1`, `true`, `None`, `Some(x)`, `Point { x, y: p, .. }`,
+// `(a, b)`, `[a, b, ..t]`, `A | B | C`; a field that is only a name is written as
+// the name, and the pattern that could not be read as `(error)`. Where a pattern
+// is a PAT of a `let`, it follows the name's place: `let (a, b) = e` is
+// `(let (a, b) _ E)`.
 //
 // Parse produces every one of these forms; the printer's own tests build their
 // trees by hand, so that they do not depend on the parser.
@@ -199,7 +211,11 @@ func (pr *printer) stmt(id StmtID) {
 	switch s.Kind {
 	case StmtLet:
 		pr.str("(let ")
-		pr.sym(s.Name)
+		if s.HasPat {
+			pr.pat(s.Pat)
+		} else {
+			pr.sym(s.Name)
+		}
 		pr.str(" ")
 		pr.optType(s.Type, s.HasType)
 		pr.str(" ")
@@ -303,9 +319,120 @@ func (pr *printer) expr(id ExprID) {
 			pr.expr(el)
 		}
 		pr.str(")")
+	case ExprMatch:
+		pr.str("(match ")
+		pr.expr(e.Scrutinee)
+		for _, arm := range pr.m.Arms(e.Arms) {
+			pr.str(" (arm ")
+			pr.pat(arm.Pat)
+			if arm.HasGuard {
+				pr.str(" (guard ")
+				pr.expr(arm.Guard)
+				pr.str(")")
+			}
+			pr.str(" ")
+			pr.expr(arm.Body)
+			pr.str(")")
+		}
+		pr.str(")")
 	case ExprError:
 		pr.str("(error)")
 	default:
 		panic("unreachable")
 	}
+}
+
+// pat appends the pattern id as the program writes it. It recurses once for each
+// level of the pattern, which Parse bounds (MaxPatternDepth), and walks each list
+// of sub-patterns with a loop.
+func (pr *printer) pat(id PatID) {
+	p := pr.m.Pats.Get(id)
+	switch p.Kind {
+	case PatWildcard:
+		pr.str("_")
+	case PatBind:
+		pr.sym(p.Name)
+	case PatLit:
+		switch p.Lit {
+		case LitInt:
+			pr.str(strconv.FormatInt(p.Int, 10))
+		case LitBool:
+			pr.str(strconv.FormatBool(p.Bool))
+		default:
+			panic("unreachable")
+		}
+	case PatCtor:
+		pr.sym(p.Name)
+		switch {
+		case p.Record:
+			pr.str(" {")
+			sep := " "
+			for _, f := range pr.m.FieldPats(p.Fields) {
+				pr.str(sep)
+				sep = ", "
+				pr.sym(f.Name)
+				if f.HasPat {
+					pr.str(": ")
+					pr.pat(f.Pat)
+				}
+			}
+			if p.HasRest {
+				pr.str(sep + "..")
+			}
+			pr.str(" }")
+		case p.Args.Count > 0:
+			pr.patList("(", p.Args, ")")
+		}
+	case PatTuple:
+		pr.patList("(", p.Args, ")")
+	case PatList:
+		pr.str("[")
+		for i, el := range pr.m.PatList(p.Args) {
+			if i > 0 {
+				pr.str(", ")
+			}
+			pr.pat(el)
+		}
+		if p.HasRest {
+			if p.Args.Count > 0 {
+				pr.str(", ")
+			}
+			pr.str("..")
+			pr.pat(p.Rest)
+		}
+		pr.str("]")
+	case PatOr:
+		for i, alt := range pr.m.PatList(p.Args) {
+			if i > 0 {
+				pr.str(" | ")
+			}
+			// An alternative that is an or-pattern was written between parentheses
+			// (`(A | B) | C`, `A | (B | C)`), and it is a node of its own. Without
+			// them the dump would read as one node of three alternatives, which is
+			// another tree, as it does for Core (see the printer there).
+			if pr.m.Pats.Get(alt).Kind == PatOr {
+				pr.str("(")
+				pr.pat(alt)
+				pr.str(")")
+			} else {
+				pr.pat(alt)
+			}
+		}
+	case PatError:
+		pr.str("(error)")
+	default:
+		panic("unreachable")
+	}
+}
+
+// patList appends the patterns in r between open and closer, separated by `, `.
+func (pr *printer) patList(open string, r base.ListRange, closer string) {
+	pr.str(open)
+	for i, el := range pr.m.PatList(r) {
+		if i > 0 {
+			pr.str(", ")
+		}
+		pr.pat(el)
+	}
+	pr.str(closer)
 }

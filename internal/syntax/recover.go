@@ -28,8 +28,9 @@ import (
 //     mistake is an E0201 (expected), and a file that ends within
 //     suppressDistance tokens of another mistake reports only that one (admit).
 //   - Nesting. Parentheses, call arguments, prefix operators, the parts of an if
-//     and blocks nest, and each of them takes a level of Go's call stack.
-//     MaxNesting bounds the levels (E0204).
+//     or of a match and blocks nest, and each of them takes a level of Go's call
+//     stack. MaxNesting bounds the levels (E0204), and MaxPatternDepth those of a
+//     pattern.
 
 // MaxNesting is the deepest that parentheses, call arguments, prefix operators,
 // the condition and the branches of an if, and blocks may nest inside one
@@ -45,6 +46,20 @@ import (
 // argument. (The limit on a chain of operators, MaxChain, is the opposite: each
 // statement counts its own.) Reading the 257th level is the mistake.
 const MaxNesting = 256
+
+// MaxPatternDepth is the deepest that the parts of a pattern may nest inside one
+// another (E0204): the arguments of a constructor, the fields of a record pattern,
+// the elements of a tuple or of a list and a pattern between parentheses. The
+// parser, name resolution, the type checker, the lowering for the exhaustiveness
+// check, the elaboration to Core and the AST printer recurse once for each level,
+// so the limit bounds the Go stack that a file can make them use. Lint, the Core
+// printer, the engine of exhaustiveness and the machine walk a pattern with a
+// stack of their own and have no depth to bound. It counts the
+// levels inside one pattern and not the ones around it, because a pattern holds no
+// expression: the nesting of the expressions around a `match` is MaxNesting's.
+// Reading the 257th level is the mistake, reported once, and the arm or the `let`
+// that holds the pattern is skipped to its end.
+const MaxPatternDepth = 256
 
 // suppressDistance is how far apart two reported mistakes must be: the parser
 // does not report one that is fewer than this many tokens after the last one it
@@ -167,6 +182,14 @@ func closerIsMissing(k TokenKind) bool {
 // shows that the closer is what is missing (see closerIsMissing) it also says
 // how to close it and offers to write the closer.
 func (p *parser) expectClose(k TokenKind, what string, open Token) bool {
+	return p.closeWith(k, what, open, false)
+}
+
+// closeWith is expectClose, and sure says that the token found at the cursor is
+// known to begin what follows the construct that open belongs to, whatever its kind
+// (closerIsMissing is not asked): the arms of a match end at a line that only a
+// statement can begin (see matchArms).
+func (p *parser) closeWith(k TokenKind, what string, open Token, sure bool) bool {
 	if _, ok := p.eat(k); ok {
 		return true
 	}
@@ -177,7 +200,7 @@ func (p *parser) expectClose(k TokenKind, what string, open Token) bool {
 			// The delimiter that the closer would close explains the mistake,
 			// whatever was found.
 			d = d.WithSecondary(diag.Label{Span: open.Span, Message: "unclosed `" + p.tb.text(open) + "` opened here"})
-			if !closerIsMissing(p.tok().Kind) {
+			if !sure && !closerIsMissing(p.tok().Kind) {
 				return d
 			}
 			// The closer goes right after the last token that was read, where
@@ -305,6 +328,20 @@ func (p *parser) syncStatement() {
 		trackBracket(&open, k)
 		p.advance()
 	}
+}
+
+// skipRest is syncStatement for a block or a match that has found a mistake in the
+// statement or arm it just read, unless the cursor is at the token where a match
+// ended because a statement began there: that statement is the next one, and
+// skipping it with the rest of the broken one would lose it. The exception is
+// used once, so a statement that cannot be read and consumes nothing is skipped
+// the second time and the loop that reads statements goes on.
+func (p *parser) skipRest() {
+	if p.endedAt == p.pos+1 {
+		p.endedAt = 0
+		return
+	}
+	p.syncStatement()
 }
 
 // isItemStart reports whether a token of kind k can start an item: `fn`, `pub`,

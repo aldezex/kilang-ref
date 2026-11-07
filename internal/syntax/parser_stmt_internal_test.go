@@ -259,7 +259,7 @@ var e0201Sites = []struct {
 	{"fn f(1) {}", "1", 0, "expected identifier, found `1`"},
 	{"fn f(a, ) {}", ")", 0, "expected identifier, found `)`"},
 	{"#[1] fn f() {}", "1", 0, "expected identifier, found `1`"},
-	{"fn f() { let 1 }", "1", 0, "expected identifier, found `1`"},
+	{"fn f() { let + }", "+", 0, "expected identifier, found `+`"},
 	// type
 	{"fn f(x: ) {}", ")", 0, "expected type, found `)`"},
 	{"fn f() -> {}", "{", 0, "expected type, found `{`"},
@@ -287,6 +287,12 @@ var e0201Sites = []struct {
 	{"fn f() { if a { 1 } else 2 }", "2", 0, "expected `{`, found `2`"},
 	// a function with no body and no `#[extern]`
 	{"fn f()\nfn g() {}", "\n", 0, "expected `{`, found newline"},
+	// the words of patterns: a pattern, a number after the `-`, a name or `_` after the `..`
+	{"fn f() { match x { => 1 } }", "=>", 0, "expected pattern, found `=>`"},
+	{"fn f() { match x { - y => 1 } }", "y", 0, "expected number, found `y`"},
+	{"fn f() { match x { [a, ..] => 1 } }", "]", 0, "expected identifier or `_`, found `]`"},
+	// `=>`
+	{"fn f() { match x { A 1 } }", "1", 0, "expected `=>`, found `1`"},
 	// newline
 	{"fn f() { f() x }", "x", 0, "expected newline, found `x`"},
 	{"fn f() { let a = 1 b }", "b", 0, "expected newline, found `b`"},
@@ -354,7 +360,7 @@ func TestParseStmt(t *testing.T) {
 			{"fn f() { let x }", "expected `=`, found `}`"},
 			{"fn f() { let x\n}", "expected `=`, found newline"},
 			{"fn f() { let x", "expected `=`, found end of file"},
-			{"fn f() { let 1 }", "expected identifier, found `1`"},
+			{"fn f() { let + }", "expected identifier, found `+`"},
 			{"let x = 1", "expected item, found `let`"},
 		}
 		for _, row := range rows {
@@ -646,7 +652,7 @@ func TestParseStmt(t *testing.T) {
 		r = parseModule(t, open)
 		check("unclosed block", r.body(t).Span, r.span(nth(t, open, "{", 0), uint32(len(open))))
 		// A let with no name is an error statement that covers the `let`.
-		const noName = "fn f() { let 1 }"
+		const noName = "fn f() { let + }"
 		r = parseModule(t, noName)
 		es = r.m.Stmts.Get(r.m.StmtList(r.body(t).Stmts)[0])
 		if es.Kind != StmtError {
@@ -818,7 +824,7 @@ func TestParseStmt(t *testing.T) {
 		// The name of a variable cannot be guessed, so there is a help and no
 		// fix-it; the help is the one for the `let` and for no other
 		// identifier (see e0201_other_words_have_no_help).
-		for _, src := range []string{"fn f() { let = 1 }", "fn f() { let 1 }", "fn f() { let }"} {
+		for _, src := range []string{"fn f() { let = 1 }", "fn f() { let + }", "fn f() { let }"} {
 			_, d := firstDiag(t, src)
 			if d.Code != diag.E(201) || !strings.HasPrefix(d.Message, "expected identifier, found ") {
 				t.Errorf("%s: first diagnostic %v %q, want the E0201 for an identifier", show(src), d.Code, d.Message)
@@ -880,7 +886,7 @@ func TestParseStmt(t *testing.T) {
 			{"..", "`..`"},
 		}
 		for _, row := range rows {
-			src := "fn f() { let " + row.found + " }"
+			src := "fn f(" + row.found + ") {}"
 			r := parseModule(t, src)
 			diags := r.sink.All()
 			want := "expected identifier, found " + row.want

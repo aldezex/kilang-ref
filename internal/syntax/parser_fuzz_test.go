@@ -14,7 +14,8 @@ import (
 // every later pass relies on: Parse does not panic, every span it produces lies
 // within the file, and PrintModule can walk the tree it built. The spans are
 // those of the tree (items, attributes, parameters, variants and fields, types,
-// statements and expressions, with their name and operator spans) and those of the labels of
+// statements and expressions, with their name and operator spans, and patterns, record patterns' fields and
+// match arms) and those of the labels of
 // the diagnostics, fix-its included, and every diagnostic can be rendered in
 // the three formats: RenderHuman panics for a fix-it that crosses a line break
 // or that is in another file, and no input may make the lexer or the parser
@@ -42,6 +43,11 @@ func FuzzParse(f *testing.F) {
 	f.Add("pub type Shape {\n  Circle(radius: Float)\n  Rect(Float, h: Float); Unit,\n}\ntype P { x: Int, y: () }\ntype M = ()")
 	f.Add("type S { A(, B }")
 	f.Add("type S { A(Int\ntype T { x:")
+	// Patterns, guards and arms: every form, a `let` with a pattern, and the ones that
+	// stop in the middle of a pattern, of a record pattern's braces and of an arm.
+	f.Add("fn f(x: Int) -> Int { match x { 0 | -1 => 2\n n if n > 1 => n\n _ => 0 }\n let (a, [b, ..t]) = x }")
+	f.Add("fn f() { match x { Some((a, [b, .._])) | P { x, y: _, .. } => 1\n Q {} => 2 } }")
+	f.Add("fn f() { match x { Some( => 1\n [a, ..] => 2\n 1.5 => 3\n P { x: } => 4 }\n let P { 1 } = y }")
 	// The text of the golden test of `ki emit ast`, so that the seeds include a
 	// program that parses cleanly with every kind of node in it.
 	golden, err := os.ReadFile(filepath.Join("..", "..", "tests", "golden", "ch06", "fib_ast.ki"))
@@ -103,6 +109,16 @@ func FuzzParse(f *testing.F) {
 		for i, e := range m.Exprs.All() {
 			check("expression", int(i), e.Span)
 			check("operator", int(i), e.OpSpan)
+		}
+		for i, p := range m.Pats.All() {
+			check("pattern", int(i), p.Span)
+			check("pattern name", int(i), p.NameSpan)
+		}
+		for i, fp := range m.FieldPatPool {
+			check("pattern field", i, fp.Span)
+		}
+		for i, a := range m.ArmPool {
+			check("match arm", i, a.Span)
 		}
 		for i, d := range sink.All() {
 			check("primary label of diagnostic", i, d.Primary.Span)

@@ -32,6 +32,9 @@ type ExprID uint32
 // Module.Types. The type checker's own types have their own ids.
 type TypeExprID uint32
 
+// PatID names a pattern (`Some(x)`, `_`, `(a, b)`) in Module.Pats.
+type PatID uint32
+
 // Param is one parameter of a function: `x` or `x: Int`.
 type Param struct {
 	Name base.Symbol
@@ -230,6 +233,10 @@ const (
 // Stmt is a statement of a block. For StmtLet, Name and NameSpan are the bound
 // name, Type and HasType the annotation, and Expr the initializer; for
 // StmtExpr only Expr is set.
+//
+// A `let` whose pattern is not a plain name, `let (a, b) = e` or `let _ = e`, has
+// HasPat true and the pattern in Pat. Name is then base.NoSymbol and NameSpan the
+// zero Span: the names that the statement binds are the pattern's.
 type Stmt struct {
 	Kind           StmtKind
 	Span, NameSpan base.Span
@@ -237,6 +244,8 @@ type Stmt struct {
 	Type           TypeExprID
 	HasType        bool
 	Expr           ExprID
+	Pat            PatID
+	HasPat         bool
 }
 
 // BinOp is a binary operator.
@@ -332,6 +341,10 @@ const (
 	ExprTuple                                      // Args: `(1, true)`
 )
 
+// ExprMatch is the kind of chapter 12, session 1: `match e { pat => body … }`.
+// It follows ExprTuple, so no kind before it moves.
+const ExprMatch ExprKind = ExprTuple + 1 // Scrutinee, Arms
+
 // Expr is an expression. Every kind uses a few of the fields (see ExprKind)
 // and leaves the rest zero, which keeps the node flat at the price of fields
 // that do not apply. Always check Kind before reading one.
@@ -401,6 +414,13 @@ type Expr struct {
 	Fields  base.ListRange
 	Base    ExprID
 	HasBase bool
+
+	// The parts of an ExprMatch: the expression that is taken apart, and its arms
+	// in the order they are written, a range over Module.ArmPool (read it with
+	// Arms). A `match` with no arms is a node like any other, `match x { }`: it is
+	// the checker that says that it covers nothing.
+	Scrutinee ExprID
+	Arms      base.ListRange
 }
 
 // FieldInit is one field that a record literal gives: `x: 1.0`, or `x` for
@@ -422,6 +442,117 @@ type FieldInit struct {
 	Pun            bool
 	Removal        base.Span
 	RemovalOneLine bool
+}
+
+// PatKind says what a Pat is, and so which of its fields mean something.
+type PatKind uint8
+
+// The kinds of pattern (spec 5.3).
+const (
+	PatWildcard PatKind = iota // `_`; no field
+	PatBind                    // `x`: Name, NameSpan
+	PatLit                     // `0`, `-1`, `true`: Lit and the payload it names
+	PatCtor                    // `None`, `Some(x)`, `Point { x, y: p, .. }`: Name, NameSpan, Args or Fields, Record, HasRest
+	PatTuple                   // `(a, b)`: Args
+	PatList                    // `[a, b, ..t]`: Args, Rest, HasRest
+	PatOr                      // `A | B | C`: Args, the alternatives, two or more
+	PatError                   // a pattern that could not be read, or a `Float` literal; no field
+)
+
+// LitKind says which payload of a PatLit holds its value, so that `0` and
+// `false` do not look alike: both have a zero payload. Only LitInt and LitBool
+// are read so far. LitChar and LitStr come with the chapters that read characters
+// and strings, and LitUInt when Int widens.
+type LitKind uint8
+
+// The kinds of literal that a pattern may be.
+const (
+	LitInt LitKind = iota
+	LitBool
+	LitChar
+	LitStr
+	LitUInt
+)
+
+// Pat is a pattern. Every kind uses a few of the fields (see PatKind) and leaves
+// the rest zero, as Expr does. Always check Kind before reading one.
+//
+// Span covers the tokens the pattern was read from. A parenthesis is not a node
+// (`(x)` is the pattern `x`, with the span of `x`), a tuple is, with the span from
+// its `(` to its `)`, and so is a constructor with its arguments, from the name to
+// the `)` or the `}`. A pattern that could not be read is a PatError whose Span
+// covers what was consumed, or is empty at the token found when nothing was.
+//
+// Name and NameSpan are the variable of a PatBind and the constructor of a
+// PatCtor. Lit says which of Int, Bool, Char and Str is the value of a PatLit; the
+// others are zero. Args is a range over Module.PatPool (read it with PatList): the
+// arguments of a positional constructor, the elements of a tuple or of a list
+// without its `..rest`, and the alternatives of an or-pattern (never fewer than
+// two, and never an or-pattern that was not written between parentheses: `A | B |
+// C` is one node with three alternatives). A constructor written with a `{` is a
+// record pattern: Record is true, Fields (a range over Module.FieldPatPool, read it
+// with FieldPats) lists the fields in the order they are written, and HasRest
+// says that the list ends with `..`, which skips the fields that it does not
+// name. A list that ends with `..t` or `.._` has HasRest true and the PatBind or
+// PatWildcard that stands for the rest in Rest; Rest means something only when
+// HasRest is true, and the two meanings of HasRest are never both in play: a
+// constructor has fields and no rest pattern, a list has a rest pattern and no
+// fields.
+type Pat struct {
+	Kind           PatKind
+	Span, NameSpan base.Span
+	Name           base.Symbol
+	// Lit is which payload of a PatLit holds its value (`0` and `false` must not
+	// look alike).
+	Lit  LitKind
+	Int  int64
+	Bool bool
+	Char rune
+	Str  string
+	// Args is a range over Module.PatPool: sub-patterns, elements, alternatives.
+	Args base.ListRange
+	// Fields is a range over Module.FieldPatPool: `Point { x, y: p, .. }`.
+	Fields base.ListRange
+	Record bool
+	// Rest is the pattern after the `..` of a list; HasRest also marks the `..` of
+	// a record pattern.
+	Rest    PatID
+	HasRest bool
+}
+
+// FieldPat is one field of a record pattern: `x: p`, or `x` for `{ x, y }`, which
+// binds the variable x to the field x (punning). Span is the name of the field and
+// the pattern that follows it, if any. HasPat is false for a pun, and Pat then
+// means nothing: the field binds a variable that has its name, and Span, which is
+// the name, is where that variable is.
+type FieldPat struct {
+	Name base.Symbol
+	Span base.Span
+	Pat  PatID
+	// HasPat is false for a field that is only a name.
+	HasPat bool
+}
+
+// MatchArm is one arm of a `match`: `pat [if guard] => body`. Span runs from the
+// first token of the pattern to the last of the body. Guard means something only
+// when HasGuard is true. An arm that could not be read stays in the list, with a
+// PatError and an ExprError where it went wrong, so that the arms around it are
+// still the arms the program has.
+//
+// Broken says that the parser found a mistake while it read the arm, in its pattern,
+// its guard or its body (nested ones included), reported or not. What it read may
+// then not be what the program meant: a `(` left out makes `Num n) => n` an arm of
+// the pattern `Num`, and a `)` left out lets the body swallow the arms after it. The
+// passes that judge a `match` as a whole (which arms are missing, which are never
+// reached) say nothing about one that has a broken arm, because the list of arms is
+// not the one the program has.
+type MatchArm struct {
+	Pat      PatID
+	Guard    ExprID
+	HasGuard bool
+	Body     ExprID
+	Span     base.Span
+	Broken   bool
 }
 
 // Module is the syntax tree of one file.
@@ -446,6 +577,14 @@ type Module struct {
 	// elements of the tuple types.
 	FieldInitPool []FieldInit
 	TypePool      []TypeExprID
+	// Pats holds the patterns, and the pools after it the lists that they and the
+	// matches have: the arguments, elements and alternatives of a pattern
+	// (PatPool), the arms of a `match` (ArmPool) and the fields of a record pattern
+	// (FieldPatPool).
+	Pats         base.IdVec[PatID, Pat]
+	PatPool      []PatID
+	ArmPool      []MatchArm
+	FieldPatPool []FieldPat
 }
 
 // ExprList returns the expressions that r selects in ExprPool. The caller must
@@ -476,3 +615,13 @@ func (m *Module) FieldInits(r base.ListRange) []FieldInit { return base.Slice(m.
 // TypeList returns the types that r selects in TypePool: the elements of a tuple
 // type.
 func (m *Module) TypeList(r base.ListRange) []TypeExprID { return base.Slice(m.TypePool, r) }
+
+// PatList returns the patterns that r selects in PatPool.
+func (m *Module) PatList(r base.ListRange) []PatID { return base.Slice(m.PatPool, r) }
+
+// Arms returns the arms of a `match` that r selects in ArmPool.
+func (m *Module) Arms(r base.ListRange) []MatchArm { return base.Slice(m.ArmPool, r) }
+
+// FieldPats returns the fields of a record pattern that r selects in
+// FieldPatPool.
+func (m *Module) FieldPats(r base.ListRange) []FieldPat { return base.Slice(m.FieldPatPool, r) }

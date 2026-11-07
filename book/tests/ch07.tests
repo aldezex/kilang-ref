@@ -711,7 +711,7 @@ ref:     TestLexer/e0104_help_and_fixit
 kind:    unit (go test)      file: internal/syntax/numbers_test.go
 case:    el E0105 lleva siempre la ayuda que dice cómo escribir el menor `Int`, y ninguna edición
 input:   los tres literales
-expect:  para `9223372036854775808`, `0x8000_0000_0000_0000` y `99999999999999999999`: exactamente un diagnóstico con `Help` «the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`» y sin `Fixits`
+expect:  para `9223372036854775808`, `0x8000_0000_0000_0000` y `99999999999999999999`: exactamente un diagnóstico con `Help` «the smallest `Int` is not a literal: write it as `-9223372036854775807 - 1`; in the arm of a `match`, bind the value and compare it to that in a guard» y sin `Fixits`
 why:     la forma más probable de dar con este error es querer escribir el menor entero, cuyo valor absoluto es uno
          más del máximo, y la ayuda enseña que se escribe como una resta. No hay edición porque el signo menos queda
          fuera del span del literal. La ayuda sale con cualquier literal demasiado grande: el diseño no

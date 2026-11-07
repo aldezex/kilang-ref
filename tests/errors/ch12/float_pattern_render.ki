@@ -1,0 +1,18 @@
+// test: T12.21
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0706]: a `Float` literal cannot be a pattern
+// |   --> tests/errors/ch12/float_pattern_render.ki:14:5
+// |    |
+// | 14 |     1.5 => 1
+// |    |     ^^^ not a pattern
+// |    = note: `==` on floats is not an equivalence (`NaN != NaN`, `0.0 == -0.0`), so a float cannot be matched by its value
+// |    = help: bind it and compare in a guard: `x1 if x1 == 1.5`
+fn describe(x: Float) -> Int {
+  match x {
+    1.5 => 1
+    _ => 0
+  }
+}
+fn main() {}
