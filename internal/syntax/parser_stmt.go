@@ -539,6 +539,8 @@ func (p *parser) matchArms(open *Token) []MatchArm {
 		if p.errs != errs {
 			arm.Broken = true
 			p.skipRest()
+		} else {
+			arm.Removal, arm.RemovalOneLine = p.armRemoval(arm)
 		}
 		p.separator()
 		if p.pos == before {
@@ -614,6 +616,20 @@ func (p *parser) hasArrow() bool {
 			}
 		}
 	}
+}
+
+// armRemoval returns the span that an edit deleting the arm takes out (see
+// MatchArm.Removal), the cursor being at what follows the arm, and whether it
+// stays on one line. A `;` that follows the arm goes with it, with the blanks after
+// it, so that deleting an arm of `a => 1; b => 2; c => 3` leaves `a => 1; c => 3`
+// and not two separators in a row.
+func (p *parser) armRemoval(arm MatchArm) (base.Span, bool) {
+	end := arm.Span.Hi
+	if p.at(Semi) {
+		end = p.afterBlanks(p.tok().Span.Hi)
+	}
+	removal := p.ownLine(base.Span{File: arm.Span.File, Lo: arm.Span.Lo, Hi: end})
+	return removal, p.sameLine(removal)
 }
 
 // matchArm reads one arm, `pat [if guard] => body`. The guard and the body are

@@ -169,7 +169,7 @@ ref:     tests/errors/ch12/float_pattern_render.ki
 [T12.22] check.variables_and_their_types                   level: core
 kind:    unit (go test)      file: internal/sema/pattern_check_test.go
 case:    cada variable de un patrón es un `Local` con el tipo de la parte que liga, también un pun (que no tiene nodo de patrón) y las alternativas de un or-patrón, que comparten una sola; la tabla de patrones guarda el tipo del valor de cada uno y el nombre de un constructor apunta a su definición
-input:   `Shape` y `Point`, y una función con `let (n, b) = t`, `let Point { x, y: q } = p` y un `match` de tres brazos: `Circle(r)`, `Rect(w, _) | Circle(w) if b` y `Unit`; tres funciones con un `1.5`, con `Aa(x)` donde no hay constructor `Aa` y con `Poin { x }` donde no hay tipo `Poin`; y una con `let P { v } = p` y `let Q { v } = q`, con `type P { v: Int }` y `type Q { v: Bool }`
+input:   `Shape` y `Point`, y una función con `let (n, b) = t`, `let Point { x, y: q } = p` y un `match` de cuatro brazos: `Circle(r)`, `Rect(w, _) | Circle(w) if b`, `Unit` y `Rect(_, _)`; tres funciones con un `1.5`, con `Aa(x)` donde no hay constructor `Aa` y con `Poin { x }` donde no hay tipo `Poin`; y una con `let P { v } = p` y `let Q { v } = q`, con `type P { v: Int }` y `type Q { v: Bool }`
 expect:  `r` y `w` son `Float`, `n`, `x` y `q` son `Int` y `b` es `Bool`; hay una sola variable `w`, ligada en su primer `w` y apuntada por los dos nodos `w`; el pun `x` liga su variable en el campo; once patrones con su tipo (`Shape`, `Float`, `(Int, Bool)`, `Point`, el or-patrón `Shape`…); cada constructor posicional apunta a su `DefCtor` y el de record no apunta a nada; un `1.5`, un constructor que no existe y su `x`, y un record de un tipo que no existe, tienen el tipo de error; los dos puns `v` son dos variables, `Int` y `Bool`, y cada uno liga la suya en el sitio de su campo
 why:     si cada alternativa ligara su propia `w`, el cuerpo vería solo una y nada obligaría a la otra a tener el mismo tipo.
 ref:     TestPatternTypes/variables_and_their_types
@@ -178,7 +178,7 @@ ref:     TestPatternTypes/variables_and_their_types
 kind:    unit (go test)      file: internal/sema/pattern_check_test.go
 case:    sin nada esperado de un `match`, su primer brazo le da el tipo y los demás se comprueban contra él: la etiqueta secundaria cae en el valor del primer brazo (su cola, si es un bloque), y si discrepan el `match` tiene el tipo de error
 input:   una función con dos `let` de un `match` sobre `n`, uno con los brazos `1`, `true` y `2.5` y otro con un bloque `{ let a = 1 a }` y `false`, y después `let z: Bool = x` y `x + y`; un `match` cuyo primer brazo es un nombre desconocido; una función con un `match` de dos brazos `Int` en un `let w` seguido de `let b: Bool = w` y `w + 1`; y tres funciones con un `match` sin brazos, cuyo valor se suma, se devuelve como `Int` y se devuelve como `Bool`
-expect:  exactamente tres E0401 («expected `Int`, found `Bool`», `Float` y `Bool`) con «the first arm has type `Int`» en el `1`, en el `1` y en la `a` de la cola, y ningún error en `let z: Bool = x` ni en `x + y`; el programa del nombre desconocido da solo E0301; el del `match` que concuerda da un solo E0401, «expected `Bool`, found `Int`» sobre la `w` de `let b: Bool = w` con «expected because of this annotation», y ninguno en `w + 1`; y los de los `match` sin brazos, ninguno
+expect:  exactamente tres E0401 («expected `Int`, found `Bool`», `Float` y `Bool`) con «the first arm has type `Int`» en el `1`, en el `1` y en la `a` de la cola, y ningún error en `let z: Bool = x` ni en `x + y`; el programa del nombre desconocido da solo E0301; el del `match` que concuerda da un solo E0401, «expected `Bool`, found `Int`» sobre la `w` de `let b: Bool = w` con «expected because of this annotation», y ninguno en `w + 1`; y los de los `match` sin brazos solo un E0701 cada uno, el del pase que sigue
 why:     si cada brazo se comprobara contra el anterior, el `2.5` diría que se esperaba `Bool` y señalaría un valor que no fijó el tipo.
 ref:     TestPatternTypes/arms_have_the_type_of_the_first
 
@@ -285,3 +285,187 @@ input:   17 patrones: constructores con y sin argumentos, con saltos de línea e
 expect:  `OneLine` falso si hay un salto de línea entre el nombre y el cierre, también en uno interior respecto del exterior, y `TrailingComma` verdadero solo con coma tras el último campo y sin `..`; los siete patrones que no son constructores no los llevan
 why:     sin `OneLine`, la edición de un patrón repartido en tres líneas cruzaría líneas y el renderizador se negaría a dibujarla.
 ref:     TestParsePat/one_line_and_trailing_comma
+
+[T12.37] syntax.arm_removal                                level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    el parser dice qué borra la edición que quita un brazo: el brazo, el `;` que le sigue y los blancos de detrás de él, y, si está solo en su línea, la línea hasta el salto; un brazo en varias líneas no tiene edición y uno que no se pudo leer no tiene nada
+input:   once brazos de cinco `match`: uno por línea, con guarda, varios en una línea separados por `;`, con el `;` al final de la línea, un bloque en varias líneas y un brazo roto entre dos buenos
+expect:  `Removal` es el texto exacto de cada caso (`    a => 1`, `a => 1; `, el último de una línea sin `;`…), está en el fichero del brazo, y `RemovalOneLine` es falso solo en el bloque y en el roto, que no tiene `Removal`
+why:     sin el `;` en el span, quitar un brazo del medio deja `0 => 1; ; _ => 2`, que no es un programa.
+ref:     TestParsePat/arm_removal
+
+[T12.38] base.bitset_members_and_count                     level: core
+kind:    unit (go test)      file: internal/base/bitset_test.go
+case:    `Set` añade un entero y `Has` lo encuentra, también a cada lado de la frontera entre dos palabras; `Count` cuenta los miembros, añadir dos veces no cambia nada, `Len` es el tamaño y una copia comparte las palabras
+input:   un conjunto de 130 enteros y los miembros 0, 1, 63, 64, 65, 127, 128 y 129, cada uno añadido dos veces
+expect:  `Has` es verdadero solo en ellos, `Count` sube de uno en uno hasta 8, `Len` sigue siendo 130 y el 2, añadido a una copia, es miembro del original
+why:     con 63 y 64 en palabras distintas, un desplazamiento mal hecho perdería uno de los dos y la exhaustividad creería que falta un constructor.
+ref:     TestBitSet/members_and_count
+
+[T12.39] base.bitset_sizes                                 level: core
+kind:    unit (go test)      file: internal/base/bitset_test.go
+case:    el número de palabras es el tamaño redondeado hacia arriba y el último entero de cada tamaño se puede añadir; el valor cero y el conjunto de tamaño 0 no tienen nada
+input:   los tamaños 0, 1, 63, 64, 65, 128 y 129, y el valor cero
+expect:  0, 1, 1, 1, 2, 2 y 3 palabras; el último entero de cada tamaño es miembro y el único; `Len` y `Count` valen 0 y `NextClear(0)` no encuentra nada en los dos conjuntos vacíos
+why:     redondeando hacia abajo, un conjunto de 65 enteros se quedaría sin sitio para el último y `Set(64)` haría panic con un constructor que existe.
+ref:     TestBitSet/sizes
+
+[T12.40] base.bitset_out_of_range_panics                   level: core
+kind:    unit (go test)      file: internal/base/bitset_test.go
+case:    un entero que el conjunto no puede tener es un error de quien llama: `Set` y `Has` hacen panic con él, por los dos extremos y en el valor cero, y también un tamaño negativo
+input:   un conjunto de 70 enteros con -1, 70 y 1000, el valor cero con el 0 (en `Set` y en `Has`) y `NewBitSet(-1)`
+expect:  `base: BitSet index out of range` en los seis casos de `Set` y `Has`, y en los dos del valor cero; `base: NewBitSet of a negative size` para el tamaño; el 0 y el 69 sí se añaden: tras añadirlos, `Has` dice que están, que el 1 y el 68 no, y `Count` es 2
+why:     `Has(70)` en un conjunto de 70 leería un bit de relleno de su última palabra y diría `false`: un constructor mal numerado pasaría desapercibido.
+ref:     TestBitSet/out_of_range_panics
+
+[T12.41] base.bitset_next_clear                            level: core
+kind:    unit (go test)      file: internal/base/bitset_test.go
+case:    `NextClear(from)` es el menor entero desde `from` que está por debajo de `Len` y no es miembro, aunque `from` sea negativo o pase del final, y los bits de la última palabra que pasan de `Len` no cuentan
+input:   ocho tamaños de 1 a 130, cuarenta conjuntos al azar de cada uno, con semilla fija, de casi vacíos a llenos, y cada `from` de -2 a `Len`+2, contra un bucle sobre los enteros
+expect:  el mismo entero y el mismo «hay o no hay» que el bucle en cada caso
+why:     en un conjunto lleno de 70 enteros la segunda palabra tiene bits libres que no son enteros: devolverlos haría creer que falta el constructor 70.
+ref:     TestBitSet/next_clear
+
+[T12.42] check.coverage_by_each_kind_of_type               level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un `match` cubre un tipo cuando sus brazos nombran todos los constructores, cada uno con subpatrones que cubren sus campos: `Bool`, sumas con campos y sin ellos, un constructor dentro de otro, una tupla, un record, un or-patrón y parámetros que los patrones tipan; lo que falta es E0701 con un testigo construido, con `_` en lo que no importa
+input:   veintinueve programas de un `match`, con `true` y `false`, `Circle`, `Rect` y `Unit`, `Zero` y `Succ`, tuplas, records con `..` y con todos sus campos, or-patrones sueltos y dentro de un constructor, parámetros sin tipo, columnas con varias hojas, y un comodín bajo un constructor con campos (`(_, true)` con `(Yes(_), false)` y `(No, false)`, y sin el último)
+expect:  ningún diagnóstico en los que cubren; en los demás un E0701 sobre el escrutinio con «pattern `Rect(_, _)` not covered» o «patterns … and … not covered», con `Succ(Succ(_))`, `(true, false)`, `Point { x: 1, .. }`, `Point { x: 1, y: 1 }`, `(Point { .. }, false)`, `(Rect(_, _), _)`, `(Rect(_, _), true)`, `(No, false)` y los cuatro testigos de `(Bool, Shape)`, que salen de dos hojas de la búsqueda, con `and more`, la ayuda «add an arm for …» (con «, or end the `match` with a `_` arm» detrás si el testigo lleva un número), la nota de la regla y ninguna edición
+why:     un constructor que falta lleva `_` en sus campos: si el testigo los rellenara con lo siguiente saldría `(Rect(true, _), _)`.
+ref:     TestPatterns/coverage_by_each_kind_of_type
+
+[T12.43] check.guards_do_not_count                         level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un brazo con guarda no cubre nada, ni para el `match` ni para los brazos de debajo, y el `match` cuyos brazos tienen todos guarda tiene por testigo `_`; el patrón de un brazo con guarda se comprueba igual: es inalcanzable si lo cubren los de arriba, que no tienen guarda
+input:   cinco programas con guardas (`false if true`, dos `m if …`, `m if m > 0` y `m` —que se vuelve a comprobar aparte—, `Circle(_) if true` y `Circle(r)`, y `m` seguido de `k if k > 0` sobre un `Int`)
+expect:  E0701 con `false` y con `_`, ningún diagnóstico en los dos que cubren, entre ellos el de la variable tras la guarda, escrito dos veces, y un solo W0701 en el brazo con guarda `k if k > 0` que sigue a `m`, con la edición que borra su línea
+why:     si la guarda contara, `match n { m if m > 0 => … }` sería exhaustivo y un número negativo no tendría brazo.
+ref:     TestPatterns/guards_do_not_count
+
+[T12.44] check.an_int_needs_a_wildcard                     level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    ningún conjunto de literales es todo `Int`, así que un `match` sobre un entero necesita `_` o una variable; el testigo es el menor número desde 0 que ningún brazo que llega a ese sitio nombra, y una columna sin literales es `_`
+input:   trece programas: `0` y `1`, `1` y `2`, `0`, `1` y `3`, `-1` y `0`, un `_` o una variable al final, `(a, 0)`, `(0, true)` con `(1, _)`, `Box(0)`, `(true, 0)` con `(false, 0)` y `(true, 0)` con `(false, 1)` sobre `(Bool, Int)`, y dos sobre `(Bool, Four, Int)` con `(false, A, 0)` y `(true, _, 0)`, con y sin `(false, B, 0)`
+expect:  E0701 con `2`, `0`, `2`, `1`, `(_, 1)`, `(2, _)`, `Box(1)` y, en dos testigos, `(false, 1)` y `(true, 1)` en el primer `(Bool, Int)` y `(false, 0)` y `(true, 1)` en el segundo; la ayuda «add an arm for …» termina con «, or end the `match` with a `_` arm», porque ninguna lista de brazos con números acaba, si lleva número uno de los testigos que el mensaje muestra: en el primero de `Four` los tres testigos son `(false, B, _)`, `(false, C, _)` y `(false, D, _)` con «and more», el cuarto, `(true, _, 1)`, no se enseña y la ayuda no pide el `_`, y en el segundo el tercero, `(true, _, 1)`, sí se enseña y la ayuda lo pide; y ningún diagnóstico con `_` ni con la variable
+why:     el testigo es el menor entero que falta y no una cuenta: en `Int` faltan todos menos los que nombran los brazos.
+ref:     TestPatterns/an_int_needs_a_wildcard
+
+[T12.45] check.witnesses_are_named_up_to_three             level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    el algoritmo busca un testigo y sigue por cada constructor que ningún brazo nombra, hasta tres; si encuentra uno más dice `and more`, y nunca cuenta los demás, porque cuántos valores deja fuera un `match` depende de por dónde parte el algoritmo
+input:   un tipo de seis constructores sin campos con un `match` de cinco, cuatro, tres, dos y un brazos, y uno cuyo único brazo tiene guarda
+expect:  uno, dos con «and», tres con «, … and …» y con cuatro y con cinco faltas tres más «and more» («patterns `C`, `D`, `E` and more not covered»); `_` si todo es guarda; la ayuda lista lo mismo
+why:     «and more» sale solo si existe el cuarto testigo: con exactamente tres faltas el mensaje los nombra todos y no promete otros que no hay.
+ref:     TestPatterns/witnesses_are_named_up_to_three
+
+[T12.46] check.unreachable_arms                            level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un brazo que ningún valor alcanza es W0701 sobre su patrón, con la edición que lo borra: se repite, sigue a un `_` o a una variable, a un constructor que los de arriba cubren entero, o a un or-patrón cuyas alternativas están todas arriba; de un or-patrón solo se avisa si sobra el brazo entero, no una alternativa; la edición lleva el `;` que le sigue o la línea entera, y un brazo en varias líneas solo tiene la ayuda
+input:   once programas: un constructor repetido, un literal tras `_` y tras una variable, un literal dos veces, `Rect(_, _)` tras `Rect(w, h)`, un or-patrón ya tomado, brazos separados por `;` en una línea (el último y uno en medio) y un brazo con bloque en varias líneas; y dos con un or-patrón del que sobra una alternativa (`0 | 1 | 0`, y `0 | 1` tras un `0`)
+expect:  un solo W0701 en cada uno de los nueve primeros, con «covered by the arms above» y la ayuda «remove this arm»; las ocho ediciones dejan un programa sin ningún diagnóstico, la del brazo en varias líneas no tiene edición, y los dos or-patrones con una alternativa de más no dan ningún diagnóstico
+why:     sin el `;` en la edición, quitar `0 => 5` entre dos brazos de una línea dejaría `0 => 1; ; _ => 2`.
+ref:     TestPatterns/unreachable_arms
+
+[T12.47] check.refutable_lets                              level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un `let` no tiene otro brazo, así que su patrón debe casar con todo: E0702 sobre el patrón con lo que no casa, con los testigos de un `match` (tres y `and more`); un nombre, `_`, una tupla o un record de nombres, el único constructor de un tipo y un or-patrón que cubre un `Bool` son irrefutables, con anotación o sin ella
+input:   siete `let` refutables (`Some(x)`, `(a, 0)`, `Circle(r)`, `P` de cuatro constructores, `A` de seis, `(true, b)` y `Pair(Some(a), b)`) y ocho irrefutables
+expect:  E0702 con «`None` is not covered», «`(_, 1)` …», «`Rect(_, _)` and `Unit` are not covered», «`Q`, `R` and `S` …», «`B`, `C`, `D` and more …», «`(false, _)` …» y «`Pair(None, _)` …», con la nota de la regla, la ayuda «use `match` to handle the other cases» y ninguna edición; los ocho irrefutables, ningún diagnóstico
+why:     un `let` que tratara `Some(x)` como irrefutable dejaría `x` sin valor cuando llegue `None`, en vez de pedirte un `match`.
+ref:     TestPatterns/refutable_lets
+
+[T12.48] check.a_mistake_is_reported_once                  level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    lo que Check ya ha informado no se repite aquí: un `match` cuyo escrutinio tiene el tipo de error, o con un patrón que es un constructor que no existe, de otro número de campos, de otro tipo, una tupla de otro tamaño, una lista, un record con un campo que no tiene o al que le falta uno, o que no se pudo leer, se deja en paz, y un `let` también; un `match` vecino se comprueba igual
+input:   diecinueve programas con un solo error cada uno (E0306, E0301 cuatro veces —un escrutinio desconocido con un brazo, sin brazos y con uno con guarda, y un `let`—, E0705, E0401 nueve veces —un record de otro tipo entre ellas—, E0409, E0410, E0411 y E0406), uno con un campo repetido y otro que falta, uno con un campo repetido en dos puns y otro que falta, dos con un error de sintaxis en un patrón y dos `match` en un fichero, uno con un constructor desconocido y otro que no cubre `true`; tres con un `match` que el parser marcó como roto (un cuerpo con un `)` que falta y se come los brazos de después, un nombre donde un brazo se corta, que cubre los de abajo, y un brazo sin cuerpo con un `_` detrás), tres con una línea con `=>` que empieza como una llamada o como un operando (un constructor en minúscula en el brazo del medio y en el primero, y una guarda sin `if`) y uno con un `match` roto y otro sano
+expect:  cada uno de los diecinueve da exactamente el código del error y ningún E0701, W0701, E0702 ni E0707; el del campo repetido y el que falta da E0411 y E0410 y nada más, y el de los dos puns, E0704 y E0410 y nada más; los de sintaxis no dan E0701, W0701 ni E0707; los dos `match` juntos dan E0306 y E0701; los tres rotos y los tres de la línea con `=>` dan solo el E0201 del parser, y el roto junto al sano, el E0201 y el E0701 del sano
+why:     sobre un patrón que Check no entendió el pase repetiría el error con otras palabras, una vez por brazo: una equivocación, dos mensajes.
+ref:     TestPatterns/a_mistake_is_reported_once
+
+[T12.49] check.a_thousand_constructors                     level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un tipo de mil constructores se comprueba entero, como uno de dos, dentro del presupuesto: todos cubiertos, uno menos es E0701 con el que falta, cinco brazos nombran tres y `and more`, y un `_` tras todos es el único brazo inalcanzable
+input:   `type Big` con `C0` a `C999` y un `match` con los mil brazos, con el 500 quitado, con cinco y con los mil y un `_`
+expect:  ningún diagnóstico en el primero; E0701 «pattern `C500` not covered» y «patterns `C5`, `C6`, `C7` and more not covered»; un W0701 en el `_`, con la edición que borra su línea
+why:     un tipo grande no debe dar E0707 ni callar el brazo que sobra: con mil constructores se dice cuál falta y cuál no se alcanza.
+ref:     TestPatterns/a_thousand_constructors
+
+[T12.50] check.large_patterns_are_searched_flat            level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    la búsqueda recorre una columna cada vez con una pila propia, así que una tupla de cien mil elementos es tan profunda como un par, con la pila de Go limitada a 1 MiB: el testigo de cien mil lugares con un 0 al final, el de uno con el 0 al principio, y una fila de comodines lo cubre todo
+input:   un `match` sobre una tupla de 100 000 unos con un brazo de 99 999 `_` y un `1`, con uno de 100 000 `1`, con uno de 100 000 `_` y con el primero más uno de 100 000 `_`
+expect:  E0701 con el testigo exacto `(_, …, _, 0)` y con `(0, _, …, _)`, de cien mil lugares cada uno; ningún diagnóstico con la fila de comodines sola ni con ella tras el primer brazo
+why:     con la pila limitada, una búsqueda recursiva por columnas acabaría el test con cien mil lugares; con la pila propia solo tarda más.
+ref:     TestPatterns/large_patterns_are_searched_flat
+
+[T12.51] check.large_matches_are_checked_flat              level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    un `match` de cien mil brazos y un or-patrón de cien mil alternativas se comprueban buscando los brazos que empiezan por el mismo literal, y no leyendo todos para cada brazo: sin `_` dejan fuera el primer número que nadie nombra, con `_` quedan cubiertos, un brazo repetido cien mil veces es una advertencia por copia salvo la primera, y el brazo repetido al final de los cien mil se avisa; con la pila de Go limitada a 1 MiB. La búsqueda de brazos inalcanzables es un aviso, así que, si se acaba el presupuesto, se calla: con literales dentro de un constructor lo cumple a dos mil brazos
+input:   100 000 brazos `i => 1`, un or-patrón `0 | 1 | … | 99999`, los brazos y un `_`, y cien mil brazos `0 => 1` y un `_`; los cien mil brazos y un último `99999 => 2`; y `No`, `Yes(0)` a `Yes(1999)`, `Yes(_)`, `Yes(3)` y `No`; todo con la pila limitada a 1 MiB
+expect:  E0701 con `100000` en los dos primeros; ningún diagnóstico con el `_`; exactamente 99 999 W0701 en el cuarto y nada más; en el quinto, el E0701 con `100000` y un solo W0701, sobre el `99999 => 2`, con la edición que borra su línea; en el último, dos W0701, sobre `Yes(3)` y sobre el último `No`
+why:     sin el índice, el presupuesto se agotaría antes del último brazo y su advertencia se perdería sin avisar.
+ref:     TestPatterns/large_matches_are_checked_flat
+
+[T12.52] check.a_sat_encoding_is_e0707                     level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    encontrar una tupla de `Bool` que ningún brazo de un `match` cubre es NP-completo: cada brazo cubre las asignaciones que hacen falsa una cláusula, y juntos lo cubren todo justo cuando la fórmula no tiene solución, así que una tupla que dejan fuera es una solución; la fórmula elegida, de 129 cláusulas y 30 variables, supera el presupuesto de diez millones de pasos
+input:   una fórmula de 129 cláusulas de tres literales sobre 30 variables (relación 4,3), elegida porque su búsqueda pasa del presupuesto, que la mayoría de las de ese tamaño no pasa, escrita en el test, como un `match` de 129 brazos sobre una tupla de 30 `Bool`
+expect:  exactamente un diagnóstico, un E0707 sobre la tupla del escrutinio con «checking it needs more than 10 000 000 steps», la nota y la ayuda; ni E0701 ni W0701
+why:     sin presupuesto, un `match` escrito con mala idea dejaría la compilación colgada; con él es un error, que ni se calla ni adivina.
+ref:     TestPatterns/a_sat_encoding_is_e0707
+
+[T12.53] check.the_budget_is_in_steps                      level: core
+kind:    unit (go test)      file: internal/sema/patterns_test.go
+case:    el presupuesto es una variable que el test baja: un `match` de doce columnas `true | false` son 4 096 casos; con 200 pasos es E0707, el `let` con ese patrón también, con su texto, su nota y su ayuda, que no hablan de brazos; el presupuesto se acaba también al añadir un brazo a la matriz: con cinco pasos, uno de diez alternativas es E0707 en el `match` y en el `let`; por defecto cubre y no dice nada, y acabarlo con `_` lo cubre sin búsqueda: el brazo inalcanzable se busca con lo que queda y, si se acaba, ni se avisa ni es error
+input:   el `match` con y sin un `_` al final, y el `let` con el mismo patrón, con un presupuesto de 200 y con el de por defecto; y, con un presupuesto de 5, un `match` sobre un `Int` y un `let` con el patrón `0 | 1 | … | 9`
+expect:  con 200: E0707 «checking it needs more than 200 steps» en el `match`, E0707 del `let` con «checking its pattern needs more than 200 steps», la nota «finding a value that the pattern does not match is NP-complete: a pattern over many booleans can take forever» y la ayuda «write `_` where every value matches, or take the value apart with `match`es of a few values each», y ningún diagnóstico con el `_`; por defecto, ninguno sin el `_` ni en el `let`, y un W0701 sobre el `_` con él; con 5: E0707 «checking it needs more than 5 steps» sobre el escrutinio del `match` y «checking its pattern needs more than 5 steps» sobre el patrón del `let`, y nada más
+why:     la ayuda de E0707 promete que acabar con `_` basta: si el brazo inalcanzable también agotara el presupuesto, sería falso.
+ref:     TestPatterns/the_budget_is_in_steps
+
+[T12.54] check.agrees_with_trying_every_value              level: core
+kind:    unit (go test)      file: internal/sema/pattern_matrix_internal_test.go
+case:    para matrices al azar de uno a cuatro brazos sobre cada tipo de un universo inventado (`Bool`, `Int`, una suma recursiva, un par, un record y el par al revés, con la suma primero), el motor dice lo que dice probar todos los valores: si un vector es útil (por la búsqueda y por el índice con los brazos añadidos de uno en uno), si algún valor queda fuera, y que cada testigo describe algún valor y ninguno que case un brazo
+input:   4 000 matrices con semilla fija, con comodines, constructores, enteros del 0 al 2 y or-patrones de dos o tres alternativas
+expect:  la misma respuesta por las tres vías, y los testigos, leídos de vuelta como patrones, sanos y no vacíos
+why:     una matriz escrita a mano prueba una combinación; cuatro mil al azar, comparadas con probar todos los valores, prueban las que nadie pensó.
+ref:     TestMatrix/agrees_with_trying_every_value
+
+[T12.55] check.the_budget_holds_to_the_last_step           level: core
+kind:    unit (go test)      file: internal/sema/pattern_matrix_internal_test.go
+case:    la búsqueda cuenta sus pasos y se rinde cuando son más que el presupuesto, no cuando son tantos: sin límite tarda cierto número, con ese número basta y con cualquiera menor no; vale para la búsqueda de testigos, la de un vector útil y el índice de brazos con sus tres preguntas
+input:   una matriz de cuatro brazos sobre un par `(Bool, Suma)` con un or-patrón en el tercero, y un vector con otro
+expect:  por cada una de las tres vías, los pasos sin límite son al menos 3, con exactamente ese presupuesto termina y con cualquier presupuesto menor se agota
+why:     con `<` en lugar de `<=`, un `match` que usa justo el presupuesto daría E0707, «más de diez millones de pasos» sin pasarse.
+ref:     TestMatrix/the_budget_holds_to_the_last_step
+
+[T12.56] check.a_step_is_a_node_a_row_or_a_cell            level: core
+kind:    unit (go test)      file: internal/sema/pattern_matrix_internal_test.go
+case:    el presupuesto cuenta un paso por cada nodo de la búsqueda, cada fila construida para otro nodo y cada celda empujada, más las filas con que empieza; ocho matrices pequeñas tardan 3, 5, 7, 6, 9, 11, 24 y 53 pasos, contados a mano nodo por nodo, y el índice de brazos lleva una cuenta de 2, 4 y 9 pasos tras añadir dos brazos, tras preguntar por un comodín (2 más) y tras pedir los testigos (5 más)
+input:   una columna incompleta, una completa, un constructor con su campo en el vector, un or-patrón, una tupla, una fila de comodines con un constructor en el vector, filas de comodines en cada cubo de una columna completa y una fila de comodines en una columna completa de constructores con campos (`A`, `B(_)` y `C(_, _)`, con `Bool` detrás); el índice con los brazos `true` y `false`; y un presupuesto de 0
+expect:  las hojas y los pasos de cada una son los contados (1 en 3, 0 en 5, 1 en 7, 0 en 6, 1 en 9, 0 en 11, 2 en 24 y 0 en 53), cualquier presupuesto menor se agota, la cuenta del índice es 2, 4 y 9 sin testigos, y con un presupuesto de 0 una matriz de una fila no termina
+why:     un paso es lo que dice E0707.md: si se contara otra cosa, «más de 10 000 000 pasos» no significaría lo que el catálogo promete.
+ref:     TestMatrix/a_step_is_a_node_a_row_or_a_cell
+
+[T12.57] driver.check_writes_a_warning_and_exits_0         level: core
+kind:    unit (go test)      file: internal/driver/warning_test.go
+case:    una advertencia es un diagnóstico de un programa que se acepta: `ki check` la escribe en los tres formatos y sale con 0, como con un fichero que no tiene nada que decir; la palabra de antes del código es la severidad, y la edición que borra el brazo sale en el diff del formato humano y en los `fixits` del JSON
+input:   un programa cuyo único diagnóstico es el brazo `2 => 2` tras un `_`, con `--diagnostics=human`, `short` y `json`
+expect:  salida 0, stdout vacío y en stderr exactamente `warning[W0701]: unreachable pattern` con su etiqueta, la ayuda y el diff `4 -     2 => 2` y `4 +`, la línea corta con `warning[W0701]` y el JSON con `"severity":"warning"` y la sustitución vacía de las columnas 1 a 11
+why:     si la advertencia contara como error, `ki check` saldría con 1 y un programa correcto pero sospechoso dejaría de compilar.
+ref:     TestWarnings/check_writes_a_warning_and_exits_0
+
+[T12.58] driver.run_does_not_write_a_warning               level: core
+kind:    unit (go test)      file: internal/driver/warning_test.go
+case:    `ki run` escribe diagnósticos solo de un programa que no puede ejecutar, así que una advertencia no sale en su stderr; como un `match` aún no se elabora, el programa acaba en un ICE antes de ejecutarse y lo que se comprueba es que la advertencia no está en stderr y que el informe dice que dejó un diagnóstico sin mostrar
+input:   el programa de la advertencia, con `ki run`
+expect:  salida 70, stdout vacío, ni `warning[`, ni `W0701`, ni `unreachable pattern` en stderr, y el informe del ICE acaba con «1 diagnostic was reported before this error and is not shown»
+why:     la primera línea de stderr de un programa que falla debe ser la del fallo (spec 6.3), no una advertencia.
+ref:     TestWarnings/run_does_not_write_a_warning
+
+[T12.59] driver.emit_leaves_warnings_out                   level: core
+kind:    unit (go test)      file: internal/driver/warning_test.go
+case:    el volcado de `ki emit` se cierra con los errores y con ninguna advertencia: una advertencia sola deja stderr vacío y el código 0, y con un error se escribe el error y no la advertencia; un `match` aún no llega al final de `ki emit core`, así que lo primero se pregunta al cierre que comparten todos los objetivos, con una `Session` que tiene las dos, y lo segundo también a `ki emit core` sobre un programa con una advertencia y un error, que acaba antes de hacer Core
+input:   una `Session` con una advertencia W0701 en el sink, y después con un E0301 además; y el programa de la advertencia con `print(zz)` en lugar de `print(7)`, con `ki emit core --diagnostics=short`
+expect:  con la advertencia, código 0, el volcado en stdout y nada en stderr; con las dos, código 1, el volcado y solo `a.ki:1:4: error[E0301]: unknown name `y`` en stderr; con `ki emit core` sobre el programa con error, código 1, nada en stdout y solo el E0301 «unknown name `zz`» en stderr
+why:     quien lee el volcado con una herramienta no pidió una advertencia detrás, y no es un error que atender.
+ref:     TestWarnings/emit_leaves_warnings_out

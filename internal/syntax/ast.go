@@ -548,6 +548,14 @@ type FieldPat struct {
 // PatError and an ExprError where it went wrong, so that the arms around it are
 // still the arms the program has.
 //
+// Removal is what an edit that removes the arm from its `match` deletes: the arm and
+// the `;` that ends it, with the blanks after the `;`, and, for an arm that is alone
+// on its line, the blanks before it too, so that what is left is an empty line and
+// not a line of blanks. An arm that the line break ends has nothing else to take.
+// RemovalOneLine says that no line break lies inside Removal, so an edit over it
+// stays on one line (see FixIt); an arm that went wrong is never offered, and has
+// it false.
+//
 // Broken says that the parser found a mistake while it read the arm, in its pattern,
 // its guard or its body (nested ones included), reported or not. What it read may
 // then not be what the program meant: a `(` left out makes `Num n) => n` an arm of
@@ -556,12 +564,14 @@ type FieldPat struct {
 // reached) say nothing about one that has a broken arm, because the list of arms is
 // not the one the program has.
 type MatchArm struct {
-	Pat      PatID
-	Guard    ExprID
-	HasGuard bool
-	Body     ExprID
-	Span     base.Span
-	Broken   bool
+	Pat            PatID
+	Guard          ExprID
+	HasGuard       bool
+	Body           ExprID
+	Span           base.Span
+	Removal        base.Span
+	RemovalOneLine bool
+	Broken         bool
 }
 
 // Module is the syntax tree of one file.

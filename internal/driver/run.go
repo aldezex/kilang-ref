@@ -18,7 +18,10 @@ var backends = []string{"interp"}
 // compiles FILE and runs its `main`.
 //
 // A program that has errors in the front end gets them written to stderr and
-// exit code 1, and nothing runs. A program with no errors but no `main` gets
+// exit code 1, and nothing runs. The warnings that the front end found (W0701) are
+// written with the errors and not otherwise: a program that runs has its stderr to
+// itself, and the first line of it is the one of its panic. A program with no
+// errors but no `main` gets
 // E0303, with the same exit code: `ki check` accepts such a file, because a
 // library is a fine thing to check, but there is nothing to start. Otherwise
 // the program runs on the machine of package interp, which reads KI_STACK_MB for

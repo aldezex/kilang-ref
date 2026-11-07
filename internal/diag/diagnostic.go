@@ -51,8 +51,9 @@ type Code struct {
 // E returns the error code with number n.
 func E(n uint16) Code { return Code{Letter: 'E', Number: n} }
 
-// W returns the warning code with number n. No pass of Part I reports a warning:
-// the first is the unreachable arm of a match, in chapter 12 (spec 5.7).
+// W returns the warning code with number n. The first, and so far the only one, is
+// W0701, the arm of a match that no value reaches (spec 5.7); no pass of Part I
+// reports a warning.
 func W(n uint16) Code { return Code{Letter: 'W', Number: n} }
 
 // String writes the code with at least four digits: E(101) is "E0101".

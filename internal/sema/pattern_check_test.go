@@ -204,7 +204,7 @@ func TestPatternTypes(t *testing.T) {
 		// table of a pattern holds the type of the value it matches, and the
 		// name of a constructor stands for it.
 		const src = shapes + "fn f(s: Shape, p: Point, t: (Int, Bool)) -> Float {\n  let (n, b) = t\n  let Point { x, y: q } = p\n" +
-			"  match s {\n    Circle(r) => r\n    Rect(w, _) | Circle(w) if b => w\n    Unit => 0.0\n  }\n}"
+			"  match s {\n    Circle(r) => r\n    Rect(w, _) | Circle(w) if b => w\n    Unit => 0.0\n    Rect(_, _) => 0.0\n  }\n}"
 		p := testsupport.Analyze(t, src)
 		wantCodes(t, p)
 		for _, row := range []struct{ name, want string }{
@@ -394,10 +394,11 @@ func TestPatternTypes(t *testing.T) {
 		}}})
 		// A match with no arms has no type to say: it is the error type, which
 		// fits where a number is added to it, where an `Int` is returned and where a
-		// `Bool` is.
+		// `Bool` is. It covers no value, so each of the three is the E0701 of the pass
+		// that follows, and no other error.
 		p = testsupport.Analyze(t, "fn f(n: Int) -> Int {\n  let x = match n {\n  }\n  x + 1\n}\nfn g(n: Int) -> Int { match n { } }\n"+
 			"fn h(n: Int) -> Bool {\n  let b = match n {\n  }\n  b\n}")
-		wantCodes(t, p)
+		wantCodes(t, p, "E0701", "E0701", "E0701")
 	})
 
 	t.Run("an_expected_type_goes_to_every_arm", func(t *testing.T) {
@@ -590,7 +591,7 @@ func TestPatternTypes(t *testing.T) {
 		// bind the same variable, so a name that has two types in two alternatives
 		// is an E0401 at the second, with no secondary label, and an alternative that
 		// is not the type of the value is the same error as any pattern.
-		const src = "type U { A(Int), B(Bool) }\nfn f(u: U, n: Int) -> Int {\n  let a = match u {\n    A(x) | B(x) => 1\n    _ => 0\n  }\n" +
+		const src = "type U { A(Int), B(Bool) }\nfn f(u: U, n: Int) -> Int {\n  let a = match u {\n    A(x) | B(x) => 1\n  }\n" +
 			"  let b = match n {\n    0 | true => 1\n    _ => 2\n  }\n  a + b\n}"
 		checkRows(t, []diagRow{{name: "or", src: src, want: func(at func(string, string) base.Span) []diag.Diagnostic {
 			return []diag.Diagnostic{
@@ -630,7 +631,7 @@ func TestPatternTypes(t *testing.T) {
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{orDiag("x", at("| B =>", "B"), at("A(x)", "A(x)"))}
 				}},
-			{name: "three alternatives", src: u + "fn f(u: U) -> Int {\n  match u {\n    A(x) | B | C(x) => 1\n    _ => 0\n  }\n}",
+			{name: "three alternatives", src: u + "fn f(u: U) -> Int {\n  match u {\n    A(x) | B | C(x) => 1\n  }\n}",
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{orDiag("x", at("| B |", "B"), at("A(x)", "A(x)"))}
 				}},
@@ -663,7 +664,7 @@ func TestPatternTypes(t *testing.T) {
 						orDiag("z", at("(x, y)", "(x, y)"), at("(z, _)", "(z, _)")),
 					}
 				}},
-			{name: "inside a constructor", src: u + "fn f(w: W) -> Int {\n  match w {\n    W(A(x) | B) => 1\n  }\n}",
+			{name: "inside a constructor", src: u + "fn f(w: W) -> Int {\n  match w {\n    W(A(x) | B) => 1\n    W(C(_)) => 2\n  }\n}",
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{orDiag("x", at("| B)", "B"), at("A(x)", "A(x)"))}
 				}},
@@ -677,7 +678,7 @@ func TestPatternTypes(t *testing.T) {
 		// variable of the repeat is not the one the body sees.
 		const p = "type U { A(Int), B(Int) }\n"
 		checkRows(t, []diagRow{
-			{name: "tuple", src: "fn f(t: (Int, Int)) -> Int {\n  match t {\n    (x, x) => x\n    _ => 0\n  }\n}",
+			{name: "tuple", src: "fn f(t: (Int, Int)) -> Int {\n  match t {\n    (x, x) => x\n  }\n}",
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{twiceBindDiag("x", at(", x)", "x"), at("(x,", "x"))}
 				}},
@@ -689,7 +690,7 @@ func TestPatternTypes(t *testing.T) {
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{twiceBindDiag("x", at("y: x", "x"), at("{ x,", "x"))}
 				}},
-			{name: "constructor", src: shapes + "fn f(s: Shape) -> Float {\n  match s {\n    Rect(w, w) => w\n    _ => 0.0\n  }\n}",
+			{name: "constructor", src: shapes + "fn f(s: Shape) -> Float {\n  match s {\n    Rect(w, w) => w\n    Circle(_) => 0.0\n    Unit => 0.0\n  }\n}",
 				want: func(at func(string, string) base.Span) []diag.Diagnostic {
 					return []diag.Diagnostic{twiceBindDiag("w", at(", w)", "w"), at("Rect(w,", "w"))}
 				}},
@@ -804,10 +805,10 @@ func TestPatternTypes(t *testing.T) {
 		// pattern on one line.
 		const cube = "type Cube { x: Int, y: Int, z: Int }\ntype P = Point\n" + shapes
 		fn := func(pattern string) string {
-			return cube + "fn f(p: Point, c: Cube) -> Int {\n  match p {\n    " + pattern + " => 1\n    _ => 0\n  }\n}"
+			return cube + "fn f(p: Point, c: Cube) -> Int {\n  match p {\n    " + pattern + " => 1\n  }\n}"
 		}
 		cubeFn := func(pattern string) string {
-			return cube + "fn f(c: Cube) -> Int {\n  match c {\n    " + pattern + " => 1\n    _ => 0\n  }\n}"
+			return cube + "fn f(c: Cube) -> Int {\n  match c {\n    " + pattern + " => 1\n  }\n}"
 		}
 		insert := func(at base.Span, text string) *diag.FixIt { f := diag.Insert(at, text); return &f }
 		endOf := func(sp base.Span) base.Span { return base.Span{File: sp.File, Lo: sp.Hi, Hi: sp.Hi} }

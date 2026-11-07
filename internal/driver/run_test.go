@@ -240,7 +240,7 @@ func TestRun(t *testing.T) {
 			t.Fatalf("ki run without the hook: got %d, stdout %q, stderr %q, want 0, \"7\\n\" and nothing on stderr", code, stdout, stderr)
 		}
 		// Every pass that `ki run` runs, from the lexer to the machine itself.
-		for _, pass := range []string{"lex", "parse", "resolve", "declare", "check", "elaborate", "lint", "run"} {
+		for _, pass := range []string{"lex", "parse", "resolve", "declare", "check", "patterns", "elaborate", "lint", "run"} {
 			t.Setenv("KI_DEBUG_PANIC_IN", pass)
 			code, stdout, stderr := runCLI(t, "run", path)
 			checkICE(t, "ki run with the hook in "+pass, code, stdout, stderr, pass)

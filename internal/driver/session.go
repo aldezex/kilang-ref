@@ -48,7 +48,7 @@ type Session struct {
 	Interner       *base.Interner // the identifiers of the files lexed so far; NewSession makes it
 	Format         DiagFormat     // how ReportAll writes the diagnostics; one of the constants above
 	// DebugPanicIn is the name of the pass that panics on purpose when it
-	// starts ("lex", "parse", "resolve", "declare", "check"…), to try the ICE boundary (see
+	// starts ("lex", "parse", "resolve", "declare", "check", "patterns"…), to try the ICE boundary (see
 	// runPass); empty means none. Main sets it from KI_DEBUG_PANIC_IN, and
 	// NewSession leaves it empty: a Session made with NewSession does not
 	// depend on the environment, but one that Main makes does. The tests of
@@ -84,13 +84,23 @@ const truncationNote = "note: too many errors; the first 100 are shown\n"
 // ignored. A Format that is not one of the DiagFormat constants is a bug of
 // the caller, and ReportAll panics on the first diagnostic it has to write. The
 // commands call it through report.
-func (s *Session) ReportAll() {
+func (s *Session) ReportAll() { s.writeDiagnostics(false) }
+
+// writeDiagnostics is ReportAll, or, with errorsOnly, ReportAll for the
+// diagnostics that are errors: a warning is for the commands whose business is to
+// say what is wrong with a program (see reportErrors).
+func (s *Session) writeDiagnostics(errorsOnly bool) {
 	s.Sink.SortByPosition()
 	var sb strings.Builder
-	for i, d := range s.Sink.All() {
-		if i > 0 && s.Format == FormatHuman {
+	written := 0
+	for _, d := range s.Sink.All() {
+		if errorsOnly && d.Severity != diag.Error {
+			continue
+		}
+		if written > 0 && s.Format == FormatHuman {
 			sb.WriteString("\n")
 		}
+		written++
 		sb.WriteString(s.render(d))
 	}
 	if s.Sink.Truncated() {
@@ -108,6 +118,18 @@ func (s *Session) ReportAll() {
 // an ICE: exit code 70 and the buffers of kirt/out flushed, not Go's own report.
 func (s *Session) report() {
 	s.runPass("render", s.ReportAll)
+}
+
+// reportErrors is report for a command that shows something other than
+// diagnostics, the dump of `ki emit`: the warnings are left out, as `ki run` leaves
+// them out by writing diagnostics only when the program has errors. A warning is
+// about a program that is accepted, and `ki check` is the command that says what it
+// thinks of one. Without it, the dump that a tool reads would be followed by a text
+// that is not an error and that it did not ask for. The pass "render" runs all the
+// same, so that the order of a dump and its diagnostics is the same for every
+// program.
+func (s *Session) reportErrors() {
+	s.runPass("render", func() { s.writeDiagnostics(true) })
 }
 
 // render writes one diagnostic in the session's format.

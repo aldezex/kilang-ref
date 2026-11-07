@@ -76,8 +76,9 @@ func emitAST(s *Session, c *command, args []string) int {
 // prelude's functions are not printed, and FILE needs no `main`.
 //
 // Core is made only for a program without errors, so a file that has any, in the
-// front end, gets its diagnostics, exit code 1 and nothing on stdout: there is no
-// Core to show. It is not an ICE: the program is at fault, not the compiler.
+// front end, gets its errors (and not its warnings, as for any other target, see
+// finishEmit), exit code 1 and nothing on stdout: there is no Core to show. It is
+// not an ICE: the program is at fault, not the compiler.
 func emitCore(s *Session, c *command, args []string) int {
 	path, code, done := fileArgs(s, c, args)
 	if done {
@@ -89,7 +90,7 @@ func emitCore(s *Session, c *command, args []string) int {
 	}
 	s.Analyze(f)
 	if s.Sink.HasErrors() {
-		s.report()
+		s.reportErrors()
 		return 1
 	}
 	p := s.Lower(f)
@@ -98,13 +99,14 @@ func emitCore(s *Session, c *command, args []string) int {
 }
 
 // finishEmit ends every target of `ki emit` the same way, so that the order
-// cannot drift between them: the dump out on stdout, then the diagnostics on
-// stderr, and the exit code last. The exit code is 1 if the file has errors, but
-// only after both are written; a dump that cannot be written is 1 as well (see
-// printOut), and the diagnostics are still shown.
+// cannot drift between them: the dump out on stdout, then the errors on stderr
+// (the warnings are for `ki check`, see Session.reportErrors), and the exit code
+// last. The exit code is 1 if the file has errors, but only after both are
+// written; a dump that cannot be written is 1 as well (see printOut), and the
+// errors are still shown.
 func finishEmit(s *Session, c *command, out string) int {
 	code := printOut(s, c, out)
-	s.report()
+	s.reportErrors()
 	if code == 0 && s.Sink.HasErrors() {
 		return 1
 	}

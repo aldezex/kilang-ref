@@ -1315,4 +1315,57 @@ func TestParsePat(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("arm_removal", func(t *testing.T) {
+		// What the edit that deletes an arm (the one of W0701) takes out: the arm, and the
+		// `;` that follows it with the blanks after the `;`, so that no second separator
+		// is left; for an arm that is alone on its line, the line up to the break, so
+		// that an empty line is left and not one of blanks. An arm that goes over lines
+		// has no edit (RemovalOneLine is false), and an arm that could not be read has
+		// no removal at all.
+		const lines = "fn f() {\n  match x {\n    a => 1\n    b if b > 0 => 2\n    c => 3\n  }\n}"
+		const one = "fn f() { match x { a => 1; b => 2; c => 3 } }"
+		const block = "fn f() {\n  match x {\n    a => 1\n    b => {\n      2\n    }\n  }\n}"
+		const semi = "fn f() {\n  match x {\n    a => 1;\n    b => 2; c => 3\n  }\n}"
+		const broken = "fn f() { match x { a => 1\n => 2\n c => 3 } }"
+		rows := []struct {
+			name, src string
+			arm       int
+			want      string
+			oneLine   bool
+		}{
+			{"the first of several lines", lines, 0, "    a => 1", true},
+			{"an arm with a guard", lines, 1, "    b if b > 0 => 2", true},
+			{"the last of several lines", lines, 2, "    c => 3", true},
+			{"the first on a line", one, 0, "a => 1; ", true},
+			{"one in the middle", one, 1, "b => 2; ", true},
+			{"the last on a line", one, 2, "c => 3", true},
+			{"an arm over lines", block, 1, "    b => {\n      2\n    }", false},
+			{"a semicolon that ends the line", semi, 0, "    a => 1;", true},
+			{"an arm after another on a line", semi, 1, "b => 2; ", true},
+			{"the arm after an arm that is broken", broken, 2, "c => 3", true},
+			{"an arm that is broken", broken, 1, "", false},
+		}
+		for _, row := range rows {
+			m, id, match := firstMatch(t, row.src)
+			arms := m.Arms(match.Arms)
+			if row.arm >= len(arms) {
+				t.Errorf("%s: %d arms, want at least %d", row.name, len(arms), row.arm+1)
+				continue
+			}
+			arm := arms[row.arm]
+			got := ""
+			if arm.Removal != (base.Span{}) {
+				got = row.src[arm.Removal.Lo:arm.Removal.Hi]
+			}
+			if got != row.want || arm.RemovalOneLine != row.oneLine {
+				t.Errorf("%s: the removal is %q (one line: %v), want %q (%v)", row.name, got, arm.RemovalOneLine, row.want, row.oneLine)
+			}
+			// The span is in the file of the arm: a fix-it in another is a mistake
+			// that RenderHuman answers with a panic.
+			if arm.Removal != (base.Span{}) && arm.Removal.File != id {
+				t.Errorf("%s: the removal is in file %d, want file %d", row.name, arm.Removal.File, id)
+			}
+		}
+	})
 }

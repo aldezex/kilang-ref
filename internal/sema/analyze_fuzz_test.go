@@ -18,9 +18,10 @@ import (
 // later passes build: E0301 replaces a name, E0304 and E0305 delete an
 // attribute or replace its name, E0404 replaces the parameters of `main` with
 // `()` and deletes its return clause, E0406 replaces a type name, E0705 replaces a
-// constructor pattern and E0410 writes a `..` in a record pattern, each with a
-// span that has to stay on one line. E0404 offers its edits only when each piece
-// it edits is on one line, and E0705 and E0410 only for a pattern on one line.
+// constructor pattern, E0410 writes a `..` in a record pattern and W0701 deletes an
+// arm, each with a span that has to stay on one line. E0404 offers its edits only
+// when each piece it edits is on one line, E0705 and E0410 only for a pattern on one
+// line, and W0701 only for an arm on one line.
 //
 // The seeds are the ones that reach those fix-its, among them an attribute that
 // runs over three lines, where deleting it would cross line breaks, a `main`
@@ -77,6 +78,14 @@ func FuzzAnalyze(f *testing.F) {
 	// have none (E0703, E0704, E0306, E0409 with a pun, E0411) and a list pattern.
 	f.Add("type S { A(Int), B, C(Int, Int) }\ntype P { x: Int, y: Int }\nfn f(s: S) -> Int {\n  match s {\n    A(a, b) => 1\n    B(x) | C(x, _) => 2\n    C(\n      a\n    ) => 3\n    D(q) => 4\n    [a, ..t] => 5\n  }\n}")
 	f.Add("type P { x: Int, y: Int }\nfn f(p: P) -> Int {\n  match p {\n    P { x } => 1\n    P { x, } => 2\n    P { } => 3\n    P {\n      x\n    } => 4\n    P { xx, .. } => 5\n    P { x: a, x: b, .. } => 6\n    P { x: a, y: a } => 7\n  }\n}")
+	// The pass that comes after Check: E0701 and E0702 with their witnesses (a missing
+	// constructor with fields, an Int, a tuple, a record), and W0701 with the edit
+	// that deletes the arm, for an arm on a line of its own, one among others on a
+	// line, one over several lines (help only) and one that has a guard, and an
+	// or-pattern that is all taken.
+	f.Add("type S { A(Int), B, C(Int, Int) }\ntype P { x: Int, y: Int }\nfn f(s: S, p: P, t: (Int, Bool), n: Int) -> Int {\n  let (a, 0) = (n, n)\n  let B = s\n  match s { A(_) => 1 }\n  match t { (a, true) => 1 }\n  match p { P { x: 0, .. } => 1 }\n  match n { 0 => 1\n 1 => 2 }\n}")
+	f.Add("fn f(n: Int) -> Int {\n  match n {\n    _ => 1\n    2 => 2\n    k if k > 0 => 3\n    4 => {\n      5\n    }\n  }\n}\nfn g(n: Int) -> Int { match n { 0 => 1; _ => 2; 0 => 3; 4 => 5 } }")
+	f.Add("type S { A, B }\nfn f(s: S) -> Int { match s { A | B => 1\n B | A => 2 } }")
 	f.Fuzz(func(t *testing.T, src string) {
 		p := testsupport.Analyze(t, src)
 		sm := &p.Session.Sources

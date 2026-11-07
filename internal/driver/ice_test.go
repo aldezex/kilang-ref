@@ -169,6 +169,7 @@ func TestICE(t *testing.T) {
 			{"parse", []string{"check", path}},
 			{"resolve", []string{"check", path}},
 			{"declare", []string{"check", path}},
+			{"patterns", []string{"check", path}},
 			{"lex", []string{"emit", "tokens", path}},
 			{"lex", []string{"emit", "ast", path}},
 			{"parse", []string{"emit", "ast", path}},
@@ -177,6 +178,7 @@ func TestICE(t *testing.T) {
 			{"resolve", []string{"emit", "core", path}},
 			{"declare", []string{"emit", "core", path}},
 			{"check", []string{"emit", "core", path}},
+			{"patterns", []string{"emit", "core", path}},
 			{"elaborate", []string{"emit", "core", path}},
 			{"lint", []string{"emit", "core", path}},
 		} {
