@@ -134,21 +134,21 @@ expect:  `(match x)`, `(match x (arm 0 1) (arm n n))`, `(arm n (guard (> n 0)) n
 why:     un volcado que prefiriera el nombre al patrón escribiría `(let p _ t)` y no el `(a, b)` que el programa tiene.
 ref:     TestPrinterPat/matches_and_lets
 
-[T12.18] check.a_match_is_read_by_its_scrutinee_only      level: core
-kind:    unit (go test)      file: internal/sema/match_stub_test.go
-case:    hasta la sesión que liga y tipa los patrones, un `match` se resuelve y se comprueba solo por su escrutinio, sin pánico y sin falsos errores por las variables de sus brazos
-input:   diez programas: `match` correctos, sin brazos, con una variable del patrón en el cuerpo, con un nombre desconocido y una guarda en un brazo, con tipo que no encaja, como argumento y dentro de otro; y tres con el error en el escrutinio
-expect:  en los siete primeros ningún error; en los tres últimos exactamente un código: E0301 para el nombre desconocido, E0401 para `1 + true` y E0301 para el `match` dentro del escrutinio
-why:     si se resolvieran los brazos sin ligar sus patrones, cada variable de un patrón saldría como nombre desconocido en un programa correcto.
-ref:     TestMatchBeforeItsTypes/a_match_is_read_by_its_scrutinee_only
+[T12.18] resolve.scopes_of_a_pattern                       level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    las variables de un patrón se ven en su guarda y en su cuerpo, y en ningún otro sitio: ni en el escrutinio, ni en otro brazo, ni después del `match`; un `let` con patrón las liga para el resto de su bloque y no en su propio inicializador
+input:   doce programas (la guarda y el cuerpo, un escrutinio con el nombre de un parámetro, otro brazo, un escrutinio que usa la variable del brazo, una guarda que mira al brazo siguiente, después del `match`, una variable que tapa a un parámetro solo en su brazo, un `let` con patrón que ve el resto del bloque y otro que se mira a sí mismo, un `match` en el cuerpo, otro en una guarda, y una `a` que es `Int` en un brazo y `Bool` en el otro) y `a => a` seguido de `a if a > 0 => a`
+expect:  E0301 exactamente en los cinco que usan un nombre fuera de su ámbito y ningún error en los otros siete; los dos brazos ligan dos variables `a` distintas, cada una con su span y su función, y los tres usos de `a` apuntan al `a` de su brazo
+why:     si dos brazos compartieran la variable `a`, el tipo del primero se impondría al del segundo y saldría un E0401 que el programa no tiene.
+ref:     TestPatternTypes/scopes_of_a_pattern
 
-[T12.19] check.a_let_with_a_pattern_is_read_by_its_initializer_only  level: core
-kind:    unit (go test)      file: internal/sema/match_stub_test.go
-case:    hasta esa sesión, un `let` con un patrón se resuelve y se comprueba solo por su inicializador, y no escribe el tipo en ninguna variable
-input:   siete programas: un `let` con una tupla, con `_`, con un patrón y otro `let` normal, con un nombre desconocido, con un tipo que no encaja, con un `match` en el inicializador y seguido de un `let` con un tipo que no encaja; y el tipo de la primera variable del programa con y sin un `let` con patrón
-expect:  ningún error en los tres primeros; en los otros cuatro exactamente E0301, E0401, E0301 y E0401; la primera variable (la del preludio) tiene el mismo tipo con y sin el `let`
-why:     un `let` con patrón no tiene variable y apunta a la 0; sin la guarda pisaría el tipo de una variable ajena.
-ref:     TestMatchBeforeItsTypes/a_let_with_a_pattern_is_read_by_its_initializer_only
+[T12.19] check.a_let_with_a_pattern_is_typed_like_an_arm   level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un `let` con patrón se tipa como un brazo, con el inicializador de escrutinio (o la anotación, si la lleva): las variables tienen el tipo de su parte, un patrón que no encaja es un E0401 sobre el patrón, y la sentencia no tiene variable propia
+input:   `let (a, b) = 1`, `let (a, b): Int = 1`, `let (a, b): (Int, Int) = (1, true)`, un programa correcto con una tupla anotada, `W(n)`, `_` y una tupla de tipos distintos, y `let (a, b) = t` con `t: (Int, Bool)`; `let t = (1, true, 2.5)` seguido de `let (a, b) = t`; después el tipo de la variable 0, la primera del preludio, con y sin un `let` con patrón
+expect:  cuatro E0401: «expected `Int`, found a tuple pattern of 2 elements» con «the value being matched has type `Int`» en el `1`, el mismo con «expected because of this annotation» en la anotación, el del inicializador `(1, true)` contra `(Int, Int)`, y el de `let (a, b) = t` con `t` de tres elementos: «expected `(Int, Bool, Float)`, found a tuple pattern of 2 elements» con «the value being matched has type `(Int, Bool, Float)`» en el `t`; ningún error en el correcto; `a` es `Int` y `b` es `Bool`; `LetLocal` de la sentencia sigue a 0 y la variable 0 conserva su tipo
+why:     un `let` con patrón no tiene variable y su `LetLocal` apunta a la 0, válida: escribir ahí el tipo cambiaría el de otra función.
+ref:     TestPatternTypes/a_let_with_a_pattern_is_typed_like_an_arm
 
 [T12.20] syntax.patterns_ast_dump                         level: core
 kind:    golden              file: tests/golden/ch12/patterns_ast.ki
@@ -165,3 +165,123 @@ input:   una función `describe(x: Float)` con `1.5 => 1` y `_ => 0`, y un `main
 expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 7 líneas: «a `Float` literal cannot be a pattern», «not a pattern» bajo `1.5`, la nota de `NaN != NaN` y la ayuda «bind it and compare in a guard: `x1 if x1 == 1.5`», con `x1` porque el fichero ya tiene una `x`, sin edición
 why:     es cómo se ve el E0706 con el binario: la ayuda es lo que te dice que un `Float` se compara en una guarda.
 ref:     tests/errors/ch12/float_pattern_render.ki
+
+[T12.22] check.variables_and_their_types                   level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    cada variable de un patrón es un `Local` con el tipo de la parte que liga, también un pun (que no tiene nodo de patrón) y las alternativas de un or-patrón, que comparten una sola; la tabla de patrones guarda el tipo del valor de cada uno y el nombre de un constructor apunta a su definición
+input:   `Shape` y `Point`, y una función con `let (n, b) = t`, `let Point { x, y: q } = p` y un `match` de tres brazos: `Circle(r)`, `Rect(w, _) | Circle(w) if b` y `Unit`; tres funciones con un `1.5`, con `Aa(x)` donde no hay constructor `Aa` y con `Poin { x }` donde no hay tipo `Poin`; y una con `let P { v } = p` y `let Q { v } = q`, con `type P { v: Int }` y `type Q { v: Bool }`
+expect:  `r` y `w` son `Float`, `n`, `x` y `q` son `Int` y `b` es `Bool`; hay una sola variable `w`, ligada en su primer `w` y apuntada por los dos nodos `w`; el pun `x` liga su variable en el campo; once patrones con su tipo (`Shape`, `Float`, `(Int, Bool)`, `Point`, el or-patrón `Shape`…); cada constructor posicional apunta a su `DefCtor` y el de record no apunta a nada; un `1.5`, un constructor que no existe y su `x`, y un record de un tipo que no existe, tienen el tipo de error; los dos puns `v` son dos variables, `Int` y `Bool`, y cada uno liga la suya en el sitio de su campo
+why:     si cada alternativa ligara su propia `w`, el cuerpo vería solo una y nada obligaría a la otra a tener el mismo tipo.
+ref:     TestPatternTypes/variables_and_their_types
+
+[T12.23] check.arms_have_the_type_of_the_first             level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    sin nada esperado de un `match`, su primer brazo le da el tipo y los demás se comprueban contra él: la etiqueta secundaria cae en el valor del primer brazo (su cola, si es un bloque), y si discrepan el `match` tiene el tipo de error
+input:   una función con dos `let` de un `match` sobre `n`, uno con los brazos `1`, `true` y `2.5` y otro con un bloque `{ let a = 1 a }` y `false`, y después `let z: Bool = x` y `x + y`; un `match` cuyo primer brazo es un nombre desconocido; una función con un `match` de dos brazos `Int` en un `let w` seguido de `let b: Bool = w` y `w + 1`; y tres funciones con un `match` sin brazos, cuyo valor se suma, se devuelve como `Int` y se devuelve como `Bool`
+expect:  exactamente tres E0401 («expected `Int`, found `Bool`», `Float` y `Bool`) con «the first arm has type `Int`» en el `1`, en el `1` y en la `a` de la cola, y ningún error en `let z: Bool = x` ni en `x + y`; el programa del nombre desconocido da solo E0301; el del `match` que concuerda da un solo E0401, «expected `Bool`, found `Int`» sobre la `w` de `let b: Bool = w` con «expected because of this annotation», y ninguno en `w + 1`; y los de los `match` sin brazos, ninguno
+why:     si cada brazo se comprobara contra el anterior, el `2.5` diría que se esperaba `Bool` y señalaría un valor que no fijó el tipo.
+ref:     TestPatternTypes/arms_have_the_type_of_the_first
+
+[T12.24] check.an_expected_type_goes_to_every_arm          level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un `match` comprobado contra un tipo esperado se lo pasa a cada brazo, como un bloque a su cola: cada brazo que no encaja es su propio error con la razón del sitio, y un literal `Int` donde se espera `Float` lleva su edición; donde se espera `()`, la ayuda de un valor sin usar dice que se escriba el brazo como bloque, porque tras la `=>` no cabe un `let`
+input:   siete programas (`-> Float` con un brazo `1`; `-> Int` con brazos `true` y `2.5`; el argumento de una llamada; un `let y: Int`; la cola de un bloque tras un `let`; y dos con un `match` en el `else` de un `if` seguido de `let q: Bool = v`, uno con un brazo `true` y otro correcto), un `match` correcto sobre un `Bool` y, donde se espera `()`, cinco programas más: dos brazos sin bloque, dos brazos en bloque, dos brazos sin bloque en `main`, un `if` con `else` como brazo y un `if` sin `else` como brazo
+expect:  un E0401 sobre el `1` con la ayuda y la edición `1.0`; dos E0401, uno por brazo, con «expected because of the return type»; uno con «the parameter is declared here» sobre el parámetro; uno con «expected because of this annotation»; uno con la razón del tipo de retorno; el del `else` con «the other branch has type `Int`» y ninguno por `let q`; el correcto da solo el de `let q: Bool = v`; el `match` correcto tiene tipo `Int` y el que no encaja el tipo de error; con `()` esperado, un E0401 «expected `()`, found `Int`» por valor con «expected because of the return type»: en los brazos sin bloque y en el `if` con `else`, la ayuda «this value is unused: write the arm as `{ let name = … }`, or return it from the function» (sin la segunda mitad en `main`); en los brazos en bloque, la de siempre, «bind it with `let name = …`, or return it from the function»; en el `if` sin `else`, solo «bind it with `let name = …`»
+why:     si el `match` infiriera los brazos y comparara el resultado, el `1` de un `Float` perdería su edición.
+ref:     TestPatternTypes/an_expected_type_goes_to_every_arm
+
+[T12.25] check.a_pattern_has_the_type_of_the_scrutinee     level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un patrón que no encaja con el valor comparado es un E0401 sobre el patrón, con ese valor de etiqueta secundaria y su tipo entero, que para un patrón dentro de una tupla es el de la tupla; un constructor que no encaja no compara sus subpatrones con ningún campo, aunque un error propio de ellos sigue siéndolo; un parámetro sin anotación toma el tipo de su primer patrón
+input:   tres `match` (de un `Shape` con `0`, de un `Int` con `true`, `Circle(r)`, `Circle(true)` y `Circle(Rect(a))`, y de `(1, true)` con `(_, 2)`), el `0` sobre un `Shape` en la cola de una función, y cinco funciones con un parámetro sin anotación y un patrón constructor, `0`, `true`, una tupla `(a, true)` o un record
+expect:  siete diagnósticos: seis E0401 en los patrones, con «the value being matched has type» `Shape`, `Int`, `Int`, `Int`, `Int` y `(Int, Bool)` en el escrutinio, y el E0705 de `Rect(a)` dentro de `Circle(Rect(a))`; ninguno más por el `true` de `Circle(true)`; el mismo E0401 del `0` con el `match` en la cola; los tipos de las funciones son `(Shape) -> Int`, `(Int) -> Int`, `(Bool) -> Int`, `((Int, Bool)) -> Int` y `(Point) -> Int`
+why:     sin el tipo entero en la etiqueta, el error de un elemento de una tupla diría que el valor es `Bool` cuando es `(Int, Bool)`.
+ref:     TestPatternTypes/a_pattern_has_the_type_of_the_scrutinee
+
+[T12.26] check.a_sub_pattern_has_the_type_of_its_field     level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    los subpatrones de un constructor o de un record se comprueban contra los tipos de sus campos, y la etiqueta secundaria cae en el campo de su declaración, también si el patrón es un elemento de una tupla dentro del campo; un pun es una variable del tipo del campo
+input:   `Circle(true)`, `Rect(1, w)`, `Point { x: true, y }` y `P((a, 2))` con `type Pair { P((Int, Bool)) }`; y, con `type T { A(Int, Bool) }` y `type R { n: Int, b: Bool }`, `A(1, 2)` y `R { n: 1, b: 2 }` junto a los brazos correctos `A(n, b)` y `R { n, b }`, que usan `b` como condición y `n` como número
+expect:  cuatro E0401: `Float` y `Bool` con «the field is declared here» en `r: Float`, `Float` e `Int` en `w: Float`, `Int` y `Bool` en `x: Int`, y `Bool` e `Int` en `(Int, Bool)`; la variable `w` es `Float`; dos más, `Bool` e `Int`, en el segundo campo de `A(Int, Bool)` y en `b: Bool`, y ningún error en los brazos correctos
+why:     la etiqueta de un subpatrón señala el campo donde se declara, no el escrutinio: es ahí donde está escrito el tipo que se esperaba.
+ref:     TestPatternTypes/a_sub_pattern_has_the_type_of_its_field
+
+[T12.27] check.a_guard_must_be_bool                        level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    la guarda de un brazo se comprueba contra `Bool`, sin etiqueta secundaria y con una nota propia, que no es la de la condición de un `if`
+input:   `m if m` sobre un `Int`, `if 1 {}` y `m if m > 0`
+expect:  un E0401 «expected `Bool`, found `Int`» sobre la guarda con la nota «a guard must be `Bool`» y sin secundaria; otro sobre el `1` con la nota «an `if` condition must be `Bool`»; ningún error en la tercera
+why:     con la nota de la condición de un `if`, el error de una guarda hablaría de un `if` que no has escrito.
+ref:     TestPatternTypes/a_guard_must_be_bool
+
+[T12.28] check.or_patterns_bind_one_variable_of_one_type   level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    las alternativas de un or-patrón se comprueban contra el mismo tipo y ligan la misma variable; un nombre con dos tipos en dos alternativas es un E0401 en el segundo, sin etiqueta secundaria
+input:   `A(x) | B(x)` con `A(Int)` y `B(Bool)`, `0 | true` sobre un `Int`, y `(C(x), 2) | (A(x) | B(x), 1)` con `A(Int)`, `B(Int)` y `C(Bool)`
+expect:  dos E0401: «expected `Int`, found `Bool`» sobre la segunda `x`, sin secundaria, y el de `true` con «the value being matched has type `Int`» sobre el escrutinio; y otros dos, «expected `Bool`, found `Int`», sobre las dos `x` del or-patrón de dentro, que liga la `x` de fuera
+why:     si cada alternativa ligara una `x` propia con su tipo, el cuerpo vería una `x` de tipo incierto según qué alternativa casara.
+ref:     TestPatternTypes/or_patterns_bind_one_variable_of_one_type
+
+[T12.29] resolve.e0703_in_both_directions                  level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un or-patrón cuyas alternativas ligan nombres distintos da un E0703 por nombre, sobre la primera alternativa que no lo liga y con la primera que sí como etiqueta secundaria, venga antes o después; el nombre sigue ligado, y el cuerpo que lo usa no añade un nombre desconocido
+input:   diez programas: `A(x) | B`, `B | A(x)`, `A(x) | B => x`, `A(x) | B | C(x)`, `B | A(x) | B`, `A(x) | B(x) | C`, `A(x) | C | D`, `(x, y) | (x, z)`, `(x, y) | (z, _)` y `W(A(x) | B)`
+expect:  un E0703 en cada uno salvo en `(x, y) | (x, z)`, que tiene dos (`y` sobre `(x, z)` y `z` sobre `(x, y)`), y en `(x, y) | (z, _)`, que tiene tres (`x` e `y` sobre `(z, _)`, `z` sobre `(x, y)`); en el quinto, sobre la primera `B`, en `A(x) | B(x) | C` sobre la `C` y en `A(x) | C | D` sobre la `C` y no sobre la `D`: «`x` is not bound here» sobre la alternativa, «`x` is bound here» sobre la primera que lo liga y la nota de la regla, sin ayuda; el tercero no da E0301
+why:     el nombre sigue ligado tras el error: el `x` del cuerpo no sale como nombre desconocido y una equivocación da un solo mensaje.
+ref:     TestPatternTypes/e0703_in_both_directions
+
+[T12.30] resolve.e0704_in_tuples_and_records               level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un patrón liga cada nombre una vez: en una tupla, en un record con campo y con pun, en un constructor, en un `let`, a la tercera vez, en las dos alternativas de un or-patrón tras un nombre ligado antes y en un nombre que un or-patrón anterior ya ligó; la variable de la repetición no es la que ve el cuerpo
+input:   ocho programas: `(x, x)`, `Point { x: a, y: a }`, `Point { x, y: x }`, `Rect(w, w)`, `let (a, a)`, `(x, x, x)`, `(A(x) | B(x), x)` y `(x, A(x) | B(x))`; y `(x, x) => x`, para sus variables
+expect:  E0704 sobre la repetición con «first bound here» en el primer uso y la nota de la regla, sin ayuda: uno en cada programa salvo dos en `(x, x, x)` y en `(x, A(x) | B(x))`; en el último programa hay dos variables `x` y el `x` del cuerpo es la primera
+why:     si la repetición se ligara de nuevo, el cuerpo vería la segunda y no la primera: el error diría una cosa y el programa otra.
+ref:     TestPatternTypes/e0704_in_tuples_and_records
+
+[T12.31] check.e0705_more_and_fewer                        level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un patrón constructor nombra tantos subpatrones como campos tiene el constructor: más, menos, ninguno, o alguno para uno sin campos; la ayuda escribe el patrón con un `_` por campo y, si cabe en una línea, la edición lo hace y el programa queda sin diagnósticos
+input:   `Circle(a, b)`, `Rect(a)`, `Rect` y `Unit(x)` sobre `Circle(r)`, `Rect(w, h)` y `Unit`; un `Rect(` partido en tres líneas; `Rect(a) => a`; `Rect(Circle(a, b))`; y `Rect w) => w`, solo y tras `Circle(a, b) => 1.0`; y `Rect w) => w` como último brazo de su `match`, seguido, en otra función, de `let Circle(a, b) = s`
+expect:  E0705 con «1 field but the pattern names 2», «2 fields…1», «…names 0» y «`Unit` has no fields», la etiqueta «N sub-pattern(s)» sobre el patrón entero y «`Rect` is declared here» sobre el constructor; la edición da `Circle(_)`, `Rect(_, _)`, `Rect(_, _)` y `Unit` y los programas arreglados salen limpios; el de tres líneas tiene ayuda y ninguna edición; `Rect(a) => a` da solo E0705; en `Rect(Circle(a, b))` el de dentro da también el suyo; en un brazo que el parser marcó como roto, `Rect w) => w`, solo sale el E0201 del parser (ni E0705 ni E0301 por `w`), y con un `Circle(a, b)` en el brazo de antes salen el E0201 y el E0705 de ese; con el `let` de después salen el E0201 y el E0705 del `let`
+why:     la ayuda escribe un `_` por campo porque no sabe qué subpatrón va con qué campo: es el esqueleto y las variables las pones tú.
+ref:     TestPatternTypes/e0705_more_and_fewer
+
+[T12.32] check.record_patterns                             level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    un patrón de record se lee como un literal: un campo desconocido es E0409 (el pun conserva su variable en la edición), uno repetido E0411, los que faltan E0410 si no acaba en `..`, y un nombre que no es un record E0412 o E0406; la edición del E0410 escribe el `..` donde se lee mejor y nunca una segunda coma
+input:   veinticuatro programas: `Point { zed: a }` y con más campos detrás, `{ x, xz, .. }`, `{ zed: Rect(a), .. }`, `Poin { x: Rect(a), y }`, `{ xx, .. }`, `{ x }`, `Cube { x }`, `Cube { x, y }`, `{ x, }`, `{ }`, un `{ x }` partido en tres líneas, `{ x, .. }`, `{ x, y: b }`, un alias, `{ x: a, x: b, .. }`, `{ x, x: b, .. }`, `{ x: a, x, .. }`, `{ x, x, y }`, `Shape { x }`, `S { .. }` (un alias de `Shape`), `Int { x }`, `Poin { x, y }` y un `Point { x: 0, y: true }` contra un `Cube`
+expect:  los diagnósticos exactos de cada uno (sin E0410 si hay un campo desconocido, sin sugerir un campo que el patrón ya nombra, con el E0705 de un patrón de dentro donde lo hay, y con el E0412 de un patrón con «has no fields to match» y, para una suma o su alias, la nota de que sus valores se casan por los nombres de sus variantes); las ediciones `{ x: xx, .. }`, `{ x, .. }`, `{ x, .. }` (con `y` y `z` que faltan), `{ x, y, .. }` (con `z`), `{ x, .. }` y `{ .. }` (con una coma final o ningún campo, con su espacio) dan programas limpios; la de tres líneas tiene ayuda y ninguna edición; el pun repetido da solo E0704 y el contra un `Cube` solo un E0401
+why:     si la edición añadiera siempre `, ..`, con coma final quedaría `{ x, , ..}`: la ayuda propondría un programa que no compila.
+ref:     TestPatternTypes/record_patterns
+
+[T12.33] check.a_pattern_of_another_shape_is_a_mismatch    level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    una tupla de otro tamaño o contra un tipo que no es tupla, y una lista contra cualquier tipo (aún no hay tipo lista), son un solo E0401 sobre el patrón que dice en palabras lo que encontró; las variables de dentro quedan ligadas, no se quejan, y lo que tienen dentro se lee
+input:   `(a, b, c)` sobre `(1, true)`, `(a, b)` sobre `(1, true, 2)`, `(true, 0)` sobre un `Int`, `[true, ..t] => t` y `[]` sobre un `Shape`, `(Rect(a), 0)` sobre un `Int`, `[Rect(a)]` sobre un `Shape`, y `(c, d, e)` tras `(a, true) => a + 1` en un parámetro sin anotación, y `(x, y)` sobre una función `add` de dos parámetros
+expect:  E0401 «expected `(Int, Bool)`, found a tuple pattern of 3 elements» (dos veces, la del parámetro con el tipo ya fijado), «expected `(Int, Bool, Int)`, found a tuple pattern of 2 elements» (la tupla más larga que el patrón), «expected `Int`, found a tuple pattern of 2 elements» (dos veces) y «expected `Shape`, found a list pattern» (tres veces), cada uno con el escrutinio y su tipo entero de etiqueta secundaria, y, para la función, un único E0401 «expected `(Int, Int) -> Int`, found a tuple pattern of 2 elements» y nada más (ni de Check ni del pase que sigue); un E0705 por cada `Rect(a)` de dentro; `t` tiene el tipo de error y cada patrón guarda el tipo del valor comparado, también el que no encaja
+why:     una tupla de otro tamaño no tiene tipo que escribir: se dice «a tuple pattern of 3 elements», no `(a, b, c)` de variables.
+ref:     TestPatternTypes/a_pattern_of_another_shape_is_a_mismatch
+
+[T12.34] check.an_error_type_says_nothing_more             level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    lo que un error anterior dejó sin tipo no se repite en los patrones: un escrutinio que es un nombre desconocido, un constructor que no existe, un inicializador desconocido; los patrones se recorren igual, así que sus variables quedan ligadas
+input:   un `match` sobre un nombre desconocido con brazos `Circle(r)`, `0`, `true`, `(true, 0)`, `[true, ..t]` y `Point { x, y }`; `Circl(r)` y `Squar(Rect(w), 0, true)` en dos brazos; y `let (a, b) = zzz` seguido de `a + b`
+expect:  exactamente un E0301 en el primero y en el tercero; en el segundo dos E0306 (`Circl` con «did you mean `Circle`?» y su edición, `Squar` sin ayuda) y el E0705 de `Rect(w)`; ningún E0401 ni E0301 por las variables
+why:     un patrón sobre un tipo de error que dijera algo más repetiría el error del nombre desconocido una vez por brazo.
+ref:     TestPatternTypes/an_error_type_says_nothing_more
+
+[T12.35] check.large_patterns_are_checked_flat             level: core
+kind:    unit (go test)      file: internal/sema/pattern_check_test.go
+case:    una tupla de 100 000 comodines contra una tupla de 100 000 `1`, un or-patrón de 100 000 alternativas, un `match` de 100 001 brazos, una lista de 100 000 elementos y un or-patrón de 100 000 alternativas que ligan un nombre cada una se resuelven y se comprueban sin que el tamaño importe
+input:   los cinco programas, generados con 100 000 elementos, alternativas o brazos (más un brazo `_`), con la pila de Go limitada a 1 MiB; en el último, `a0 | a1 | … | a99999`
+expect:  ningún error en los tres primeros, un único E0401 en la lista y cien E0703, los que guarda el sumidero, en el último
+why:     un patrón cuyo tamaño consumiera pila de Go se caería con cien mil elementos, y uno cuadrático en sus nombres tardaría un minuto.
+ref:     TestPatternTypes/large_patterns_are_checked_flat
+
+[T12.36] syntax.one_line_and_trailing_comma                level: core
+kind:    unit (go test)      file: internal/syntax/parser_pat_test.go
+case:    el parser dice de un patrón constructor si cabe en una línea (`OneLine`) y de un record sin `..` si una coma sigue a su último campo (`TrailingComma`), que son lo que necesitan las ediciones de E0705 y E0410; ningún otro patrón los lleva
+input:   17 patrones: constructores con y sin argumentos, con saltos de línea en cada sitio, records con y sin campos, con coma final, con `..`, partidos en líneas y anidados, y siete que no son constructores
+expect:  `OneLine` falso si hay un salto de línea entre el nombre y el cierre, también en uno interior respecto del exterior, y `TrailingComma` verdadero solo con coma tras el último campo y sin `..`; los siete patrones que no son constructores no los llevan
+why:     sin `OneLine`, la edición de un patrón repartido en tres líneas cruzaría líneas y el renderizador se negaría a dibujarla.
+ref:     TestParsePat/one_line_and_trailing_comma

@@ -115,12 +115,18 @@ func (d *Decls) Meaning(td TypeDefID) TypeID {
 // so it can be called and also passed where a function is wanted; one without
 // fields is a value of its type, `None: Shape`, which is not called.
 func (d *Decls) CtorType(c CtorID) TypeID {
+	owner := d.OwnerType(c)
 	ctor := d.Ctors.Get(c)
-	owner := d.Types.Data(ctor.Owner, nil)
 	if len(ctor.Args) == 0 {
 		return owner
 	}
 	return d.Types.Fun(ctor.Args, owner, d.Types.EmptyRow())
+}
+
+// OwnerType is the type that the constructor c builds and that a pattern with c
+// matches: the type of the sum that declares it.
+func (d *Decls) OwnerType(c CtorID) TypeID {
+	return d.Types.Data(d.Ctors.Get(c).Owner, nil)
 }
 
 // FieldSpan returns the span of the i-th field of the constructor c, as the

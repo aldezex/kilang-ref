@@ -52,7 +52,8 @@ type Unifier struct {
 //
 // An E0401 whose reason is ReasonBlockTail and whose expected type is `()`
 // also carries a help line, which says that the value at the tail is unused
-// and can be bound with a `let`, and, when r.CanReturn is set, that it can be
+// and can be bound with a `let` (written in a block, when it is the body of an
+// arm that is not one: r.InArm), and, when r.CanReturn is set, that it can be
 // returned from the function. No other reason gets a help, and none gets an
 // edit.
 //
@@ -194,11 +195,30 @@ func (u *Unifier) bind(v TypeVarID, vType, to TypeID, foundAt base.Span) bool {
 	return true
 }
 
+// Reject reports the E0401 for a place that expects the type expected and holds
+// something that is not a type, which found says in words: a pattern whose shape
+// cannot be of that type, `a list pattern`. It is Unify's error with the found
+// side written by the caller, and the reason works as it does there. Like Unify it
+// says nothing when expected is the error type.
+func (u *Unifier) Reject(expected TypeID, found string, foundAt base.Span, r Reason) {
+	if u.Types.Resolve(expected) == u.Types.Error() {
+		return
+	}
+	u.report(expected, u.Types.Error(), found, foundAt, r)
+}
+
 // mismatch reports the E0401 for the types expected and found: the two types
 // that Unify was given, and not the parts of them that differ. Both are written
 // with the same names for their variables, so that two different variables are
 // never both `a`, and each is cut if it is long (see TypeTable.Show).
 func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) {
+	u.report(expected, found, "", foundAt, r)
+}
+
+// report is mismatch with the found side written as words when foundWords is not
+// empty (see Reject): found, which is then not a type, is not written and not
+// compared with the expected one.
+func (u *Unifier) report(expected, found TypeID, foundWords string, foundAt base.Span, r Reason) {
 	// Once the sink has dropped an error it drops everything it is given (see
 	// Unify), so the text of the types is not written: a type can have
 	// thousands of parameters, and every error after that would pay for them.
@@ -206,9 +226,18 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		return
 	}
 	t := u.Types
-	shown := t.showAll(expected, found)
-	d := diag.NewError(diag.E(401), "mismatched types",
-		diag.Label{Span: foundAt, Message: "expected `" + shown[0] + "`, found `" + shown[1] + "`"})
+	ids := []TypeID{expected, found}
+	if r.Kind == ReasonScrutinee {
+		// The whole type is written with the same names as the other two. Without a
+		// Because it is the zero Whole, written here and then unused (no label).
+		ids = append(ids, r.Whole)
+	}
+	shown := t.showAll(ids...)
+	text := "expected `" + shown[0] + "`, found `" + shown[1] + "`"
+	if foundWords != "" {
+		text = "expected `" + shown[0] + "`, found " + foundWords
+	}
+	d := diag.NewError(diag.E(401), "mismatched types", diag.Label{Span: foundAt, Message: text})
 	because := func(text string) {
 		// A label in another file cannot be drawn under the primary one
 		// (RenderHuman refuses it), and the zero Span is no place at all: the
@@ -234,12 +263,20 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 		because("expected because of the return type")
 	case ReasonArgument:
 		because("the parameter is declared here")
-	case ReasonCtorArg, ReasonField:
+	case ReasonCtorArg, ReasonField, ReasonPatternArg:
 		because("the field is declared here")
+	case ReasonScrutinee:
+		because("the value being matched has type `" + shown[2] + "`")
+	case ReasonMatchArms:
+		because("the first arm has type `" + shown[0] + "`")
 	case ReasonIfBranches:
 		because("the other branch has type `" + shown[0] + "`")
 	case ReasonIfCondition:
-		d = d.WithNote("an `if` condition must be `Bool`")
+		if r.Detail == guardDetail {
+			d = d.WithNote("a guard must be `Bool`")
+		} else {
+			d = d.WithNote("an `if` condition must be `Bool`")
+		}
 	case ReasonOperand:
 		switch r.Index {
 		case 1:
@@ -261,7 +298,7 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 	// builtin one, since saying that a builtin is hidden when it is not would be
 	// false. A text that Show cut short (it ends with `…`) is no proof that the two
 	// are written alike: only their beginnings are.
-	if shown[0] == shown[1] && !strings.HasSuffix(shown[0], "…") {
+	if foundWords == "" && shown[0] == shown[1] && !strings.HasSuffix(shown[0], "…") {
 		why := "the program declares a type with that name more than once"
 		if t.hidesBuiltin {
 			why = "a `type` of the program hides the type that had that name"
@@ -280,6 +317,10 @@ func (u *Unifier) mismatch(expected, found TypeID, foundAt base.Span, r Reason) 
 	// branch that has no `else`.
 	if r.Kind == ReasonBlockTail && t.Resolve(expected) == t.Builtin(BuiltinUnit) {
 		help := "this value is unused: bind it with `let name = …`"
+		if r.InArm {
+			// A `let` cannot be written after the `=>`; a block can hold it.
+			help = "this value is unused: write the arm as `{ let name = … }`"
+		}
 		if r.CanReturn {
 			help += ", or return it from the function"
 		}

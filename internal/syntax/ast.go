@@ -518,6 +518,15 @@ type Pat struct {
 	// a record pattern.
 	Rest    PatID
 	HasRest bool
+	// OneLine and TrailingComma are for the edits that a diagnostic about a
+	// constructor pattern offers, which stay on one line (see FixIt) and so need
+	// to know what the source looks like, as Attr.OneLine does for an attribute.
+	// OneLine says that no line break lies between the name of a PatCtor and its
+	// `)` or `}`; it means something only for a PatCtor. TrailingComma says that a
+	// comma follows the last field of a record pattern that has no `..`
+	// (`Point { x, }`), so the edit that adds the `..` must not write a second
+	// one; it means something only for a record pattern.
+	OneLine, TrailingComma bool
 }
 
 // FieldPat is one field of a record pattern: `x: p`, or `x` for `{ x, y }`, which

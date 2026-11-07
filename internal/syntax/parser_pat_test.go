@@ -1260,4 +1260,59 @@ func TestParsePat(t *testing.T) {
 			t.Errorf("300 matches as guards: %v, want one E0204", got)
 		}
 	})
+
+	t.Run("one_line_and_trailing_comma", func(t *testing.T) {
+		// What the edits of a diagnostic about a constructor pattern need to know of
+		// the source: no line break between the name and the closing token (OneLine,
+		// for a constructor of either form), and a comma after the last field of a
+		// record pattern that has no `..` (TrailingComma). Neither is set on any other
+		// pattern, and the `..` clears the comma before it.
+		rows := []struct {
+			name, pat, ctor      string
+			oneLine, trailingCom bool
+		}{
+			{"a name alone", "None", "None", true, false},
+			{"a constructor", "Some(x)", "Some", true, false},
+			{"a constructor with a trailing comma", "Some(x,)", "Some", true, false},
+			{"a line break after the parenthesis", "Rect(\n a, b)", "Rect", false, false},
+			{"a line break before the last argument", "Rect(a,\n b)", "Rect", false, false},
+			{"a line break before the closing parenthesis", "Rect(a, b\n)", "Rect", false, false},
+			{"a record", "Point { x, y }", "Point", true, false},
+			{"a record with no fields", "Point { }", "Point", true, false},
+			{"a record with a trailing comma", "Point { x, y, }", "Point", true, true},
+			{"a record with a pattern and a trailing comma", "Point { x: Some(a), }", "Point", true, true},
+			{"a record with a rest", "Point { x, .. }", "Point", true, false},
+			{"a record that is only a rest", "Point { .. }", "Point", true, false},
+			{"a record over lines", "Point {\n x\n }", "Point", false, false},
+			{"a trailing comma and a line break", "Point { x,\n }", "Point", false, true},
+			{"the inner constructor", "Some(Point { x, })", "Point", true, true},
+			{"the outer constructor", "Some(Point { x, })", "Some", true, false},
+			{"an inner line break reaches the outer", "Some(Point {\n x })", "Some", false, false},
+		}
+		for _, row := range rows {
+			src := patSrc(row.pat)
+			m, _, _, _ := parseFile(t, src)
+			var found []syntax.Pat
+			for _, p := range m.Pats.All() {
+				if p.Kind == syntax.PatCtor && patText(src, p.NameSpan) == row.ctor {
+					found = append(found, p)
+				}
+			}
+			if len(found) != 1 {
+				t.Errorf("%s: %d constructors called %s in %q, want 1", row.name, len(found), row.ctor, src)
+				continue
+			}
+			if got := found[0]; got.OneLine != row.oneLine || got.TrailingComma != row.trailingCom {
+				t.Errorf("%s: %s has OneLine %v and TrailingComma %v, want %v and %v", row.name, row.pat, got.OneLine, got.TrailingComma, row.oneLine, row.trailingCom)
+			}
+		}
+		for _, pat := range []string{"x", "_", "0", "(a, b)", "[a, b]", "A | B", "(Some(a),\n b)"} {
+			m, _ := armPat(t, pat)
+			for _, p := range m.Pats.All() {
+				if p.Kind != syntax.PatCtor && (p.OneLine || p.TrailingComma) {
+					t.Errorf("%q: the %v pattern has OneLine %v and TrailingComma %v, want neither", pat, p.Kind, p.OneLine, p.TrailingComma)
+				}
+			}
+		}
+	})
 }

@@ -281,6 +281,7 @@ func (p *parser) leavePat() { p.patDepth-- }
 // must be on the line of the name (a Newline in front of it ends the pattern),
 // and a name alone is a constructor with no arguments, `Pat.Args` empty.
 func (p *parser) ctorPat() (PatID, bool) {
+	first := p.pos
 	name := p.advance()
 	pat := Pat{Kind: PatCtor, Name: base.Symbol(name.Payload), NameSpan: name.Span}
 	switch {
@@ -302,14 +303,15 @@ func (p *parser) ctorPat() (PatID, bool) {
 			return p.errorPat(name.Span), false
 		}
 		p.advance()
-		fields, rest, ok := p.fieldPats(open)
+		fields, rest, trailing, ok := p.fieldPats(open)
 		p.leavePat()
 		if !ok {
 			return p.errorPat(name.Span), false
 		}
-		pat.Record, pat.Fields, pat.HasRest = true, fields, rest
+		pat.Record, pat.Fields, pat.HasRest, pat.TrailingComma = true, fields, rest, trailing
 	}
 	pat.Span = p.spanFrom(name.Span)
+	pat.OneLine = p.oneLine(first + 1)
 	return p.m.Pats.Push(pat), true
 }
 
@@ -366,38 +368,40 @@ func (p *parser) patArgs(name, open Token) (base.ListRange, bool) {
 // break is only space: the lexer puts a Newline after a field that ends its line,
 // because it cannot tell the braces of a record from those of a block, so one can
 // come before a `,` or the `}` (see record), and none after the `{`, a `,` or the
-// `..`, which cannot end a line. rest says that the `..` is there. It
+// `..`, which cannot end a line. rest says that the `..` is there, and trailing
+// that a comma follows the last field (Pat.TrailingComma). It
 // returns false, and adds nothing to the pool, if a field cannot be read or the
-// `}` is missing (the other two results mean nothing then), and the rest of the
+// `}` is missing (the other results mean nothing then), and the rest of the
 // pattern, up to its `}`, is skipped
 // (skipBraces): the `}` that closes it would otherwise be taken for the end of the
 // match around it.
-func (p *parser) fieldPats(open Token) (fields base.ListRange, rest, ok bool) {
-	fields, rest, ok = p.fieldPatList(open)
+func (p *parser) fieldPats(open Token) (fields base.ListRange, rest, trailing, ok bool) {
+	fields, rest, trailing, ok = p.fieldPatList(open)
 	if !ok {
 		p.skipBraces(open)
 	}
-	return fields, rest, ok
+	return fields, rest, trailing, ok
 }
 
 // fieldPatList is fieldPats without the skip.
-func (p *parser) fieldPatList(open Token) (fields base.ListRange, rest, ok bool) {
+func (p *parser) fieldPatList(open Token) (fields base.ListRange, rest, trailing, ok bool) {
 	var list []FieldPat
 	for !p.at(RBrace) && !p.at(Eof) {
 		if _, ok := p.eat(DotDot); ok {
-			rest = true
+			rest, trailing = true, false
 			break
 		}
+		trailing = false
 		name, ok := p.eat(LowerIdent)
 		if !ok {
 			p.expected("identifier")
-			return fields, rest, false
+			return fields, rest, false, false
 		}
 		f := FieldPat{Name: base.Symbol(name.Payload), Span: name.Span}
 		if _, ok := p.eat(Colon); ok {
 			sub, ok := p.subPattern(open)
 			if !ok {
-				return fields, rest, false
+				return fields, rest, false, false
 			}
 			f.Pat, f.HasPat, f.Span = sub, true, p.spanFrom(name.Span)
 		}
@@ -406,11 +410,12 @@ func (p *parser) fieldPatList(open Token) (fields base.ListRange, rest, ok bool)
 		if _, ok := p.eat(Comma); !ok {
 			break
 		}
+		trailing = true
 	}
 	if !p.expectClose(RBrace, "`}`", open) {
-		return fields, rest, false
+		return fields, rest, false, false
 	}
-	return base.AppendRange(&p.m.FieldPatPool, list), rest, true
+	return base.AppendRange(&p.m.FieldPatPool, list), rest, trailing, true
 }
 
 // parenPat reads what starts with a `(` in a pattern, the cursor being at it: a

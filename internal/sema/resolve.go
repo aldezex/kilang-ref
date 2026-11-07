@@ -134,6 +134,27 @@ type ModuleRes struct {
 	// of a function with no parameters, and that of an item that is not a
 	// function, is empty.
 	ParamLocals [][]LocalID
+	// PatLocal is indexed by PatID: the variable that a PatBind binds, the name
+	// of a variable pattern or the one after the `..` of a list pattern. The
+	// alternatives of an or-pattern bind the same names, one variable each name,
+	// so a name that two alternatives bind has the same Local in both. A name that
+	// a pattern binds again (E0704) has a variable of its own, which no name
+	// stands for. The rows of the patterns that are not a PatBind stay 0, which
+	// is a valid variable too: ask the kind first.
+	PatLocal []LocalID
+	// FieldPatLocal is indexed by the position of a field in Module.FieldPatPool:
+	// the variable that a pun, `Point { x }`, binds. A pun has no pattern node of
+	// its own (see syntax.FieldPat), so PatLocal has no row for it. The other rows
+	// stay 0.
+	FieldPatLocal []LocalID
+	// PatRes is indexed by PatID: what the name of a positional constructor
+	// pattern stands for, `Some` in `Some(x)` and `None` in `None`. It is a
+	// ResDef of a DefCtor, or a ResError for a name that stands for nothing
+	// (E0306) or that the parser could not read the type of. The name of a record
+	// pattern, `Point { x }`, is a type and not a value: the checker looks it up,
+	// as it does the name of a record literal, and its row is the zero Res, as is
+	// every pattern that is not a constructor.
+	PatRes []Res
 }
 
 // ResolvedProgram is the result of Resolve.
@@ -205,6 +226,14 @@ func (rp *ResolvedProgram) LookupType(mod ModuleIdx, name base.Symbol) (Res, boo
 // the second. Nothing is reported, because Ki defines no diagnostic for a
 // repeated parameter (TestScopes/shadowing_picks_innermost pins this).
 //
+// A pattern binds a variable for each name it writes (resolve_pat.go). The arm of a
+// `match` is a scope of its own, in which the pattern binds first and then the guard
+// and the body are walked, so no other arm and not the scrutinee sees them; a `let`
+// with a pattern binds them like a `let` with a name, after its initializer. The
+// name of a constructor in a pattern stands for it as it does in an expression
+// (E0306 if it stands for nothing). A name bound twice in one pattern is E0704, and
+// an or-pattern whose alternatives bind different names is E0703.
+//
 // It reports to sink: E0301 for a name that stands for nothing, with the help
 // line "did you mean `fib`?" and the fix-it that writes `fib` if a variable or
 // definition it could have stood for is spelled almost like it, and with a
@@ -249,9 +278,12 @@ func Resolve(mods []*syntax.Module, user ModuleIdx, in *base.Interner, sink *dia
 	r.rp.brokenTypes = make(map[moduleName]bool)
 	for i, m := range mods {
 		r.rp.Modules[i] = ModuleRes{
-			ExprRes:     make([]Res, m.Exprs.Len()),
-			LetLocal:    make([]LocalID, m.Stmts.Len()),
-			ParamLocals: make([][]LocalID, m.ItemNodes.Len()),
+			ExprRes:       make([]Res, m.Exprs.Len()),
+			LetLocal:      make([]LocalID, m.Stmts.Len()),
+			ParamLocals:   make([][]LocalID, m.ItemNodes.Len()),
+			PatLocal:      make([]LocalID, m.Pats.Len()),
+			FieldPatLocal: make([]LocalID, len(m.FieldPatPool)),
+			PatRes:        make([]Res, m.Pats.Len()),
 		}
 		r.tops[i] = make(map[base.Symbol]DefID)
 		r.rp.types[i] = make(map[base.Symbol]DefID)
@@ -570,7 +602,7 @@ func (r *resolver) name(e syntax.Expr) Res {
 	}
 	name := r.in.String(e.Name)
 	if startsUpper(name) {
-		r.unknownCtor(e, name)
+		r.unknownCtor(e.Span, name)
 		return Res{Kind: ResError}
 	}
 	d := diag.NewError(diag.E(301), "unknown name `"+name+"`",
@@ -690,21 +722,21 @@ func startsUpper(name string) bool {
 	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
 }
 
-// unknownCtor reports E0306 for the name written in e, which starts with an
-// uppercase letter and stands for nothing: a name like that can only be a
-// constructor, so it is not said to be an unknown name; the name of a type
-// written as a value is one too, because the types have a name space of their
-// own. It has no secondary label and no note. The help asks whether one of the constructors that are visible was
-// meant, with the edit that writes it, if one is spelled almost like the name
-// (see suggest); a type is not a candidate, and neither is a function or a
-// variable.
-func (r *resolver) unknownCtor(e syntax.Expr, name string) {
+// unknownCtor reports E0306 for the name written at at, in an expression or in a
+// pattern, which starts with an uppercase letter and stands for nothing: a name
+// like that can only be a constructor, so it is not said to be an unknown name;
+// the name of a type written as a value is one too, because the types have a name
+// space of their own. It has no secondary label and no note. The help asks
+// whether one of the constructors that are visible was meant, with the edit that
+// writes it, if one is spelled almost like the name (see suggest); a type is not a
+// candidate, and neither is a function or a variable.
+func (r *resolver) unknownCtor(at base.Span, name string) {
 	d := diag.NewError(diag.E(306), "unknown constructor `"+name+"`",
-		diag.Label{Span: e.Span, Message: "not a constructor in this scope"})
+		diag.Label{Span: at, Message: "not a constructor in this scope"})
 	// Like the help of an unknown name, it costs a pass over the candidates.
 	if !r.sink.Truncated() {
 		if best, ok := suggest(name, r.visibleCtors()); ok {
-			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(e.Span, best))
+			d = d.WithHelp("did you mean `" + best + "`?").WithFixIt(diag.Replace(at, best))
 		}
 	}
 	r.sink.Report(d)
@@ -756,10 +788,13 @@ func (r *resolver) expr(id syntax.ExprID) {
 			r.expr(e.Else)
 		}
 	case syntax.ExprMatch:
-		// Only the scrutinee, until the session that binds the variables of
-		// patterns (ch12-s2): the guard and the body of an arm name them, and
-		// resolving those now would report each one as an unknown name.
+		// The scrutinee is outside every arm: it does not see the variables that
+		// the patterns bind. Each arm is a scope of its own, in which its pattern
+		// binds first and then the guard and the body are walked.
 		r.expr(e.Scrutinee)
+		for _, arm := range r.m.Arms(e.Arms) {
+			r.arm(arm)
+		}
 	case syntax.ExprBlock:
 		// A block is a scope inside the one around it. Its variables are the
 		// ones its `let`s bind, and they end with it, tail included.
@@ -783,9 +818,11 @@ func (r *resolver) stmt(id syntax.StmtID) {
 	switch s.Kind {
 	case syntax.StmtLet:
 		if s.HasPat {
-			// Nothing is bound until the session that binds the variables of
-			// patterns (ch12-s2); the initializer's own names are still resolved.
+			// The initializer first, as for a name: it does not see the variables
+			// that the pattern binds, which are visible from the next statement. The
+			// `let` has no variable of its own, so LetLocal keeps its zero.
 			r.expr(s.Expr)
+			r.bindPattern(s.Pat)
 			return
 		}
 		// The initializer first: the variable is not bound, so not visible in

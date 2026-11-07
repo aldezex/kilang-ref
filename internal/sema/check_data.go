@@ -120,7 +120,7 @@ func (c *checker) field(e syntax.Expr) TypeID {
 	}
 	td, def, ok := c.recordOf(t)
 	if !ok {
-		c.notRecordError(e.NameSpan, t, "", c.declaredAs(t))
+		c.notRecordError(e.NameSpan, t, "", c.declaredAs(t), false)
 		return c.errT
 	}
 	i, ok := c.decls.FieldIndex(td, e.Name)
@@ -155,11 +155,14 @@ func (c *checker) declaredAs(ty TypeID) declaration {
 // notRecordError reports E0412 for what is not a record but is used as one: the
 // message writes the type ty as Show does, or name if it is not empty (the name
 // that a literal was written with), and the primary label is at, the name after
-// the dot of an access or the name of a literal. Where the type is declared is a
-// secondary label when it is in the file of the primary label; a sum has a note
-// that says how it is taken apart. A type is written only after the sink is known
-// to have room: writing a large one is the cost of a message that is dropped.
-func (c *checker) notRecordError(at base.Span, ty TypeID, name string, decl declaration) {
+// the dot of an access, the name of a literal or the name of a record pattern
+// (pattern is true for the last: it takes a value apart itself, and it matches
+// fields and does not read them, so the label and the note are worded for that).
+// Where the type is declared is a secondary label when it is in the file of the
+// primary label; a sum has a note that says how it is taken apart. A type is
+// written only after the sink is known to have room: writing a large one is the
+// cost of a message that is dropped.
+func (c *checker) notRecordError(at base.Span, ty TypeID, name string, decl declaration, pattern bool) {
 	if c.sink.Truncated() {
 		return
 	}
@@ -167,12 +170,16 @@ func (c *checker) notRecordError(at base.Span, ty TypeID, name string, decl decl
 	if shown == "" {
 		shown = c.tp.Types.Show(ty)
 	}
-	d := diag.NewError(diag.E(412), "`"+shown+"` is not a record", diag.Label{Span: at, Message: "has no fields to access"})
+	label, note := "has no fields to access", "only a record has fields; a sum type is taken apart with `match`"
+	if pattern {
+		label, note = "has no fields to match", "only a record has fields; the values of a sum type are matched by the names of its variants"
+	}
+	d := diag.NewError(diag.E(412), "`"+shown+"` is not a record", diag.Label{Span: at, Message: label})
 	if decl.ok && decl.span.File == at.File {
 		d = d.WithSecondary(diag.Label{Span: decl.span, Message: "`" + decl.name + "` is defined here"})
 	}
 	if decl.sum {
-		d = d.WithNote("only a record has fields; a sum type is taken apart with `match`")
+		d = d.WithNote(note)
 	}
 	c.sink.Report(d)
 }
@@ -234,7 +241,7 @@ func (c *checker) unknownField(def TypeDef, name base.Symbol, at base.Span, give
 // the same mistake.
 func (c *checker) record(e syntax.Expr) TypeID {
 	fields := c.m.FieldInits(e.Fields)
-	ty, ok := c.recordType(e)
+	ty, ok := c.recordTypeNamed(e.Name, e.NameSpan, false)
 	if !ok {
 		for _, f := range fields {
 			c.infer(f.Value)
@@ -265,7 +272,7 @@ func (c *checker) record(e syntax.Expr) TypeID {
 			continue
 		}
 		if first, dup := firstAt[f.Name]; dup {
-			c.duplicateFieldError(f, first)
+			c.duplicateFieldError(f.Name, f.Span, first, f.Removal, f.RemovalOneLine)
 		} else {
 			firstAt[f.Name] = f.Span
 		}
@@ -280,21 +287,23 @@ func (c *checker) record(e syntax.Expr) TypeID {
 	return ty
 }
 
-// recordType returns the type that the name of the record literal e stands for,
-// and whether it is a record. A name that is not is reported here, and the
-// literal has the error type: an unknown name is E0406, as in an annotation, a
-// builtin type (`Int { x: 1 }`) or a declared type that is a sum, or an alias of
-// something that is not a record, E0412. A type that the parser could not read
-// after its name has been reported, and is not reported again, nor is an alias
-// that has the error type (a cycle, an unknown name, a broken type).
-func (c *checker) recordType(e syntax.Expr) (TypeID, bool) {
-	name := c.in.String(e.Name)
-	res, found := c.res.LookupType(c.mod, e.Name)
+// recordTypeNamed returns the type that the name of a record literal, or of a
+// record pattern, stands for, and whether it is a record; sym is the name and at
+// where it is written; pattern is true for a pattern, whose E0412 is worded for
+// one. A name that is not is reported here, and the literal or the pattern has the
+// error type: an unknown name is E0406, as in an annotation, a builtin type
+// (`Int { x: 1 }`) or a declared type that is a sum, or an alias of something that
+// is not a record, E0412. A type that the parser could not read after its name has
+// been reported, and is not reported again, nor is an alias that has the error type
+// (a cycle, an unknown name, a broken type).
+func (c *checker) recordTypeNamed(sym base.Symbol, at base.Span, pattern bool) (TypeID, bool) {
+	name := c.in.String(sym)
+	res, found := c.res.LookupType(c.mod, sym)
 	if !found {
 		if _, builtin := builtinTypes[name]; builtin {
-			c.notRecordError(e.NameSpan, c.errT, name, declaration{})
+			c.notRecordError(at, c.errT, name, declaration{}, pattern)
 		} else {
-			c.reader.unknownTypeError(c.mod, e.NameSpan, name)
+			c.reader.unknownTypeError(c.mod, at, name)
 		}
 		return c.errT, false
 	}
@@ -315,22 +324,23 @@ func (c *checker) recordType(e syntax.Expr) (TypeID, bool) {
 		decl := c.declaredAs(ty)
 		def := c.decls.Defs.Get(named)
 		decl.name, decl.span, decl.ok = name, def.Span, true
-		c.notRecordError(e.NameSpan, c.errT, name, decl)
+		c.notRecordError(at, c.errT, name, decl, pattern)
 		return c.errT, false
 	}
 	return ty, true
 }
 
-// duplicateFieldError reports E0411 for the field f of a record literal, which
-// gives a field that an earlier part of the literal gave already, at first. The
-// fix-it removes the field, with its comma, if that stays in one line.
-func (c *checker) duplicateFieldError(f syntax.FieldInit, first base.Span) {
-	d := diag.NewError(diag.E(411), "field `"+c.in.String(f.Name)+"` is given twice",
-		diag.Label{Span: f.Span, Message: "given again here"}).
+// duplicateFieldError reports E0411 for the field name of a record literal or a
+// record pattern, which is given again at at after being given at first. The
+// fix-it removes the field, with its comma, from removal if oneLine says that stays
+// in one line; a pattern does not know where its comma is, and offers none.
+func (c *checker) duplicateFieldError(name base.Symbol, at, first, removal base.Span, oneLine bool) {
+	d := diag.NewError(diag.E(411), "field `"+c.in.String(name)+"` is given twice",
+		diag.Label{Span: at, Message: "given again here"}).
 		WithSecondary(diag.Label{Span: first, Message: "first given here"}).
 		WithHelp("remove one of them")
-	if f.RemovalOneLine {
-		d = d.WithFixIt(diag.Delete(f.Removal))
+	if oneLine {
+		d = d.WithFixIt(diag.Delete(removal))
 	}
 	c.sink.Report(d)
 }
@@ -341,6 +351,22 @@ func (c *checker) duplicateFieldError(f syntax.FieldInit, first base.Span) {
 // primary label on the closing brace and a secondary one on the declaration of
 // each field, in the same file. Nothing is reported if no field is missing.
 func (c *checker) missingFieldsError(e syntax.Expr, def TypeDef, given []bool) {
+	closing := base.Span{File: e.OpSpan.File, Lo: e.OpSpan.Hi - 1, Hi: e.OpSpan.Hi}
+	d, ok := c.missingFields(def, given, closing, "")
+	if !ok {
+		return
+	}
+	c.sink.Report(d.WithNote("a record literal names every field, or ends with `..base`"))
+}
+
+// missingFields is the E0410 for a record literal or a record pattern of the type
+// def whose closing brace is at closing and that does not give the fields that
+// given does not mark, without the note, which is the caller's: the literal and the
+// pattern each have their rule. what is empty for the literal and "pattern " for
+// the pattern, which the message names. It answers false, with nothing to report,
+// if no field is missing or the sink is full: the list of fields is not written for
+// a message that would be dropped.
+func (c *checker) missingFields(def TypeDef, given []bool, closing base.Span, what string) (diag.Diagnostic, bool) {
 	var missing []int
 	for i, ok := range given {
 		if !ok {
@@ -348,7 +374,7 @@ func (c *checker) missingFieldsError(e syntax.Expr, def TypeDef, given []bool) {
 		}
 	}
 	if len(missing) == 0 || c.sink.Truncated() {
-		return
+		return diag.Diagnostic{}, false
 	}
 	shownCount := min(len(missing), maxMissingListed)
 	names := make([]string, shownCount)
@@ -359,18 +385,18 @@ func (c *checker) missingFieldsError(e syntax.Expr, def TypeDef, given []bool) {
 	if len(missing) > shownCount {
 		list = strings.Join(names, ", ") + " and " + strconv.Itoa(len(missing)-shownCount) + " more"
 	}
-	title, label := "missing field "+list+" in `"+c.in.String(def.Name)+" { … }`", list+" is not given"
+	in := " in " + what + "`" + c.in.String(def.Name) + " { … }`"
+	title, label := "missing field "+list+in, list+" is not given"
 	if len(missing) > 1 {
-		title, label = "missing fields "+list+" in `"+c.in.String(def.Name)+" { … }`", list+" are not given"
+		title, label = "missing fields "+list+in, list+" are not given"
 	}
-	closing := base.Span{File: e.OpSpan.File, Lo: e.OpSpan.Hi - 1, Hi: e.OpSpan.Hi}
 	d := diag.NewError(diag.E(410), title, diag.Label{Span: closing, Message: label})
 	for _, i := range missing[:shownCount] {
 		if f := def.Fields[i]; f.Span.File == closing.File {
 			d = d.WithSecondary(diag.Label{Span: f.Span, Message: "declared here"})
 		}
 	}
-	c.sink.Report(d.WithNote("a record literal names every field, or ends with `..base`"))
+	return d, true
 }
 
 // joinNames writes names as a list of words: `a`, `a` and `b`, `a`, `b` and `c`.

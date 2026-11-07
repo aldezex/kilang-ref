@@ -17,9 +17,10 @@ import (
 // parser never build one, and this target does the same for the fix-its that the
 // later passes build: E0301 replaces a name, E0304 and E0305 delete an
 // attribute or replace its name, E0404 replaces the parameters of `main` with
-// `()` and deletes its return clause, and E0406 replaces a type name, each with
-// a span that has to stay on one line. E0404 offers its edits only when each
-// piece it edits is on one line.
+// `()` and deletes its return clause, E0406 replaces a type name, E0705 replaces a
+// constructor pattern and E0410 writes a `..` in a record pattern, each with a
+// span that has to stay on one line. E0404 offers its edits only when each piece
+// it edits is on one line, and E0705 and E0410 only for a pattern on one line.
 //
 // The seeds are the ones that reach those fix-its, among them an attribute that
 // runs over three lines, where deleting it would cross line breaks, a `main`
@@ -70,6 +71,12 @@ func FuzzAnalyze(f *testing.F) {
 	// that the parser reports.
 	f.Add("fn f(x: Int) -> Int { match x { 0 | 1 => 2\n n if n > 1 => n\n _ => 0 }\n}\nfn g() { let (a, b) = (1, 2)\n let _ = zzz }")
 	f.Add("fn f(x: Float) -> Int { match x { 1.5 => 1\n Some( => 2\n [a, ..] => 3 } }")
+	// The edits of E0705 (a constructor pattern replaced by one with a wildcard for
+	// each field) and of E0410 (a `..` written in a record pattern), on one line and
+	// over several, where there is no edit; the other diagnostics of patterns that
+	// have none (E0703, E0704, E0306, E0409 with a pun, E0411) and a list pattern.
+	f.Add("type S { A(Int), B, C(Int, Int) }\ntype P { x: Int, y: Int }\nfn f(s: S) -> Int {\n  match s {\n    A(a, b) => 1\n    B(x) | C(x, _) => 2\n    C(\n      a\n    ) => 3\n    D(q) => 4\n    [a, ..t] => 5\n  }\n}")
+	f.Add("type P { x: Int, y: Int }\nfn f(p: P) -> Int {\n  match p {\n    P { x } => 1\n    P { x, } => 2\n    P { } => 3\n    P {\n      x\n    } => 4\n    P { xx, .. } => 5\n    P { x: a, x: b, .. } => 6\n    P { x: a, y: a } => 7\n  }\n}")
 	f.Fuzz(func(t *testing.T, src string) {
 		p := testsupport.Analyze(t, src)
 		sm := &p.Session.Sources

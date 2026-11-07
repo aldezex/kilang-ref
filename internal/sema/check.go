@@ -19,6 +19,15 @@ type TypedModule struct {
 	// expression that Check never reached, such as one that the parser dropped
 	// when it recovered from a syntax error, is the error type.
 	ExprTypes []TypeID
+	// PatTypes is indexed by PatID: the type of the value that each pattern
+	// matches, as the pattern was checked against it. Like ExprTypes it can hold a
+	// variable that was bound later, so ask TypeTable.Resolve (or Show). The row of
+	// a pattern that Check never reached, such as one that the parser dropped when
+	// it recovered from a syntax error, is the error type, and so is that of a
+	// pattern that the checker had no type for (the name of a constructor that does
+	// not exist, a record that is not one). The pun of a record pattern has no
+	// pattern node: its variable has its type in TypedProgram.LocalTypes.
+	PatTypes []TypeID
 }
 
 // TypedProgram is the result of Check.
@@ -71,6 +80,13 @@ type TypedProgram struct {
 // functions of the program are one group whose variables are not generalized
 // (chapter 13 does that), so what a call or a body finds out about a parameter
 // is what every other use of the function sees.
+//
+// A `match` and a `let` with a pattern are in check_pat.go. A pattern is checked
+// against the type of the value that it takes apart, and binds its variables to the
+// types of the parts they match; the arms of a `match` have the type of the first
+// when nothing is expected of it, and the expected type each when something is.
+// E0705, and E0410 for a record pattern, are reported there; E0703 and E0704 are
+// Resolve's.
 //
 // The operators are fixed by the type of their operands, and the left operand
 // says which: `+ - *` and `/` take two Int and give an Int, or two Float and
@@ -138,6 +154,7 @@ type checker struct {
 	m         *syntax.Module
 	rm        *ModuleRes
 	exprTypes []TypeID
+	patTypes  []TypeID
 
 	// pending are the operators whose left operand had no type yet when the body
 	// was checked, to be judged once all the bodies are (see numeric).
@@ -148,6 +165,11 @@ type checker struct {
 	// operand is as it was written: two parameters that a comparison made equal
 	// are two variables, and each is reported (see firstRejection).
 	rejected map[TypeID]bool
+	// brokenArm says that the pattern being checked is the one of an arm that the
+	// parser had trouble with (syntax.MatchArm.Broken): what was read of it may not
+	// be what the program meant, so the number of sub-patterns of a constructor in it
+	// is not judged (see ctorPat).
+	brokenArm bool
 }
 
 // operandSet says which types an operator works on.
@@ -186,7 +208,11 @@ func (c *checker) signatures() {
 		for j := range types {
 			types[j] = c.errT
 		}
-		c.tp.Modules[i] = TypedModule{ExprTypes: types}
+		pats := make([]TypeID, m.Pats.Len())
+		for j := range pats {
+			pats[j] = c.errT
+		}
+		c.tp.Modules[i] = TypedModule{ExprTypes: types, PatTypes: pats}
 	}
 	for range c.res.Locals.All() {
 		c.tp.LocalTypes.Push(c.errT)
@@ -311,7 +337,8 @@ func (c *checker) bodies() {
 		if !it.HasBody {
 			continue
 		}
-		c.mod, c.m, c.rm, c.exprTypes = def.Module, m, &c.res.Modules[def.Module], c.tp.Modules[def.Module].ExprTypes
+		c.mod, c.m, c.rm = def.Module, m, &c.res.Modules[def.Module]
+		c.exprTypes, c.patTypes = c.tp.Modules[def.Module].ExprTypes, c.tp.Modules[def.Module].PatTypes
 		because := def.Span
 		if it.HasRet {
 			because = m.Types.Get(it.Ret).Span
@@ -341,6 +368,8 @@ func (c *checker) check(id syntax.ExprID, expected TypeID, r Reason) (TypeID, bo
 		ty, fits = c.checkBlock(e, expected, r)
 	case syntax.ExprIf:
 		ty, fits = c.checkIf(e, expected, r)
+	case syntax.ExprMatch:
+		ty, fits = c.checkMatch(e, expected, r)
 	default:
 		return c.checkAt(id, expected, r)
 	}
@@ -406,11 +435,7 @@ func (c *checker) infer(id syntax.ExprID) TypeID {
 	case syntax.ExprIf:
 		ty = c.inferIf(e)
 	case syntax.ExprMatch:
-		// Only the scrutinee is checked, until the session that types patterns
-		// and arms (ch12-s2): the match has the error type, which says nothing, so
-		// it adds no mistake wherever it is used.
-		c.infer(e.Scrutinee)
-		ty = c.errT
+		ty = c.inferMatch(e)
 	case syntax.ExprBlock:
 		c.stmts(e)
 		ty = c.unitT
@@ -449,9 +474,7 @@ func (c *checker) stmts(e syntax.Expr) {
 		switch s.Kind {
 		case syntax.StmtLet:
 			if s.HasPat {
-				// No variable is bound until the session that types patterns
-				// (ch12-s2), and LetLocal holds no local for this statement.
-				c.infer(s.Expr)
+				c.letPattern(s)
 				continue
 			}
 			// With an annotation the initializer is checked against it, and
@@ -479,6 +502,8 @@ func (c *checker) stmts(e syntax.Expr) {
 // and then its tail takes the expectation; a block without a tail is `()`, and
 // the error, if that is not what is expected, is on the block.
 func (c *checker) checkBlock(e syntax.Expr, expected TypeID, r Reason) (TypeID, bool) {
+	// A `let` can be written in a block, even if the block is the body of an arm.
+	r.InArm = false
 	c.stmts(e)
 	if e.HasTail {
 		return c.check(e.Tail, expected, r)
@@ -585,15 +610,23 @@ func (c *checker) checkIf(e syntax.Expr, expected TypeID, r Reason) (TypeID, boo
 // reported a second time where the `if` is used. The secondary label of that
 // error is on the tail of the `then` branch.
 func (c *checker) elseBranch(e syntax.Expr, thenTy TypeID) TypeID {
-	then := c.m.Exprs.Get(e.Then)
-	because := then.Span
-	if then.Kind == syntax.ExprBlock && then.HasTail {
-		because = c.m.Exprs.Get(then.Tail).Span
-	}
+	because := c.valueSpan(e.Then)
 	if _, fits := c.check(e.Else, thenTy, Reason{Kind: ReasonIfBranches, Because: because}); !fits {
 		return c.errT
 	}
 	return thenTy
+}
+
+// valueSpan is where the value of the expression id is written: the tail of a
+// block, if it is a block with one, and the expression otherwise. It is the place
+// that explains a type that the value gave to the expressions checked against it
+// (the other branch of an `if`, the other arms of a `match`).
+func (c *checker) valueSpan(id syntax.ExprID) base.Span {
+	e := c.m.Exprs.Get(id)
+	if e.Kind == syntax.ExprBlock && e.HasTail {
+		return c.m.Exprs.Get(e.Tail).Span
+	}
+	return e.Span
 }
 
 // isError reports whether ty is the error type. A variable is never bound to
