@@ -290,7 +290,7 @@ Go alinea cada campo a la alineación de su tipo (en un entero o un `float64`, s
 alinea(n, a) = ⌈n / a⌉ · a
 offset₀ = 0                    offsetᵢ = alinea(offsetᵢ₋₁ + tamañoᵢ₋₁, alineaciónᵢ)
 alineación(S) = máxᵢ alineaciónᵢ        tamaño(S) = alinea(offsetₙ₋₁ + tamañoₙ₋₁, alineación(S))
-                                        si n ≥ 1 y tamañoₙ₋₁ > 0; un struct vacío mide 0, y tras un último campo de tamaño 0 hay relleno
+                                        si n ≥ 1, salvo si tamañoₙ₋₁ = 0 < offsetₙ₋₁: suma 1 antes de alinear; un struct vacío mide 0
 ```
 
 `reflect.TypeOf(v)` da un `reflect.Type`: `Size()` y `Align()` miden el struct, y `Field(i).Offset` dice dónde empieza cada campo.
