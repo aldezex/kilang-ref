@@ -103,7 +103,7 @@ función pratt(minBP):
     t ← token actual
     si t es «(» entonces
       súmalo a la cadena; si pasa del límite, sal del bucle
-      consume t; lhs ← llamada(lhs, argumentos), o un error si no se cierran
+      consume t; lhs ← llamada(lhs, argumentos), o un error cuando no se cierran
       sigue con la vuelta siguiente
     si t no es un operador binario, o su potencia bp < minBP, sal del bucle
     súmalo a la cadena; si pasa del límite, sal del bucle
