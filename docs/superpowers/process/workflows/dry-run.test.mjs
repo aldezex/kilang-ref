@@ -319,7 +319,12 @@ test('an integrated chapter that does not verify is not ready to publish', async
 
 test('a failed unfreeze stops the chapter', async () => {
   const pass = { 'ch11:pass:whys': finds(F('pass-whys-1', 'Important', 'code', 'limit', true)) }
-  const open = await chapter({}, { ...pass, 'ch11:thaw1:rereview': finds(F('thaw1-rereview-1', 'Important', 'code', 'limit', true)) })
+  // New breakage in the first re-review gets a second unfreeze; still open after it, the chapter stops.
+  const again = await chapter({}, { ...pass, 'ch11:thaw1:rereview': finds(F('thaw1-rereview-1', 'Important', 'code', 'limit', true)) })
+  assert.ok(again.w.called.includes('ch11:thaw1b:batch'), 'a second unfreeze for new breakage')
+  assert.match(again.r.trace.find((x) => x.label === 'ch11:thaw1b:batch').prompt, /thaw1-rereview-1/)
+  assert.ok(!again.r.stopped, 'closed by the second unfreeze')
+  const open = await chapter({}, { ...pass, 'ch11:thaw1:rereview': finds(F('thaw1-rereview-1', 'Important', 'code', 'limit', true)), 'ch11:thaw1b:rereview': finds(F('thaw1b-rereview-1', 'Important', 'code', 'limit', true)) })
   assert.equal(open.r.stopped, 'ch11:thaw')
   none(open.w, ['ch11:fix1', 'ch11:integrate'])
   const dead = await chapter({}, pass, { kills: { 'ch11:thaw1:rereview': 'null' } })

@@ -370,16 +370,31 @@ const proseTrack = async (c, carry) => {
     if (r.thaw.length) {
       thawCount++
       need(thawCount <= 2, c.tag + ':thaw', 'a visible failure is still open after two unfreezes: ' + ids(r.thaw) + ' in ' + froms(r.thaw))
-      await batch(c, c.tag + ':thaw' + t + ':batch', 'thaw' + t + '-batch', r.thaw, 'Fix', "The session tags were frozen: this is an unfreeze before publishing, for failures the reader would see.")
-      const rr = await rereview(c, c.tag + ':thaw' + t + ':rereview', 'thaw' + t + '-rereview', r.thaw, 'thaw' + t + '-batch', 'Fix')
-      const open = rr.findings.filter(visibleFailure)
-      need(!open.length, c.tag + ':thaw', 'the unfreeze did not close ' + ids(open) + ' in ' + rr.report_path)
-      // The re-review's own false reasons go to this turn's fix: the code is about to freeze again.
-      const falseAfter = rr.findings.filter((f) => f.falsehood)
-      r.narrow.push(...falseAfter)
-      errata.push(...falseAfter)
+      // A re-review that finds new visible breakage in the unfreeze gets one more unfreeze (two in all),
+      // with the re-review's code falsehoods in it, before the code freezes again.
+      let toFix = r.thaw, sub = '', reports = []
+      for (;;) {
+        const name = 'thaw' + t + sub
+        await batch(c, c.tag + ':' + name + ':batch', name + '-batch', toFix, 'Fix', "The session tags were frozen: this is an unfreeze before publishing, for failures the reader would see.")
+        reports.push(c.V + '/' + name + '-batch.md')
+        const rr = await rereview(c, c.tag + ':' + name + ':rereview', name + '-rereview', toFix, name + '-batch', 'Fix')
+        const open = rr.findings.filter(visibleFailure)
+        const falseAfter = rr.findings.filter((f) => f.falsehood && !open.includes(f))
+        if (!open.length) {
+          // The last re-review's own false reasons go to this turn's fix: the code is about to freeze again.
+          r.narrow.push(...falseAfter)
+          errata.push(...falseAfter)
+          break
+        }
+        thawCount++
+        need(thawCount <= 2, c.tag + ':thaw', 'the unfreeze did not close ' + ids(open) + ' in ' + rr.report_path)
+        toFix = [...open, ...falseAfter.filter((f) => f.owner === 'code')]
+        errata.push(...falseAfter.filter((f) => f.owner !== 'code'))
+        r.narrow.push(...falseAfter.filter((f) => f.owner !== 'code'))
+        sub = sub ? sub + 'b' : 'b'
+      }
       await freeze(c, 'refreeze' + t, c.tag + ':refreeze' + t, [], 'Fix')
-      thawed = "Code moved: read " + c.V + "/thaw" + t + "-batch.md, discard the regenerated book/verified-tags.txt and book/tests/" + c.tag + ".list, rebase " + c.branch + " onto the new " + frozenTag + " (git rebase --onto " + frozenTag + " <old base> " + c.branch + ") and make the prose exact again for what changed, and only that."
+      thawed = "Code moved: read " + reports.join(' and ') + ", discard the regenerated book/verified-tags.txt and book/tests/" + c.tag + ".list, rebase " + c.branch + " onto the new " + frozenTag + " (git rebase --onto " + frozenTag + " <old base> " + c.branch + ") and make the prose exact again for what changed, and only that."
     }
     const required = [...r.prose, ...r.narrow]
     if (!required.length && !thawed) return
