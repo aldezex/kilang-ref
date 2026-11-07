@@ -31,17 +31,17 @@ milestone: el hito literal del apartado 12.5 del spec
 
 ## Secciones fijas
 
-En este orden y con estos títulos de nivel 2:
+En este orden y con estos títulos de nivel 2. Primero toda la teoría, al final toda la práctica: la mitad teórica no lleva Go, comandos ni directivas de código, y sí las fórmulas (bloques `math`) y el pseudocódigo (bloques `pseudo`) que haga falta. La página dibuja una banda «Práctica» antes de `## Tests primero`.
 
 1. `## Objetivo`
 2. `## Teoría`
-3. `## Tests primero`
-4. `## Implementación`, con un `### Sesión K: <título> (≈ H h)` por cada sesión del capítulo
-5. `## Ejecútalo`
-6. `## Ejercicios`
-7. `## Preguntas de repaso`
-8. `## Resumen`
-9. `## Go en el trabajo`
+3. `## Preguntas de repaso`
+4. `## Resumen`
+5. `## Go en el trabajo`
+6. `## Tests primero`
+7. `## Implementación`, con un `### Sesión K: <título> (≈ H h)` por cada sesión del capítulo
+8. `## Ejecútalo`
+9. `## Ejercicios`
 
 ## Directivas
 

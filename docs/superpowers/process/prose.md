@@ -39,22 +39,33 @@ The chapter teaches these as a method, so the prose must model them:
 
 **Front matter:** `chapter`, `title` (in Spanish, exactly as the brief gives it), `part` (the numeral of the part, as the brief gives it), `hours` and `milestone` (the literal milestone of spec 12.5, as the brief quotes it).
 
+**Theory first, all practice at the end** (Álvaro, 2026-11-07). The chapter has two halves. The theory half explains; the practice half is where the reader writes code. Nothing of the practice half appears before it.
+
+- **The theory half holds no Go and no commands:** no ` ```go ` or ` ```console ` block, no `ki` output, no `{{file}}`, `{{diff}}`, `{{listing}}`, `{{reftest}}` or `{{cards}}`. A Go feature the chapter uses (`strconv`, `go generate`, fuzzing...) is explained in words there; its Go code goes in the practice half, in a `#### Go: <tema>` of the first session that uses it. Short ` ```ki ` examples of the language being built are allowed: they are what the theory is about.
+- **Math and pseudocode are mandatory where they apply.** An algorithm, a rule, an invariant or a grammar is shown in a ` ```math ` block (Unicode notation, preformatted: inference rules with a line of `─`, `Γ ⊢ e : τ`, `→`, `∀`, set notation) or a ` ```pseudo ` block (pseudocode in Spanish: `función`, `si`, `entonces`, `si no`, `mientras`, `para cada`, `devuelve`), and the prose reads it. Inline math goes between backticks. Math and pseudocode blocks are not flow words.
+- **The halves on the page:** `bookx web` draws a «Práctica» band before `## Tests primero`.
+
 **Fixed sections, in this order** (the headings of `book/README.md`):
 
+*Theory*
+
 1. `## Objetivo`: the command the reader can run at the end, and which milestone gets closer.
-2. `## Teoría`: every topic the brief lists. The `:::from Rust`, `:::from TS` or `:::from Python` boxes are few and go only where the contrast teaches (section 5). The Rust box weighs the most: ownership versus GC, traits versus interfaces, `Result` versus `error`, enums versus sealed interfaces. Every technical claim is verified on the machine first (section 5).
-3. `## Tests primero`: `{{cards}}` and a sentence on how to use the cards (write the test, watch it fail, implement, and only then unfold the reference with `{{reftest}}`).
-4. `## Implementación`: one `### Sesión K: <título> (≈ H h)` per session, with the hours of its task in the plan.
+2. `## Teoría`: every topic the brief lists, with its math or pseudocode. The `:::from Rust`, `:::from TS` or `:::from Python` boxes are few and go only where the contrast teaches (section 5). The Rust box weighs the most: ownership versus GC, traits versus interfaces, `Result` versus `error`, enums versus sealed interfaces. Every technical claim is verified on the machine first (section 5).
+3. `## Preguntas de repaso`: between 6 and 8, each in `:::review` followed by its `:::answer`. They ask why, not for definitions, and only about the theory: a question about the code becomes an exercise.
+4. `## Resumen`: between 8 and 12 bullets, on the theory.
+5. `## Go en el trabajo`: the brief's topic, in words. Claims about specific projects are verified before you write them (section 5).
+
+*Practice*
+
+6. `## Tests primero`: `{{cards}}` and a sentence on how to use the cards (write the test, watch it fail, implement, and only then unfold the reference with `{{reftest}}`).
+7. `## Implementación`: one `### Sesión K: <título> (≈ H h)` per session, with the hours of its task in the plan.
    - Show code with `{{file <tag> <path>}}`, `{{diff <tagA>..<tagB> <path>}}` or `{{listing <tag> <region>}}`, **citing only session tags** (`chNN-sK`, never `chNN`: the chapter tag does not exist while you write). `bookx verify` rejects a chapter tag.
-   - Explain the code you show: the book never dumps code without explaining it.
+   - Explain the code you show: the book never dumps code without explaining it. Point back to the theory («la regla (App) de la Teoría») instead of explaining it again.
    - The first time a concept appears, its code goes complete. A hint with a folded solution (a `hint` region, or a `:::solution` after the exercise) is only for patterns the book already taught.
    - **Interfaces are always complete** (exported types, IR structures and APIs), even when the implementation goes as a hint (spec 12.2), so the reader's code fits later listings.
    - Every session says «si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/chNN-sK` y sigue», and ends with «Al terminar: tus tests en verde, commit y etiqueta `chNN-sK`; compárate con `ref/chNN-sK`».
-5. `## Ejecútalo`: the exact output the reader must see, copied from a real run (section 5).
-6. `## Ejercicios`: the brief's exercises, each in `:::exercise` followed by its `:::solution`.
-7. `## Preguntas de repaso`: between 6 and 8, each in `:::review` followed by its `:::answer`. They ask why, not for definitions.
-8. `## Resumen`: between 8 and 12 bullets.
-9. `## Go en el trabajo`: the brief's topic. Claims about specific projects are verified before you write them (section 5).
+8. `## Ejecútalo`: the exact output the reader must see, copied from a real run (section 5).
+9. `## Ejercicios`: the brief's exercises, each in `:::exercise` followed by its `:::solution`.
 
 **Containers.** `:::exercise`, `:::solution`, `:::review`, `:::answer`, `:::from <Rust|TS|Python>`, `:::note`, `:::bug` and `:::more <título>` are closed with `:::`, always in sequence and **never nested**: a `:::solution` starts after the `:::` that closes its `:::exercise`. The web page does not nest containers, and rule 7 of `bookx verify` rejects nesting, unclosed containers and a `:::more` without a title. A `:::bug` box («Bug encontrado») is for a didactic bug a later chapter uncovered, when the controller asks for one. A `:::more` is a closed fold on the page, with its title as the summary (see section 5).
 
