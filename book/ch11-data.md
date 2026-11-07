@@ -8,7 +8,7 @@ milestone: valores `Shape`, records con update, `Float` impreso con la regla de 
 
 ## Objetivo
 
-Ki gana datos: sumas, records, alias, tuplas y `Float`. Al terminar, `build/bin/ki run shape.ki` imprime `1.0`, `1e21` y `1000000.0` (véase «Ejecútalo»):
+Ki gana datos: sumas, records, alias, tuplas y `Float`. Al terminar, `build/bin/ki run shape.ki` cumple el hito e imprime `1.0`, `1e21` y `1000000.0`:
 
 ```ki
 type Shape {
@@ -26,13 +26,11 @@ fn main() {
 }
 ```
 
-Es el hito: valores `Shape`, records con update y `Float` impreso con `kirt/fmtnum`.
-
 ## Teoría
 
 ### Tipos nominales: suma, record y alias
 
-Un `type` tiene tres formas, y las distingue el primer token tras el nombre:
+Un `type` tiene tres formas:
 
 ```math
 type    = 'type' Upper ( '=' ty  |  '{' variant { vsep variant } '}'  |  '{' field { vsep field } '}' )
@@ -53,7 +51,7 @@ Sumas y records son **nominales**: con `type A { x: Int }` y `type B { x: Int }`
 ⟦T⟧ = ⟦τ⟧                 si type T = τ             un nombre busca antes los tipos declarados que Int, Float y Bool
 
 Data(T, as) ~ Data(T′, bs)    ⇔   T = T′  ∧  |as| = |bs|  ∧  asᵢ ~ bsᵢ      as: argumentos de tipo, ninguno hasta los genéricos
-(τ₁, …, τₙ) ~ (σ₁, …, σₘ)     ⇔   n = m  ∧  τᵢ ~ σᵢ
+(τ₀, …, τₙ₋₁) ~ (σ₀, …, σₘ₋₁) ⇔   n = m  ∧  τᵢ ~ σᵢ
 ```
 
 Las dos últimas amplían el `unifica` del capítulo 8: sin bajar por las tuplas, `(a, Int)` nunca unificaría.
@@ -65,7 +63,7 @@ Son `enum`, `struct` y `type Meters = f64;`, y dos `struct` iguales tampoco se m
 :::
 
 :::from TS
-TS es estructural: dos tipos con la misma forma se intercambian. Ki mira el nombre.
+TS es estructural: dos tipos con la misma forma se intercambian.
 :::
 
 ### Hash-consing de los tipos declarados
@@ -74,112 +72,10 @@ TS es estructural: dos tipos con la misma forma se intercambian. Ki mira el nomb
 
 ```math
 Data(T, as) = Data(T′, as′)    ⇔   (T, as) = (T′, as′)
-(τ₁, …, τₙ) = (σ₁, …, σₙ)      ⇔   τᵢ = σᵢ para cada i
+(τ₀, …, τₙ₋₁) = (σ₀, …, σₙ₋₁)  ⇔   τᵢ = σᵢ para cada i
 ```
 
 Dos usos de `Shape` dan un id, y dos declaraciones iguales, dos.
-
-### Un constructor es una función; un record, no
-
-Una variante se escribe por posición, como una llamada: su constructor es una función. Sin campos, ya es un valor:
-
-```math
-  C(τ₁, …, τₙ) es una variante de T, n ≥ 1          C es una variante de T sin campos
- ───────────────────────────────────────── (Ctor)   ──────────────────────────────── (Ctor₀)
-         Γ ⊢ C ⇒ (τ₁, …, τₙ) → ⟦T⟧                           Γ ⊢ C ⇒ ⟦T⟧
-```
-
-`Circle(1.0)` es una llamada más, con (App) del capítulo 8, y `Circle` se pasa como valor.
-
-Un literal de record nombra cada campo, en cualquier orden: no hay posición que llamar, y `Point` en una expresión es E0306. Su gramática, con el acceso y las tuplas:
-
-```math
-expr  +=  expr '.' lower                                acceso a un campo
-       |  expr '.' índice                               índice de tupla: dígitos, sin ceros a la izquierda
-       |  '(' expr ',' expr { ',' expr } ')'            tupla: dos o más, sin coma final
-       |  Upper '{' [ finit { ',' finit } [ ',' ] ] [ '..' expr ] '}'
-finit  =  lower ':' expr  |  lower                      x sola abrevia x: x (punning)
-```
-
-`n.0.1` llega del lexer como `.` y `Float(0.1)`: el parser lo parte en dos índices. Las reglas, con `campos(R) = f₁ : τ₁, …, fₙ : τₙ`:
-
-```math
-  ⟦T⟧ = Data(R, [])    gⱼ ∈ campos(R), sin repetir    Γ ⊢ eⱼ ⇐ τ(gⱼ)    {g₁, …, gₖ} = campos(R)
- ─────────────────────────────────────────────────────────────────────────────── (Record)
-                       Γ ⊢ T { g₁: e₁, …, gₖ: eₖ } ⇒ ⟦T⟧
-
-  ⟦T⟧ = Data(R, [])    gⱼ ∈ campos(R), sin repetir    Γ ⊢ eⱼ ⇐ τ(gⱼ)    Γ ⊢ b ⇐ ⟦T⟧
- ───────────────────────────────────────────────────────────────────────── (Update)
-                    Γ ⊢ T { g₁: e₁, …, gₖ: eₖ, ..b } ⇒ ⟦T⟧
-
-  Γ ⊢ e ⇒ τ    resuelve(τ) = Data(R, [])    x : τₓ ∈ campos(R)
- ───────────────────────────────────────────────────────── (Campo)
-                      Γ ⊢ e.x ⇒ τₓ
-
-  Γ ⊢ eᵢ ⇒ τᵢ, de izquierda a derecha    n ≥ 2         Γ ⊢ e ⇒ τ    resuelve(τ) = (τ₀, …, τₙ₋₁)    k < n
- ───────────────────────────────────── (Tupla)   ─────────────────────────────────────────── (Índice)
-     Γ ⊢ (e₁, …, eₙ) ⇒ (τ₁, …, τₙ)                                Γ ⊢ e.k ⇒ τₖ
-```
-
-Cada premisa que falla da un solo error:
-
-```math
-gⱼ ∉ campos(R)                                  E0409, y el literal no da además E0410
-gⱼ repetido                                     E0411
-faltan campos y no hay ..b                      E0410, uno con todos los que faltan
-⟦T⟧ no es un record                             E0412 (E0406 si T no es un tipo; nada si T ya dio su error), y el literal es {error}
-cualquier otro error dentro del literal         el literal sigue siendo ⟦T⟧: quien lo usa no se queja
-(Campo): no es un record   ·   x ∉ campos(R)    E0412   ·   E0409, y el acceso es {error}
-(Índice): no es una tupla, o k ≥ n              E0413, y el acceso es {error}
-resuelve(τ) = {error}                           {error}, sin otro mensaje
-```
-
-(Campo) e (Índice) **resuelven** el tipo del receptor, sin unificarlo: si nada ha fijado aún un parámetro sin anotar, `p.x` es E0412. Al contrario que un operador, no espera, y el veredicto puede depender del orden de las funciones.
-
-### Llaves en la cabeza de un `if`
-
-En `if x == Origin { 1 } else { 2 }`, la `{` es el bloque del `if`, no un literal. Es la regla de Rust:
-
-```pseudo
-función primario(), ante un nombre N y una `{` en la misma línea:
-  campos ← tras la `{` vienen `x:`, `x,` o `..`        // así no empieza ningún bloque
-  si N empieza en mayúscula:
-    si no estás en la cabeza de un if entonces devuelve el literal N { … }
-    si campos entonces lee el literal y da E0201: pide paréntesis, con su edición
-    si no devuelve el nombre N                         // la `{` abre el bloque del if
-  si N empieza en minúscula y campos y no estás en la cabeza de un if:
-    devuelve el literal N { … }                        // su nombre dará E0406
-  devuelve el nombre N
-```
-
-Dentro de paréntesis, argumentos o valores de otro literal vuelve el literal.
-
-### Core: todo dato es un `Con`
-
-En Core, un dato es un `Con`, el constructor con sus campos en orden, y leer un campo es un `Proj` por posición:
-
-```math
-⟦C(e₁, …, eₙ)⟧   =  Con(C, ⟦e₁⟧, …, ⟦eₙ⟧)
-⟦C⟧              =  Con(C)                         si C no tiene campos
-⟦C⟧              =  FunRef(C)                      si los tiene: su envoltorio, fn Circle(r) = Circle(r)
-⟦(e₁, …, eₙ)⟧    =  Con(tuplaₙ, ⟦e₁⟧, …, ⟦eₙ⟧)     un constructor sin nombre por aridad
-⟦e.k⟧            =  Proj(⟦e⟧, k)
-⟦e.x⟧            =  Proj(⟦e⟧, i)                   x es el campo i de su record, desde 0
-```
-
-Un literal de record es un `Con` directo solo si eso no cambia el orden:
-
-```pseudo
-función elabora_record(T { g₁: e₁, …, gₖ: eₖ [, ..b] }):
-  si no hay base y cada gⱼ es el campo j de T entonces
-    devuelve Con(T, ⟦e₁⟧, …, ⟦eₖ⟧)
-  para cada j de 1 a k:  let gⱼ = ⟦eⱼ⟧                // en el orden escrito
-  si hay base entonces  let base = ⟦b⟧                 // una vez, después de los valores
-  para cada campo fᵢ de T:  aᵢ ← gⱼ si gⱼ = fᵢ;  si no, Proj(base, i)
-  devuelve esos let con Con(T, a₀, …, aₙ₋₁) dentro
-```
-
-Los valores corren en el orden escrito, como los argumentos de una llamada, y la base, una vez. El update construye otro valor: el oráculo nunca escribe en un `ConV`.
 
 ### El pase `declare`
 
@@ -211,9 +107,118 @@ función expande_alias():
 
 Con la pila propia, 10 000 alias en cadena no añaden marcos de Go. Agrupar da un error por ciclo: `type A = (A, B)` y `type B = (A, Int)` son un E0801. Una suma o un record que se nombra no es un ciclo.
 
+### Un constructor es una función; un record, no
+
+Una variante se escribe por posición, como una llamada: su constructor es una función. Sin campos, ya es un valor:
+
+```math
+  C(τ₀, …, τₙ₋₁) es una variante de T, n ≥ 1        C es una variante de T sin campos
+ ───────────────────────────────────────── (Ctor)   ──────────────────────────────── (Ctor₀)
+        Γ ⊢ C ⇒ (τ₀, …, τₙ₋₁) → ⟦T⟧                          Γ ⊢ C ⇒ ⟦T⟧
+```
+
+`Circle : (Float) → Shape`: `Circle(1.0)` es una llamada, con (App) del capítulo 8, y `Circle` se pasa como valor.
+
+Un literal de record nombra cada campo, en cualquier orden: no hay posición que llamar, y `Point` en una expresión es E0306.
+
+### Records, accesos y tuplas
+
+Un record se lee por nombre, `p.x`, y una tupla, `(1, true) : (Int, Bool)`, por posición: `t.0`. La gramática:
+
+```math
+expr  +=  expr '.' lower                                acceso a un campo
+       |  expr '.' índice                               índice de tupla: dígitos, sin ceros a la izquierda
+       |  '(' expr ',' expr { ',' expr } ')'            tupla: dos o más, sin coma final
+       |  Upper '{' [ finit { ',' finit } [ ',' ] ] '}'
+       |  Upper '{' { finit ',' } '..' expr '}'         la base va tras una coma, o sola, y cierra
+finit  =  lower ':' expr  |  lower                      x sola abrevia x: x (punning)
+```
+
+`n.0.1` llega del lexer como `.` y `Float(0.1)`: el parser lo parte en dos índices.
+
+Las reglas, con `campos(R) = f₀ : τ₀, …, fₙ₋₁ : τₙ₋₁`:
+
+```math
+  ⟦T⟧ = Data(R, [])    gⱼ ∈ campos(R), sin repetir    Γ ⊢ eⱼ ⇐ τ(gⱼ)    {g₀, …, gₖ₋₁} = campos(R)
+ ───────────────────────────────────────────────────────────────────────────────── (Record)
+                       Γ ⊢ T { g₀: e₀, …, gₖ₋₁: eₖ₋₁ } ⇒ ⟦T⟧
+
+  ⟦T⟧ = Data(R, [])    gⱼ ∈ campos(R), sin repetir    Γ ⊢ eⱼ ⇐ τ(gⱼ)    Γ ⊢ b ⇐ ⟦T⟧
+ ───────────────────────────────────────────────────────────────────────── (Update)
+                    Γ ⊢ T { g₀: e₀, …, gₖ₋₁: eₖ₋₁, ..b } ⇒ ⟦T⟧
+
+  Γ ⊢ e ⇒ τ    resuelve(τ) = Data(R, [])    x : τₓ ∈ campos(R)
+ ───────────────────────────────────────────────────────── (Campo)
+                      Γ ⊢ e.x ⇒ τₓ
+
+  Γ ⊢ eᵢ ⇒ τᵢ, de izquierda a derecha    n ≥ 2         Γ ⊢ e ⇒ τ    resuelve(τ) = (τ₀, …, τₙ₋₁)    k < n
+ ───────────────────────────────────── (Tupla)   ─────────────────────────────────────────── (Índice)
+  Γ ⊢ (e₀, …, eₙ₋₁) ⇒ (τ₀, …, τₙ₋₁)                              Γ ⊢ e.k ⇒ τₖ
+```
+
+Cada premisa que falla da un solo error:
+
+```math
+gⱼ ∉ campos(R)                                  E0409, y el literal no da además E0410
+gⱼ repetido                                     E0411
+faltan campos y no hay ..b                      E0410, uno con todos los que faltan
+⟦T⟧ no es un record                             E0412 (E0406 si T no es un tipo; nada si T ya dio su error), y el literal es {error}
+cualquier otro error dentro del literal         el literal sigue siendo ⟦T⟧: quien lo usa no se queja
+(Campo): no es un record   ·   x ∉ campos(R)    E0412   ·   E0409, y el acceso es {error}
+(Índice): no es una tupla, o k ≥ n              E0413, y el acceso es {error}
+resuelve(τ) = {error}                           {error}, sin otro mensaje
+```
+
+(Campo) e (Índice) **resuelven** el tipo del receptor, sin unificarlo: si nada ha fijado aún un parámetro sin anotar, `p.x` es E0412. Al contrario que un operador, no espera, y el veredicto puede depender del orden de las funciones.
+
+### Llaves en la cabeza de un `if`
+
+En `if x == Origin { 1 } else { 2 }`, la `{` es el bloque del `if`, no un literal (aunque `==` aún no compara sumas). Es la regla de Rust:
+
+```pseudo
+función primario(), ante un nombre N y una `{` en la misma línea:
+  campos ← tras la `{` vienen `x:`, `x,` o `..`        // así no empieza ningún bloque
+  si N empieza en mayúscula:
+    si no estás en la cabeza de un if entonces devuelve el literal N { … }
+    si campos entonces lee el literal y da E0201: pide paréntesis, con su edición
+    si no devuelve el nombre N                         // la `{` abre el bloque del if
+  si N empieza en minúscula y campos y no estás en la cabeza de un if:
+    devuelve el literal N { … }                        // su nombre dará E0406
+  devuelve el nombre N
+```
+
+Dentro de paréntesis, argumentos, un bloque o los valores de otro literal vuelve el literal.
+
+### Core: todo dato es un `Con`
+
+En Core, un dato es un `Con`, el constructor con sus campos en orden, y leer un campo es un `Proj` por posición:
+
+```math
+⟦C(e₀, …, eₙ₋₁)⟧ =  Con(C, ⟦e₀⟧, …, ⟦eₙ₋₁⟧)
+⟦C⟧              =  Con(C)                         si C no tiene campos
+⟦C⟧              =  FunRef(C)                      si los tiene: su envoltorio, fn Circle(r) = Circle(r)
+⟦(e₀, …, eₙ₋₁)⟧  =  Con(tuplaₙ, ⟦e₀⟧, …, ⟦eₙ₋₁⟧)   un constructor sin nombre por aridad
+⟦e.k⟧            =  Proj(⟦e⟧, k)
+⟦e.x⟧            =  Proj(⟦e⟧, i)                   x es el campo i de su record, desde 0
+```
+
+Un literal de record es un `Con` directo solo si eso no cambia el orden:
+
+```pseudo
+función elabora_record(T { g₀: e₀, …, gₖ₋₁: eₖ₋₁ [, ..b] }):
+  si no hay base y cada gⱼ es el campo j de T entonces
+    devuelve Con(T, ⟦e₀⟧, …, ⟦eₖ₋₁⟧)
+  para cada j de 0 a k−1:  let gⱼ = ⟦eⱼ⟧              // en el orden escrito
+  si hay base entonces  let base = ⟦b⟧                 // una vez, después de los valores
+  para cada campo fᵢ de T:  aᵢ ← gⱼ si gⱼ = fᵢ;  si no, Proj(base, i)
+  devuelve esos let con Con(T, a₀, …, aₙ₋₁) dentro
+```
+
+Los valores corren en el orden escrito, como los argumentos de una llamada. El update construye otro valor: el oráculo nunca escribe en un `ConV`.
+
 ### `Float`: sin conversión implícita
 
-Los operadores son fijos por tipo, y decide el operando izquierdo: la regla (Op) del capítulo 8, con dos filas:
+Los operadores son fijos por tipo, y decide el operando izquierdo: la regla (Op) del capítulo 8, con una fila para `Int` y otra para `Float`. Sin conversión implícita, `toFloat` y `truncate` convierten a mano.
 
 ```math
 + − * /         (Int, Int) → Int      |  (Float, Float) → Float
@@ -229,7 +234,7 @@ Los operadores son fijos por tipo, y decide el operando izquierdo: la regla (Op)
 toFloat : (Int) → Float        truncate : (Float) → Int        sqrt : (Float) → Float
 truncate(f) = f sin su parte decimal, hacia cero        si −2⁶³ ≤ f < 2⁶³
 truncate(f) = panic «Float out of range», 101          si f es NaN, f ≥ 2⁶³ o f < −2⁶³ (los infinitos, también)
-sqrt(f) = √f, que IEEE 754 redondea exacta; NaN si f < 0
+sqrt(f) = √f redondeada correctamente (IEEE 754); NaN si f < 0
 ```
 
 Esperar evita depender del orden: en `fn sq(x) -> Float { x * x }`, juzgar `x` enseguida lo fijaría a `Int` si el cuerpo va antes que su llamada. Las primitivas siguen IEEE 754: `1.0 / 0.0` es `inf`, sin panic.
@@ -254,7 +259,7 @@ función Float(f):
 - **Los umbrales** son los de `Number.prototype.toString` de JavaScript: `−6 ≤ e ≤ 20` es `1e-6 ≤ |f| < 1e21`.
 - **El `.0`** impide que un `Float` se lea como un `Int`.
 
-`'g'` no sirve: escribe `1e+06` para un millón, `1e+21` y `+Inf`, y añadirle `.0` daría `1e+06.0`.
+`'g'` no sirve: escribe `1e+06`, `1e+21` y `+Inf`, y añadirle `.0` daría `1e+06.0`.
 
 ### FMA: un redondeo de menos
 
@@ -268,7 +273,7 @@ float64(x*y) + z           fl(fl(x·y) + z)       siempre: la conversión explí
 
 El resultado puede cambiar en el último bit o, si la suma cancela, del todo: de 0 a 2⁻¹⁰⁴.
 
-Ninguna opción apaga la fusión, salvo `-d=fmahash`, de depuración. `GOAMD64` elige el nivel de CPU x86-64, y desde `v3` Go usa FMA: un prototipo con `x*y + z` da `VFMADD231SD` con `v3`, `MULSD` y `ADDSD` con `v1`, el valor por defecto, y `FMADDD` en arm64.
+Solo `-d=fmahash`, de depuración, apaga la fusión. `GOAMD64` elige el nivel de CPU x86-64, y desde `v3` Go usa FMA: un prototipo con `x*y + z` da `VFMADD231SD` con `v3`, `MULSD` y `ADDSD` con `v1`, el valor por defecto, y `FMADDD` en arm64.
 
 Por eso cada primitiva de `Float` hace una sola operación, y un canario (un test que vigila un hecho de Go del que Ki depende), C10, pregunta al compilador qué hizo:
 
@@ -304,7 +309,7 @@ Un `[]Value` con 1 000 `FloatV` calculados hace 1 001 reservas; un `[]float64`, 
 
 ### `new(expr)`
 
-En Go 1.27, `new` acepta una expresión (desde 1.26): `new(int64(300))` da un `*int64` que apunta a 300. Hace lo que el `ptr` genérico del capítulo 3; este capítulo no lo usa.
+En Go 1.27, `new` acepta una expresión: `new(int64(300))` da un `*int64` que apunta a 300. Hace lo que el `ptr` genérico del capítulo 3; este capítulo no lo usa.
 
 ## Preguntas de repaso
 
@@ -379,7 +384,7 @@ Porque la `{` tras la condición es el bloque del `if`: leer `Origin { 1 }` como
 
 ## Go en el trabajo
 
-**«Acepta interfaces, devuelve structs».** *Go Code Review Comments* lo explica: la interfaz es del paquete que la usa, y el que implementa devuelve tipos concretos, que pueden ganar métodos sin romper a nadie. Así, `sema.Declare` devuelve `*Decls`.
+**«Acepta interfaces, devuelve structs».** *Go Code Review Comments*: la interfaz es del paquete que la usa, y el que implementa devuelve tipos concretos, que pueden ganar métodos sin romper a nadie. Así, `sema.Declare` devuelve `*Decls`.
 
 **Slice de structs o de interfaces.** `image.RGBA` guarda sus píxeles en un `Pix []uint8` plano. `At` devuelve la interfaz `color.Color`, para cumplir `image.Image`; `RGBAAt`, el struct `color.RGBA`.
 
@@ -397,7 +402,7 @@ Por cada tarjeta: escribe el test, míralo fallar, implementa lo justo para el v
 
 #### Lo que trae la Parte I
 
-Primero, lo que la referencia corrigió tras `ch10-s4`, con sus tests:
+Primero, lo que la referencia corrigió tras `ch10-s4`:
 
 1. **Las casillas cuentan:** `KI_STACK_MB` limita también las de entornos y argumentos en espera, a 16 bytes cada una, y cada corte de `stack` y de `envs` borra lo que deja (fe de erratas del capítulo 10).
 
@@ -451,7 +456,7 @@ Primero, lo que la referencia corrigió tras `ch10-s4`, con sus tests:
 
 {{diff ch10-s4..ch11-s1 internal/driver/version.go}}
 
-`ci.yml` quita el `Acquire::Retries=3` inútil (fe de erratas del capítulo 1), `README.md` nombra `docs/errors/`, y tu repo no necesita `ci/mutate`. `machine.go`, `prims.go` y `reason.go` van abajo, con `Float`.
+`ci.yml` quita el `Acquire::Retries=3` inútil (fe de erratas del capítulo 1), `README.md` nombra `docs/errors/`, y tu repo no necesita `ci/mutate`.
 
 #### Los tests, en rojo
 
@@ -516,8 +521,6 @@ strconv.FormatFloat(math.Inf(1), 'g', -1, 64) // "+Inf"
 `Float` es el pseudocódigo de la Teoría, y `shortest`, su tercera línea.
 
 {{reftest T11.03}}
-
-Si escribieras `exp > 21` en lugar de `exp > 20`, `1e21` saldría `1000000000000000000000.0` y el test lo ve.
 
 #### `Float` en el compilador
 
@@ -663,7 +666,7 @@ FAIL
 
 {{diff ch11-s1..ch11-s2 internal/syntax/recover.go}}
 
-- **`typeItem`** es la gramática de `type` de la Teoría.
+- **`typeItem`** es la gramática de `type` de la Teoría, sin tipos tupla hasta la sesión 4.
 - **Un `type` roto** es un `ItemError` que guarda su nombre y sus variantes, y `ErrorOf`, la palabra que lo empezó: sus usos no añaden errores.
 
 #### Los nombres
@@ -682,7 +685,7 @@ FAIL
 
 {{reftest T11.56}}
 
-**Fe de erratas.** El E0406 del capítulo 8 dice ahora «not a type in this scope», sin la nota que listaba los tipos de Ki, y sugiere también tipos declarados.
+**Fe de erratas.** El E0406 del capítulo 8 dice ahora «not a type in this scope» y sugiere también tipos declarados.
 
 {{diff ch11-s1..ch11-s2 docs/errors/E0302.md}}
 
@@ -803,7 +806,7 @@ FAIL
 
 {{diff ch11-s2..ch11-s3 internal/driver/session.go}}
 
-1. **`Declare`** es `declara`: `collect`, `aliases` y `members` son sus barridos. `CtorType` es (Ctor) y (Ctor₀), y `Meaning`, `⟦T⟧`.
+1. **`Declare`** es `declara`: `collect`, `aliases` y `members` son sus barridos. Sin tuplas, un alias nombra a lo sumo otro: `aliases` aún no agrupa, y un ciclo es la pila desde el que reaparece. `CtorType` es (Ctor) y (Ctor₀), y `Meaning`, `⟦T⟧`.
 2. **Un nombre en mayúscula** que nada declara es E0306, que sugiere solo entre constructores.
 3. **`paramSpan`**, la etiqueta de un argumento que no encaja, apunta en un constructor al campo de su variante, porque no hay `Params`.
 
@@ -850,7 +853,7 @@ FAIL
 
 #### Go: `reflect` mide un struct
 
-La primera fila de la tabla de la Teoría; el ejercicio 1 lo usa:
+La primera fila de la tabla de la Teoría:
 
 ```go
 type s struct {
@@ -942,8 +945,6 @@ FAIL
 
 {{reftest T11.102}}
 
-Sin `noRecord`, `Origin { 1 }` se leería como un literal, y este test lo ve.
-
 #### Comprobar y ejecutar
 
 {{file ch11-s4 internal/sema/check_data.go}}
@@ -962,6 +963,7 @@ Sin `noRecord`, `Origin { 1 }` se leería como un literal, y este test lo ve.
 
 1. **`check_data.go`** son las reglas de records y tuplas, con su tabla de errores.
 2. **`Unify` baja por las tuplas**.
+3. **`aliases` agrupa con Tarjan:** con tuplas, un alias nombra varios, y dos caminos al mismo ciclo darían dos E0801. `FieldIndex` da la posición de un campo.
 
 {{diff ch11-s3..ch11-s4 internal/core/core.go}}
 
@@ -977,7 +979,7 @@ Sin `noRecord`, `Origin { 1 }` se leería como un literal, y este test lo ve.
 
 {{diff ch11-s3..ch11-s4 internal/interp/machine.go}}
 
-3. **La elaboración** completa «Core: todo dato es un `Con`»: `record` es `elabora_record`.
+4. **La elaboración** completa «Core: todo dato es un `Con`»: `record` es `elabora_record`.
 
 {{reftest T11.146}}
 
