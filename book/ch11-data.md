@@ -33,10 +33,10 @@ fn main() {
 Un `type` tiene tres formas:
 
 ```math
-type    = 'type' Upper ( '=' ty  |  '{' variant { vsep variant } '}'  |  '{' field { vsep field } '}' )
+type    = 'type' Upper ( '=' ty  |  '{' variant { vsep variant } [ vsep ] '}'  |  '{' field { vsep field } [ vsep ] '}' )
 variant = Upper [ '(' [ lower ':' ] ty { ',' [ lower ':' ] ty } ')' ]
 field   = lower ':' ty
-vsep    = Newline | ';' | ','
+vsep    = Newline | ';' | ','                                      un vsep final vale: el salto antes de la }
 ty      = Upper  |  '()'  |  '(' ty ',' ty { ',' ty } ')'          una tupla: dos o más, sin coma final
 ```
 
@@ -88,20 +88,20 @@ Hace tres barridos, así que un campo puede nombrar un tipo declarado más abajo
 
 ```pseudo
 función declara(programa):
-  para cada type T, en orden:                          // barrido 1
+  para cada type T, por orden:                         // barrido 1
     crea su declaración; si es una suma, cada variante es un constructor, con su posición como Tag
   expande_alias()                                      // barrido 2
   para cada constructor y cada record:                 // barrido 3
-    lee el tipo de sus campos; un campo repetido en un record es E0302, y vale el primero
-  un nombre que no es un tipo, en un alias o un campo, es E0406 y vale {error}
+    lee el tipo de sus campos; un campo repetido dentro de un record es E0302, y vale el primero
+  un nombre que no es un tipo, dentro de un campo o de un alias leído, es E0406 y vale {error}
 
 función expande_alias():
-  recorre en profundidad, con una pila propia, los alias que nombra cada alias
+  baja por los alias que nombra cada alias, con una pila propia
   agrupa los que llevan unos a otros: las componentes fuertemente conexas (Tarjan)
   para cada grupo de dos o más, o de uno que se nombra a sí mismo:
-    un E0801, sobre el primero del fichero, con una etiqueta en cada uno de los demás
-    todos valen {error}
-  un alias que nombra uno que vale {error} por un ciclo también vale {error}
+    un E0801, sobre el primero del fichero, con una etiqueta sobre cada uno de los demás
+    todos valen {error}, sin leer su expresión
+  un alias que nombra uno que vale {error} por un ciclo también vale {error}, sin leerse
   cualquier otro vale el tipo de su expresión, con los alias de dentro ya expandidos
 ```
 
@@ -161,7 +161,7 @@ Cada premisa que falla da un solo error:
 ```math
 gⱼ ∉ campos(R)                                  E0409, y el literal no da además E0410
 gⱼ repetido                                     E0411
-faltan campos y no hay ..b                      E0410, uno con todos los que faltan
+faltan campos y no hay ..b                      E0410, uno solo para todos: nombra hasta 8 y cuenta el resto
 ⟦T⟧ no es un record                             E0412 (E0406 si T no es un tipo; nada si T ya dio su error), y el literal es {error}
 cualquier otro error dentro del literal         el literal sigue siendo ⟦T⟧: quien lo usa no se queja
 (Campo): no es un record   ·   x ∉ campos(R)    E0412   ·   E0409, y el acceso es {error}
@@ -176,13 +176,13 @@ resuelve(τ) = {error}                           {error}, sin otro mensaje
 En `if x == Origin { 1 } else { 2 }`, la `{` es el bloque del `if`, no un literal (aunque `==` aún no compara sumas). Es la regla de Rust:
 
 ```pseudo
-función primario(), ante un nombre N y una `{` en la misma línea:
+función primario(), ante un nombre N seguido de una `{` sin salto de línea:
   campos ← tras la `{` vienen `x:`, `x,` o `..`        // así no empieza ningún bloque
-  si N empieza en mayúscula:
-    si no estás en la cabeza de un if entonces devuelve el literal N { … }
-    si campos entonces lee el literal y da E0201: pide paréntesis, con su edición
+  si la inicial de N es mayúscula:
+    si estás fuera de la cabeza de un if entonces devuelve el literal N { … }
+    si campos entonces lee el literal; si se leyó entero, da E0201: pide paréntesis, con su edición
     si no devuelve el nombre N                         // la `{` abre el bloque del if
-  si N empieza en minúscula y campos y no estás en la cabeza de un if:
+  si la inicial de N es minúscula y campos y estás fuera de la cabeza de un if:
     devuelve el literal N { … }                        // su nombre dará E0406
   devuelve el nombre N
 ```
@@ -206,9 +206,9 @@ Un literal de record es un `Con` directo solo si eso no cambia el orden:
 
 ```pseudo
 función elabora_record(T { g₀: e₀, …, gₖ₋₁: eₖ₋₁ [, ..b] }):
-  si no hay base y cada gⱼ es el campo j de T entonces
+  si el literal va sin base y cada gⱼ es el campo j de T entonces
     devuelve Con(T, ⟦e₀⟧, …, ⟦eₖ₋₁⟧)
-  para cada j de 0 a k−1:  let gⱼ = ⟦eⱼ⟧              // en el orden escrito
+  para cada j de 0 a k−1:  let gⱼ = ⟦eⱼ⟧              // por orden de escritura
   si hay base entonces  let base = ⟦b⟧                 // una vez, después de los valores
   para cada campo fᵢ de T:  aᵢ ← gⱼ si gⱼ = fᵢ;  si no, Proj(base, i)
   devuelve esos let con Con(T, a₀, …, aₙ₋₁) dentro
@@ -290,6 +290,7 @@ Go alinea cada campo a la alineación de su tipo (en un entero o un `float64`, s
 alinea(n, a) = ⌈n / a⌉ · a
 offset₀ = 0                    offsetᵢ = alinea(offsetᵢ₋₁ + tamañoᵢ₋₁, alineaciónᵢ)
 alineación(S) = máxᵢ alineaciónᵢ        tamaño(S) = alinea(offsetₙ₋₁ + tamañoₙ₋₁, alineación(S))
+                                        si n ≥ 1 y tamañoₙ₋₁ > 0; un struct vacío mide 0, y tras un último campo de tamaño 0 hay relleno
 ```
 
 `reflect.TypeOf(v)` da un `reflect.Type`: `Size()` y `Align()` miden el struct, y `Field(i).Offset` dice dónde empieza cada campo.
