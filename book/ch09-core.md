@@ -159,6 +159,7 @@ En `recorre`, `ámbito` es un contador y no un conjunto: una `Var` ligada dos ve
 
 ```pseudo
 función recorre(f):                        ámbito[v]: los binders abiertos de v
+  si f no tiene cuerpo entonces devuelve                      un extern
   para cada p ∈ params(f): ámbito[p] ← ámbito[p] + 1          la regla (Fun)
   pila ← [visita(cuerpo(f))]
   mientras pila no esté vacía:
@@ -171,6 +172,7 @@ función recorre(f):                        ámbito[v]: los binders abiertos de 
         apila desliga(v), visita(e₂), liga(v), visita(e₁)      salen al revés
       si no
         apila los hijos de e, del último al primero
+  para cada p ∈ params(f): ámbito[p] ← ámbito[p] − 1          deja ámbito limpio para la siguiente
 ```
 
 ### `defer`, `panic` y `recover`: la frontera del pase

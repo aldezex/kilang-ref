@@ -135,7 +135,7 @@ función insertarSeparadores(toks):
     emite t
     si t es «(», «[» o «{»  →  lo apila
     si t es «)», «]» o «}»  →  si el contador de su tipo marca una abierta,
-                                desapila hasta ella; si no, nada
+                                desapila lo que hay encima de ella, y ella; si no, nada
     si t es StringHead      →  abre un nivel de interpolación
     si t es StringTail      →  cierra el nivel y lo que se abrió dentro de él
     si t es el Error de un string sin cerrar  →  abre un nivel

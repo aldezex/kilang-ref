@@ -70,9 +70,10 @@ El receptor (capítulo 1) es un parámetro más: por valor, el método recibe un
 Al llamar a un método de puntero, Go toma la dirección por ti:
 
 ```math
-x.m() con m de receptor *T   ≡   (&x).m()
-válido  ⟺  x es direccionable (una variable, un elemento de slice o un campo de algo
-                                direccionable; no un elemento de mapa)
+x de tipo T, m de receptor *T:   x.m()   ≡   (&x).m()
+válido  ⟺  x es direccionable (p. ej. una variable, *p, un elemento de slice o de un
+                                array direccionable, un campo de algo direccionable;
+                                no un elemento de mapa ni el resultado de una llamada)
 ```
 
 Un elemento de un mapa (la tabla hash de Go) no es direccionable: esa llamada no compila.
@@ -168,10 +169,12 @@ El pseudocódigo lo resume:
 
 ```pseudo
 función panic(v)
-  para cada función de la pila, de la más reciente a la más antigua
-    ejecuta sus llamadas diferidas, de la última a la primera
-    si una de ellas llama directamente a recover() entonces
-      recover devuelve v; el panic se detiene y esa función vuelve a quien la llamó
+  para cada función G de la pila, de la más reciente a la más antigua
+    para cada llamada diferida D de G, de la última a la primera
+      ejecuta D; si D llama directamente a recover(), recover devuelve v
+      si D recuperó así y vuelve sin un panic nuevo entonces
+        el panic se detiene: se ejecutan las demás diferidas de G
+        y G vuelve a quien la llamó
   imprime v y la pila; sale con código 2
 ▹ fuera de una función diferida, recover() devuelve nil
 ```

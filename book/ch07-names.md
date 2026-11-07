@@ -245,7 +245,7 @@ aplicar(F) = cada f sobre las posiciones de la línea original = aplicarlos de d
 
 ```math
 E0203:  a < b < c  ⟶  a < b && b < c         solo si b es un token: un nombre, un entero o un booleano
-E0201:  escribe el cierre que falta           solo si el token hallado ∈ { }, ], ;, let } ∪ { comienzos de item }
+E0201:  escribe el cierre que falta           solo si el token hallado es `}`, `]`, `;`, `let` o el comienzo de un item
 ```
 
 En `print(1 2)` falta una coma, no un `)`: el `2` no está en el conjunto.
@@ -258,7 +258,7 @@ Es documentación ejecutable. `docs/errors/E0301.md` explica su código y trae u
 C = { los códigos que construye el fuente }        D = { c | existe docs/errors/c.md }
 C = D
 erróneo e de c:     c ∈ códigos(e)  ∧  códigos(e) ∖ {c} = also(e)
-corregido e de c:   c ∉ códigos(e)  ∧  códigos(e) = also(e)  ∧  (also(e) = ∅ ⇒ sale con 0 y no escribe nada)
+corregido e de c:   c ∉ códigos(e)  ∧  códigos(e) = also(e)  ∧  (also(e) = ∅ ⇒ sale con 0 y no escribe nada en stderr)
                                                          ∧  (also(e) ≠ ∅ ⇒ sale con ≠ 0)
 ```
 

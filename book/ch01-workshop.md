@@ -73,7 +73,7 @@ x es visible desde otro paquete   ⟺  x se declara en el bloque del paquete (o 
 A puede importar R/internal/X      ⟺  A está en el árbol de R
 ```
 
-La primera hace de `pub`: otro paquete ve `driver.Version`, *exportado*, pero no `goVersion`. La segunda hace de `pub(crate)`, por directorios: así `internal/driver` no es una API pública que luego no puedas cambiar.
+La primera hace de `pub`: otro paquete ve `driver.Version`, *exportado*, pero no `goVersion`. La segunda hace de `pub(crate)`, por directorios: así `internal/driver` no es una API pública que no puedas cambiar.
 
 ### Lo básico del lenguaje
 
@@ -144,7 +144,7 @@ función usageError(c, error) → código de salida
   devuelve 2
 ```
 
-Sus códigos: 2, orden mal escrita; 0, respuesta pedida, también la ayuda; 1, respuesta que no se pudo escribir.
+Sus códigos: 2, orden mal escrita; 0, respuesta pedida, como `ki version -h`; 1, respuesta que no se pudo escribir.
 
 ### Por qué `Version` es una constante
 
@@ -245,8 +245,8 @@ Porque `Write` de `bytes.Buffer` tiene receptor puntero: el método es de `*byte
 - `go.mod` declara módulo, versión mínima y toolchain; `GOTOOLCHAIN=local` no descarga otro.
 - Un directorio es un paquete; la mayúscula exporta; `internal/` limita quién importa.
 - `io.Writer` es cualquier cosa con `Write`; `error` es un valor.
-- La CLI es una tabla de comandos: error de uso, stderr y 2; ayuda, stdout y 0.
-- La versión de Go sale de `debug.ReadBuildInfo`, y la de `ki`, de una constante.
+- La CLI es una tabla de comandos: error de uso, stderr y 2; ayuda de un comando, stdout y 0.
+- La versión de Go sale de `debug.ReadBuildInfo`; la de `ki`, de una constante.
 - Rojo antes que verde: un test que nunca has visto fallar no prueba nada.
 - `ci/ci-local.sh` es la puerta de cada sesión; la CI lo repite.
 - La compilación cruzada atrapa la deriva cuando es barata.

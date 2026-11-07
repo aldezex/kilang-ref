@@ -35,26 +35,26 @@ Una expresión compuesta empuja un marco y pasa a su primera parte; un valor va 
 **Las transiciones** van de un estado `⟨c, E, K⟩` al siguiente. Evaluar una expresión:
 
 ```math
-⟨n, E, K⟩                  ⟶  ⟨↑n, E, K⟩          igual con true, false, () y una función f
-⟨x, E, K⟩                  ⟶  ⟨↑E[slot(x)], E, K⟩
-⟨let x = e₁; e₂, E, K⟩     ⟶  ⟨e₁, E, let(x, e₂) · K⟩
-⟨p(e₁, …), E, K⟩           ⟶  ⟨e₁, E, prim(p, _) · K⟩
-⟨e₀(e₁, …, eₙ), E, K⟩      ⟶  ⟨e₀, E, arg() · K⟩
-⟨match e { … }, E, K⟩      ⟶  ⟨e, E, match(…) · K⟩
+⟨n, E, K⟩                  ⟶  ⟨↑n, E, K⟩                  (Lit) igual con true, false, () y una función f
+⟨x, E, K⟩                  ⟶  ⟨↑E[slot(x)], E, K⟩         (Var)
+⟨let x = e₁; e₂, E, K⟩     ⟶  ⟨e₁, E, let(x, e₂) · K⟩     (Let)
+⟨p(e₁, …), E, K⟩           ⟶  ⟨e₁, E, prim(p, _) · K⟩     (Prim)
+⟨e₀(e₁, …, eₙ), E, K⟩      ⟶  ⟨e₀, E, arg() · K⟩          (App)
+⟨match e { … }, E, K⟩      ⟶  ⟨e, E, match(…) · K⟩        (Match)
 ```
 
 Devolver un valor al marco de arriba:
 
 ```math
-⟨↑v, E, let(x, e₂) · K⟩      ⟶  ⟨e₂, E[slot(x) ↦ v], K⟩
-⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨e₂, E, prim(p, v) · K⟩      si aridad(p) = 2
-⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨↑p(v), E, K⟩                si aridad(p) = 1
-⟨↑v₂, E, prim(p, v₁) · K⟩    ⟶  ⟨↑p(v₁, v₂), E, K⟩
-⟨↑v, E, prim(p, …) · K⟩      ⟶  Halt 101                     en lugar de las dos anteriores, si p falla: un desbordamiento,
-                                                             como neg_int(MinInt64), o una división por 0
-⟨↑v, E, arg(vs) · K⟩         ⟶  ⟨eₖ, E, arg(vs v) · K⟩       k = |vs v|, si k ≤ n
-⟨↑v, E, match(…) · K⟩        ⟶  ⟨el brazo que encaja con v, E, K⟩
-⟨↑v, E, ret(E′) · K⟩         ⟶  ⟨↑v, E′, K⟩
+⟨↑v, E, let(x, e₂) · K⟩      ⟶  ⟨e₂, E[slot(x) ↦ v], K⟩      (Liga)
+⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨e₂, E, prim(p, v) · K⟩      (Prim₁) si aridad(p) = 2
+⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨↑p(v), E, K⟩                (Unario) si aridad(p) = 1
+⟨↑v₂, E, prim(p, v₁) · K⟩    ⟶  ⟨↑p(v₁, v₂), E, K⟩           (Prim₂)
+⟨↑v, E, prim(p, …) · K⟩      ⟶  Halt 101                     (PrimFalla) en lugar de (Unario) o (Prim₂), si p falla:
+                                                             un desbordamiento, como neg_int(MinInt64), o una división por 0
+⟨↑v, E, arg(vs) · K⟩         ⟶  ⟨eₖ, E, arg(vs v) · K⟩       (Arg) k = |vs v|, si k ≤ n
+⟨↑v, E, match(…) · K⟩        ⟶  ⟨el brazo que encaja con v, E, K⟩     (Brazo)
+⟨↑v, E, ret(E′) · K⟩         ⟶  ⟨↑v, E′, K⟩                  (Ret)
 
 let, prim, arg, match y ret son letFrame, primFrame, argFrame, matchFrame y retFrame;
 cada marco recuerda su expresión: e₂ y eₖ son sus argumentos segundo y k-ésimo;
@@ -67,7 +67,7 @@ Cuando `|vs v| = n + 1`, `arg` llama; las reglas se prueban en orden:
 vs v = f v₁ … vₙ        la función y sus n argumentos
 E_f                     el entorno nuevo, con cada vᵢ en el slot de su parámetro
 
-⟨↑v, E, arg(vs) · K⟩            ⟶  ⟨↑f(v₁, …, vₙ), E, K⟩          si f no tiene cuerpo: un extern
+⟨↑v, E, arg(vs) · K⟩            ⟶  ⟨↑f(v₁, …, vₙ), E, K⟩          (Extern) si f no tiene cuerpo: un extern
 ⟨↑v, E, arg(vs) · ret(E′) · K⟩  ⟶  ⟨cuerpo(f), E_f, ret(E′) · K⟩   (Cola)
 ⟨↑v, E, arg(vs) · K⟩            ⟶  ⟨cuerpo(f), E_f, ret(E) · K⟩    (Llamada) si |K| < límite
 ⟨↑v, E, arg(vs) · K⟩            ⟶  Halt 103                       (Desborde) si |K| ≥ límite
@@ -162,7 +162,7 @@ Un `panic` de Go es un bug del compilador, y el `recover` de cada pase (capítul
 
 Una llamada está **en cola** si es lo último que hace su función: arriba ya hay un `retFrame`, y nada espera el valor salvo el retorno. (Cola) reutiliza ese marco y **sustituye** el entorno; (Llamada) empuja uno nuevo, con el entorno de quien llama.
 
-Las reglas de `let` y `match` no empujan nada al seguir: `count(n - 1)` en un brazo está en cola. En `n + sumTo(n - 1)`, no, porque un `primFrame` espera.
+(Liga) y (Brazo) no empujan nada al seguir: `count(n - 1)` en un brazo está en cola. En `n + sumTo(n - 1)`, no, porque un `primFrame` espera.
 
 Ki aún no tiene `while` (capítulo 23): su bucle es la llamada de cola, de profundidad constante.
 
@@ -550,7 +550,7 @@ Aquí, ocho goroutines escriben a la vez y otra llama a `Flush` hasta el `close(
 
 #### `print` y los externs
 
-`print` es un `Fun` sin cuerpo: `enter` lo ejecuta por la tabla, sin marco ni entorno.
+`print` es un `Fun` sin cuerpo: `enter` aplica (Extern) y lo ejecuta por la tabla, sin marco ni entorno.
 
 {{file ch10-s4 internal/interp/externs.go}}
 

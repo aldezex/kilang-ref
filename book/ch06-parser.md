@@ -69,12 +69,15 @@ item  = { attr } [ 'pub' ] 'fn' lower '(' [ param { ',' param } ] ')' [ '->' typ
 attr  = '#' '[' lower [ '(' string { ',' string } ')' ] ']'
 param = lower [ ':' type ]
 type  = Upper | '(' ')'
-block = '{' { stmt sep } [ expr ] '}'          sep = Newline | ';'
-stmt  = 'let' lower [ ':' type ] '=' expr | expr
+block = '{' { stmt sep } [ expr [ Newline ] | let ] '}'      sep = Newline | ';'
+stmt  = let | expr
+let   = 'let' lower [ ':' type ] '=' expr
 if    = 'if' expr block [ 'else' ( block | if ) ]
 
 'x': un token   [ x ]: opcional   { x }: cero o más veces   |: alternativas   ( ): agrupa
 lower, Upper, string, Newline: clases de token
+un Newline justo antes de '}' no hace sentencia a la expresión: sigue siendo la cola,
+el valor del bloque; un let nunca es la cola, y no necesita sep antes de '}'
 ```
 
 Las expresiones necesitan más. Con una función por nivel de precedencia, `1` pasaría por seis llamadas hasta el literal. **Pratt** pone los niveles en una tabla de **potencias de enlace**: cuanto mayor, más sujeta el operador a sus operandos.
@@ -96,14 +99,14 @@ El algoritmo:
 ```pseudo
 función pratt(minBP):
   lhs ← prefijo()
-  repite:
+  repetir:
     t ← token actual
     si t es «(» entonces
-      cuenta t en la cadena; si pasa del límite, sal del bucle
+      súmalo a la cadena; si pasa del límite, sal del bucle
       consume t; lhs ← llamada(lhs, argumentos), o un error si no se cierran
       sigue con la vuelta siguiente
     si t no es un operador binario, o su potencia bp < minBP, sal del bucle
-    cuenta t en la cadena; si pasa del límite, sal del bucle
+    súmalo a la cadena; si pasa del límite, sal del bucle
     consume t; rhs ← pratt(bp + 1)
     si la expresión se abandonó, sal del bucle
     lhs ← (op lhs rhs)
@@ -113,7 +116,7 @@ función pratt(minBP):
 
 función prefijo():
   si el token es «-» o «!» entonces
-    consúmelo; entra en un nivel (si pasa de MaxNesting, E0204 y un error)
+    consúmelo; entra a un nivel más (si pasa de MaxNesting, E0204 y un error)
     devuelve (op pratt(7))
   si no, devuelve una primaria: literal, nombre, grupo, bloque o if
 ```
@@ -135,12 +138,12 @@ Detenerse en el primer error obliga a compilar una vez por error. Ki sigue, con 
 ```pseudo
 función syncStatement():
   abiertos ← pila vacía              // lo que abren los tokens saltados
-  repite:
+  repetir:
     t ← token actual
     si t es Eof, devuelve
     si abiertos está vacía y t es Newline, «;» o un let que empieza línea, devuelve
     si t es «}» y abiertos no tiene ninguna «{», devuelve
-    apila o cierra t en abiertos, como la regla de línea; avanza
+    apila o cierra t sobre abiertos, como la regla de línea; avanza
 ```
 
 Tras un error en un item (una definición de primer nivel), el parser salta, igual, hasta un token que pueda empezar otro.

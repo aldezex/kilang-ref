@@ -82,7 +82,7 @@ función unifica(esperado, hallado, razón):
         si no, si e o f es {error} entonces pasa al siguiente        // 2: sin ligar nada
         si no, si e es una variable v entonces liga_si_cabe(v, f)    // 3
         si no, si f es una variable v entonces liga_si_cabe(v, e)
-        si no, si e y f son funciones con tantos parámetros:         // 4
+        si no, si e y f son funciones con el mismo número de parámetros:  // 4
             si (e, f) ∉ vistos entonces
                 vistos ← vistos ∪ {(e, f)}
                 apila los resultados y cada par de parámetros, el primero arriba
@@ -148,7 +148,8 @@ Hay dos juicios, *inferir* y *comprobar*, y cada regla dice cómo se obtiene uno
   Γ ⊢ e₁ ⇒ τ      τ ∈ {Int, Bool}      Γ ⊢ e₂ ⇒ τ′      τ ~ τ′
  ───────────────────────────────────────────────────────────── (Eq)    igual con !=
                    Γ ⊢ e₁ == e₂ ⇒ Bool
-  si τ es aún una variable, τ ∈ {Int, Bool} se juzga al final
+  si τ es aún una variable, se juzga al final: se rechaza solo si resultó ser una
+  función o (); si sigue libre, se acepta: fn same(x, y) -> Bool { x == y }, sin llamadas
 
   Γ ⊢ e ⇒ τ′      τ ~ τ′
  ──────────────────────── (Sub)          el error va sobre e entero
@@ -221,7 +222,7 @@ Una secundaria se pinta bajo el fragmento de la primaria: la del parámetro de `
 Un mensaje con dos tipos usa una sola serie de letras: si cada uno empezara en `a`, parecerían hablar de la misma variable.
 
 ```math
-nombre(v) = la k-ésima letra, con k el orden en que v aparece al escribir el esperado y luego el hallado
+nombre(v) = la k-ésima letra (tras la z, a1, b1…), con k el orden en que v aparece al escribir el esperado y luego el hallado
 una variable que está en los dos tipos lleva la misma letra
 ```
 

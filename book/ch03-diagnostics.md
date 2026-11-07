@@ -208,7 +208,8 @@ función RenderHuman(d)
   escribe g espacios y « |»
   para cada línea con etiquetas, en orden
     si hubo otra antes y no es la anterior + 1 entonces escribe g espacios y « ...»
-    escribe el número, alineado a g cifras, « | » y el texto sin espacios finales
+    escribe el número, alineado a g cifras, y « |»
+    si el texto, sin espacios finales, no es vacío, escribe un espacio y el texto
       si la línea pasa de 200 bytes: solo una ventana alrededor de sus etiquetas,
       con «...» en cada corte; cols y lo cuentan desde la ventana,
       y las marcas se desplazan 3 columnas si se cortó el principio
@@ -221,7 +222,7 @@ función RenderHuman(d)
 
 ### La cabecera de un golden
 
-Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Es estricta: una clave repetida o ausente es error; una mal escrita, texto libre que no comprueba nada.
+Cada programa de `tests/`, el otro tipo de golden, dice en sus primeros comentarios cómo se ejecuta y qué debe pasar. Es estricta: repetir una clave u omitir `test` o `run` es error; una mal escrita no comprueba nada.
 
 ```math
 cabecera     ::= { línea que empieza por "//" }        la primera que no, la cierra
