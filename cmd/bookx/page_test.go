@@ -889,6 +889,94 @@ func TestPage(t *testing.T) {
 		}
 	})
 
+	t.Run("source_of_the_page_has_math_pseudocode_and_the_practice_band", func(t *testing.T) {
+		// The behaviour is tested with Node below; this is what runs everywhere.
+		for _, s := range []string{
+			"family=Noto+Sans+Mono:", "family=Noto+Sans+Math",
+			"--font-math:", "figure.math", "figure.pseudo", ".practice-band",
+			`"Fórmula"`, `"Pseudocódigo"`, ">Práctica<", "Desde aquí, a escribir código",
+		} {
+			if !bytes.Contains(indexHTML, []byte(s)) {
+				t.Errorf("the page does not contain %q", s)
+			}
+		}
+		// The rules of a formula line up only in a monospaced face, with no ligatures.
+		i := bytes.Index(indexHTML, []byte("--font-math:"))
+		if i < 0 {
+			t.FailNow()
+		}
+		if line := string(indexHTML[i : i+bytes.IndexByte(indexHTML[i:], ';')]); !strings.HasSuffix(line, "monospace") || !strings.Contains(line, `"Noto Sans Mono"`) {
+			t.Errorf("the math font stack has to be monospaced: %s", line)
+		}
+		if !bytes.Contains(indexHTML, []byte("figure.math pre, figure.pseudo pre {")) {
+			t.Error("math and pseudocode need a rule of their own for their pre")
+		}
+	})
+
+	t.Run("a_math_block_is_a_formula", func(t *testing.T) {
+		rule := "Γ ⊢ e₁ : τ → σ    Γ ⊢ e₂ : τ\n──────────────────────────── (App)\n       Γ ⊢ e₁ e₂ : σ"
+		got := renderWithPage(t, "```math\n"+rule+"\n```", "```math\na < b && c > d\n```", "```math\n"+numbered(40)+"\n```")
+		if want := `<figure class="math"><figcaption>Fórmula</figcaption><pre>` + rule + `</pre></figure>`; got[0] != want {
+			t.Errorf("want\n%s\ngot\n%s", want, got[0])
+		}
+		if want := `<pre>a &lt; b &amp;&amp; c &gt; d</pre>`; !strings.Contains(got[1], want) {
+			t.Errorf("want %q in %q", want, got[1])
+		}
+		if strings.Contains(got[2], "<details") || strings.Contains(got[2], "Copiar") || strings.Contains(got[2], "hljs") {
+			t.Errorf("a long formula is shown whole, with no fold, no copy button and no highlighting: %.200q", got[2])
+		}
+	})
+
+	t.Run("a_pseudo_block_is_pseudocode_with_its_keywords_in_bold", func(t *testing.T) {
+		code := "función f(xs)\n  sea t = 0\n  para cada x en xs hacer\n    si x < 0 entonces devuelve casi\n    si no t ← t + x\n  fin\n  mientras t repetir sino hasta t\n  devuelve enésimo(t)"
+		got := renderWithPage(t, "```pseudo\n"+code+"\n```", "```pseudo\n"+numbered(40)+"\n```")
+		want := `<figure class="pseudo"><figcaption>Pseudocódigo</figcaption><pre>` +
+			"<b>función</b> f(xs)\n  <b>sea</b> t = 0\n  <b>para cada</b> x <b>en</b> xs <b>hacer</b>\n    <b>si</b> x &lt; 0 <b>entonces</b> <b>devuelve</b> casi\n" +
+			"    <b>si no</b> t ← t + x\n  <b>fin</b>\n  <b>mientras</b> t <b>repetir</b> sino <b>hasta</b> t\n  <b>devuelve</b> enésimo(t)" +
+			`</pre></figure>`
+		if got[0] != want {
+			t.Errorf("want\n%s\ngot\n%s", want, got[0])
+		}
+		if strings.Contains(got[1], "<details") {
+			t.Errorf("long pseudocode is shown whole: %.200q", got[1])
+		}
+	})
+
+	t.Run("the_practice_band_stands_before_tests_primero", func(t *testing.T) {
+		got := renderWithPage(t,
+			"## Teoría\nUno.\n## Tests primero\nDos.\n",
+			":::more Un tema\n## Tests primero\n:::\n### Tests primero\n",
+		)
+		band := `<div class="practice-band" role="separator" aria-label="Práctica. Desde aquí, a escribir código">` +
+			`<span class="practice-word">Práctica</span><span class="practice-line">Desde aquí, a escribir código</span></div>`
+		if want := `<div class="section-break"></div>` + band + `<h2 id="sec-2">Tests primero</h2>`; !strings.Contains(got[0], want) || strings.Count(got[0], "practice-band") != 1 {
+			t.Errorf("want one band just before the heading:\n%s\nin\n%s", want, got[0])
+		}
+		if strings.Contains(got[1], "practice-band") {
+			t.Errorf("only the h2 of the running text opens the practice: %.300q", got[1])
+		}
+	})
+
+	t.Run("the_list_of_sections_is_grouped_in_theory_and_practice", func(t *testing.T) {
+		var got []struct {
+			Nav string `json:"nav"`
+		}
+		md := "## Objetivo\n## Teoría\n### Tipos\n## Tests primero\n## Implementación\n### Sesión 1\n"
+		runPageScript(t, sectionsMain, []string{md, "## Uno\n## Dos\n"}, &got)
+		li := func(id, level, text string) string {
+			return `<li class="level-` + level + `"><a href="#ch05" data-sec="sec-` + id + `">` + text + `</a></li>`
+		}
+		want := `<h2>En este capítulo</h2>` +
+			`<h3 class="nav-half">Teoría</h3><ol>` + li("1", "2", "Objetivo") + li("2", "2", "Teoría") + li("3", "3", "Tipos") + `</ol>` +
+			`<h3 class="nav-half">Práctica</h3><ol>` + li("4", "2", "Tests primero") + li("5", "2", "Implementación") + li("6", "3", "Sesión 1") + `</ol>`
+		if got[0].Nav != want {
+			t.Errorf("want the list\n%s\ngot\n%s", want, got[0].Nav)
+		}
+		if want := `<h2>En este capítulo</h2><ol>` + li("1", "2", "Uno") + li("2", "2", "Dos") + `</ol>`; got[1].Nav != want {
+			t.Errorf("a chapter with no practice keeps one list:\n%s\ngot\n%s", want, got[1].Nav)
+		}
+	})
+
 	t.Run("the_styles_and_the_script_agree_on_the_margin_column", func(t *testing.T) {
 		// The script moves the asides at the width where the styles float them.
 		const query = "(min-width: 1380px)"

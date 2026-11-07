@@ -10,12 +10,13 @@ import (
 	"strings"
 )
 
-// This file is `bookx lint`: the rules of section 5 of
+// This file is `bookx lint`: the rules of sections 4 and 5 of
 // docs/superpowers/process/prose.md that a machine can check. Two kinds of rule:
-// an error is a limit that can be counted, and it fails from chapter 11 on; a
-// warning comes from a list of words, where only a reader can tell a real case
-// from a coincidence, so it never fails. The chapters before chapter 11 are
-// measured and never fail.
+// an error is a limit that can be counted, and a warning comes from a list of
+// words, where only a reader can tell a real case from a coincidence, so it
+// never fails. The errors on the shape of a chapter (shapeRules: its sections
+// and its theory half) fail every chapter; the limits of section 5 fail from
+// chapter 11 on, and the chapters before it are only measured against them.
 
 // The limits of a chapter (prose.md, section 5).
 const (
@@ -24,6 +25,24 @@ const (
 	maxFoldWords  = 150
 	maxTitleWords = 8
 	maxTableWords = 200
+)
+
+// chapterSections are the level-2 sections of every chapter, in the order of
+// book/README.md: the theory half, then the practice half from practiceStart on.
+var chapterSections = []string{"Objetivo", "Teoría", "Preguntas de repaso", "Resumen", "Go en el trabajo", "Tests primero", "Implementación", "Ejecútalo", "Ejercicios"}
+
+// practiceStart is the section that opens the practice half of a chapter.
+const practiceStart = "Tests primero"
+
+// shapeRules are the rules on the shape of a chapter. Their errors fail every
+// chapter, not only those from firstStrictChapter on.
+var shapeRules = map[string]bool{"sections": true, "theory-half": true}
+
+// theoryFences are the languages of the blocks that the theory half never
+// holds, and theoryDirectives the directives: Go code, commands and their output.
+var (
+	theoryFences     = map[string]bool{"go": true, "console": true}
+	theoryDirectives = map[string]bool{"file": true, "diff": true, "listing": true, "reftest": true, "cards": true}
 )
 
 // Severities of a finding of the lint.
@@ -181,8 +200,112 @@ func lintChapter(markdown string, cards []Card) lintResult {
 			r.Counts.WhysOverLimit++
 		}
 	}
+	lintShape(markdown, add)
 	slices.SortStableFunc(r.Issues, func(a, b lintIssue) int { return a.Line - b.Line })
 	return r
+}
+
+// lintShape checks the shape of a chapter (prose.md, section 4): its level-2
+// sections are those of book/README.md, each once and in their order, and the
+// theory half, everything before `## Tests primero`, holds no Go block, no
+// console block and no directive of code. Only the headings of the running text
+// are sections: one inside a container or a fence is not. A heading out of
+// order is named with the first section of README that it should precede. A
+// missing section is reported on the line of the next section it should
+// precede, or after the last one there is. Without `## Tests primero` the
+// theory half has no end, and only the missing section is reported.
+func lintShape(markdown string, add lintAdd) {
+	lines := proseLines([]byte(markdown))
+	order := map[string]int{}
+	for i, s := range chapterSections {
+		order[s] = i
+	}
+	at := map[string]int{} // line of the first heading of each section
+	highest := -1          // the furthest section in order seen so far
+	practice := 0          // line of `## Tests primero`; 0 until it is found
+	for _, l := range lines {
+		title, ok := strings.CutPrefix(l.Text, "## ")
+		if l.Kind != lineText || l.Container != "" || !ok {
+			continue
+		}
+		title = strings.TrimSpace(title)
+		i, known := order[title]
+		switch {
+		case !known:
+			add(l.Number, lintError, "sections", "`## %s` is not a section of book/README.md", title)
+			continue
+		case at[title] != 0:
+			add(l.Number, lintError, "sections", "`## %s` is repeated: the first is on line %d", title, at[title])
+			continue
+		}
+		at[title] = l.Number
+		if title == practiceStart {
+			practice = l.Number
+		}
+		if i < highest {
+			next := ""
+			for _, s := range chapterSections[i+1:] {
+				if at[s] != 0 {
+					next = s
+					break
+				}
+			}
+			add(l.Number, lintError, "sections", "`## %s` is out of order: book/README.md puts it before `## %s`", title, next)
+			continue
+		}
+		highest = i
+	}
+	last := 1
+	if len(lines) > 0 {
+		last = lines[len(lines)-1].Number
+	}
+	for i, s := range chapterSections {
+		if at[s] != 0 {
+			continue
+		}
+		before, after := "", ""
+		for _, n := range chapterSections[i+1:] {
+			if at[n] != 0 {
+				before = n
+				break
+			}
+		}
+		for _, p := range slices.Backward(chapterSections[:i]) {
+			if at[p] != 0 {
+				after = p
+				break
+			}
+		}
+		switch {
+		case before != "":
+			add(at[before], lintError, "sections", "`## %s` is missing: it goes before `## %s`", s, before)
+		case after != "":
+			add(last, lintError, "sections", "`## %s` is missing: it goes after `## %s`", s, after)
+		default:
+			add(1, lintError, "sections", "`## %s` is missing", s)
+		}
+	}
+
+	if practice == 0 {
+		return
+	}
+	const where = "before `## " + practiceStart + "`: Go code, commands and code directives go in the practice half"
+	for _, l := range lines {
+		if l.Number >= practice {
+			break
+		}
+		switch {
+		case l.Kind == lineFenceOpen:
+			if f := strings.Fields(l.FenceInfo); len(f) > 0 && theoryFences[f[0]] {
+				add(l.Number, lintError, "theory-half", "a ```%s block %s", f[0], where)
+			}
+		case l.Kind == lineText && isDirectiveLine(l.Text):
+			text := strings.TrimSpace(l.Text)
+			if f := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(text, "{{"), "}}")); len(f) > 0 && theoryDirectives[f[0]] {
+				add(l.Number, lintError, "theory-half", "`%s` %s", text, where)
+			}
+		}
+	}
 }
 
 // lintAdd is how a rule reports a finding.
@@ -248,8 +371,8 @@ func lintNames(l proseLine, names *regexp.Regexp, add lintAdd) {
 // runLint is `bookx lint <file>...`: it prints each finding as
 // `<file>:<line>: <severity> <rule>: <detail>` and one line of counts per file.
 // The cards of a chapter are read from tests/chNN.tests next to its prose. The
-// exit code is 1 when a chapter from firstStrictChapter on has an error, or a
-// file cannot be read.
+// exit code is 1 when a chapter has an error of shapeRules, a chapter from
+// firstStrictChapter on has any error, or a file cannot be read.
 func runLint(args []string, stdout, stderr io.Writer) int {
 	_, files, ok := parseArgs("lint", args, -1, false, stderr)
 	if !ok {
@@ -278,11 +401,14 @@ func runLint(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		r := lintChapter(string(text), cards)
-		errorCount, warnings := 0, 0
+		errorCount, shapeErrors, warnings := 0, 0, 0
 		for _, i := range r.Issues {
 			fmt.Fprintf(stdout, "%s:%s\n", f, i)
 			if i.Severity == lintError {
 				errorCount++
+				if shapeRules[i.Rule] {
+					shapeErrors++
+				}
 			} else {
 				warnings++
 			}
@@ -299,11 +425,11 @@ func runLint(args []string, stdout, stderr io.Writer) int {
 		c := r.Counts
 		tail := ""
 		if !strict {
-			tail = fmt.Sprintf(" (report only: before chapter %d)", firstStrictChapter)
+			tail = fmt.Sprintf(" (before chapter %d only sections and theory-half fail)", firstStrictChapter)
 		}
 		fmt.Fprintf(stdout, "lint %s: flow %d/%d, folds %d/%d (%d words), open tables %d/%d, whys %d (over %d: %d, over %d: %d), %d errors, %d warnings%s\n",
 			f, c.Flow, budgetWords, c.Folds, maxFolds, c.FoldWords, c.TableWords, maxTableWords, c.Whys, whyTargetWords, c.WhysOverTarget, whyMaxWords, c.WhysOverLimit, errorCount, warnings, tail)
-		if strict && errorCount > 0 {
+		if (strict && errorCount > 0) || shapeErrors > 0 {
 			code = exitFail
 		}
 	}

@@ -70,6 +70,8 @@ func TestFlowWords(t *testing.T) {
 			{"a fence that is never closed swallows the rest", "uno\n```\ndos tres\n", 1},
 			{"the closing fence may be longer", "```\nx y\n`````\nuno\n", 1},
 			{"a fence closes only with its own character", "~~~\nx\n```\ny z\n~~~\nuno\n", 1},
+			{"a math block", "Uno.\n```math\nΓ ⊢ e : τ\n───────────\nΓ ⊢ f e : σ\n```\nDos.\n", 2},
+			{"a pseudocode block", "Uno.\n```pseudo\nfunción f(x)\n  si x entonces devuelve 1\nfin\n```\nDos.\n", 2},
 		})
 	})
 

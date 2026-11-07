@@ -2,7 +2,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,300..700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,300..700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Noto+Sans+Mono:wght@400;600&family=Noto+Sans+Math&display=swap">
 <style>
 /* Layout: one grid. A column for the table of contents, then the page: a text column and a margin column for the asides.
    Every block starts on the left edge of the text. A block is either as wide as the text or as wide as the page, and
@@ -34,6 +34,10 @@
   --font-body: "Source Serif 4", "Source Serif Pro", "Georgia", "Times New Roman", serif;
   --font-ui: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-code: "IBM Plex Mono", "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+  /* Formulas: a monospaced face with wide Unicode cover (Greek, arrows, ⊢, ∀, box drawing), so a rule's bar keeps its
+     length; the math faces only lend a glyph that no mono has. Pseudocode reads as the book's code, with the same fallbacks. */
+  --font-math: "Noto Sans Mono", "DejaVu Sans Mono", "JuliaMono", "Cascadia Mono", "Noto Sans Math", "STIX Two Math", "Cambria Math", monospace;
+  --font-pseudo: "IBM Plex Mono", var(--font-math);
   --measure: 70ch;
   /* The scale of the page's air. */
   --s-1: 8px; --s-2: 16px; --s-3: 24px; --s-4: 40px; --s-5: 64px; --s-6: 96px; --s-7: 128px;
@@ -47,7 +51,7 @@
   --s-end: 56px; --s-end-gap: 24px;
   --s-case: 20px; --s-case-head: 6px; --s-case-field: 10px;
   --size-h2: 29px; --weight-h2: 500; --size-h3: 22px; --size-h4: 17px; --size-num: 84px; --size-facts: 14px; --line-facts: 1.5;
-  --size-code: 13.5px; --code-x: 14px; --code-cap-y: 8px; --code-top: 8px; --code-bottom: 13px;
+  --size-math: 16px; --size-code: 13.5px; --code-x: 14px; --code-cap-y: 8px; --code-top: 8px; --code-bottom: 13px;
   --size-table: 14px; --line-table: 1.45; --cell-x: 14px; --cell-y: 7px; --size-table-code: 12.5px;
   --size-fold: 14px; --fold-y: 8px; --fold-indent: 24px; --fold-body-top: 6px; --fold-body-bottom: 12px; --fold-code-top: 4px; --fold-last: 8px;
   --box-top: 11px; --box-right: 16px; --box-bottom: 12px; --box-left: 14px; --box-label-gap: 5px;
@@ -188,6 +192,21 @@ figure.code pre { margin: 0; padding: var(--code-top) var(--code-x) var(--code-b
 .hljs-meta { color: var(--tok-com); }
 .hljs-addition { background: var(--mark-add); }
 .hljs-deletion { background: var(--mark-del); }
+/* The theory's own notation. A formula stands centred with air around it; pseudocode starts on the edge of the text, as
+   code does. Both are preformatted, so the bar of an inference rule keeps its length, and neither folds nor scrolls away. */
+figure.math, figure.pseudo { margin: var(--s-block) 0; }
+figure.math { text-align: center; }
+figure.math figcaption, figure.pseudo figcaption { margin-bottom: var(--s-1); font-family: var(--font-ui); font-size: 12.5px; font-weight: 500; line-height: 1.4; color: var(--ink-soft); }
+figure.math pre, figure.pseudo pre { margin: 0; overflow-x: auto; color: var(--ink); font-variant-ligatures: none; tab-size: 4; }
+figure.math pre { display: inline-block; box-sizing: border-box; max-width: 100%; vertical-align: top; padding: var(--s-1) var(--s-2); text-align: left; font-family: var(--font-math); font-size: var(--size-math); line-height: 1.6; }
+figure.pseudo pre { padding: var(--s-1) 0 var(--s-1) var(--s-3); border-left: 2px solid var(--rule-strong); font-family: var(--font-pseudo); font-size: var(--size-code); line-height: 1.75; }
+figure.pseudo pre b { font-weight: 600; color: var(--ink); }
+/* Where the theory ends: one band before the first section of the practice. */
+.practice-band { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s-1) var(--s-3);
+  margin: 0 0 var(--s-5); padding: var(--s-3); border-top: 4px solid var(--red); background: var(--tint); font-family: var(--font-ui); }
+.practice-word { font-family: var(--font-body); font-size: calc(var(--size-h2) * 1.3); font-weight: 400; line-height: 1; color: var(--red); }
+.practice-line { font-size: var(--size-facts); line-height: 1.4; color: var(--ink-soft); }
+.page > .practice-band + h2 { margin-top: 0; }
 /* containers: exercises, solutions, comparisons, notes. All of them are one neutral box or one neutral line. Each kind
    sets --icon, and --c when it is the reader's to act on. The icon is a mask, so it takes the colour of its label in both
    themes; it lives in the styles because the text of a label or a summary has to stay what it is. */
@@ -295,7 +314,7 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
     --s-end: var(--s-7); --s-end-gap: var(--s-5);
     --s-case: var(--s-4); --s-case-head: var(--s-1); --s-case-field: var(--s-2);
     --size-h2: 38px; --weight-h2: 400; --size-h3: 25px; --size-h4: 20px; --size-num: 120px; --size-facts: 15px; --line-facts: 1.6;
-    --size-code: 14.5px; --code-x: var(--s-4); --code-cap-y: var(--s-2); --code-top: var(--s-2); --code-bottom: var(--s-3);
+    --size-math: 18.5px; --size-code: 14.5px; --code-x: var(--s-4); --code-cap-y: var(--s-2); --code-top: var(--s-2); --code-bottom: var(--s-3);
     --size-table: 15.5px; --line-table: 1.6; --cell-x: var(--s-3); --cell-y: 14px; --size-table-code: 13.5px;
     --size-fold: 15.5px; --fold-y: 21px; --fold-indent: 30px; --fold-body-top: var(--s-2); --fold-body-bottom: var(--s-4); --fold-code-top: 0; --fold-last: 0;
     --box-top: 28px; --box-right: var(--s-4); --box-bottom: 32px; --box-left: var(--s-4); --box-label-gap: var(--s-2);
@@ -307,7 +326,8 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
   main { padding-left: max(64px, env(safe-area-inset-left, 0px)); padding-right: max(40px, env(safe-area-inset-right, 0px)); padding-block: 0 var(--s-7); }
   .page { max-width: none; margin: 0; }
   .page > * { box-sizing: border-box; max-width: var(--text); }
-  .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end, .page > .welcome, .page > section.exercise, .page > section.review, .page > hr { max-width: none; }
+  .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end, .page > .welcome, .page > section.exercise, .page > section.review, .page > hr, .page > .practice-band { max-width: none; }
+  .practice-band { padding: var(--s-4); }
   /* A rule over a section runs the width of the page; its words keep the measure of the text. */
   .section-break { display: block; height: var(--s-section); }
   .page h2 { margin-top: 0; }
@@ -339,7 +359,7 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
    There an aside is a quiet note in the margin, with no box of its own. */
 @media (min-width: 1380px) {
   .page { max-width: calc(var(--text) + var(--gutter) + var(--margin-max)); }
-  .page > h2 { clear: both; }
+  .page > h2, .page > .practice-band { clear: both; }
   .page > figure.code, .page > .table-wrap, .page > details.fold, .page > .end, .page > section.exercise, .page > section.review { clear: right; }
   .page > aside.from, .page > aside.note {
     float: right; clear: right; max-width: none; width: calc(100% - var(--text) - var(--gutter));
@@ -356,7 +376,7 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
 }
 /* Room for a third column: the sections of the chapter, always in sight. */
 @media (min-width: 1760px) {
-  :root { --text: 648px; --gutter: 72px; --margin-max: 340px; --size-h2: 40px; --size-h3: 26px; --size-code: 15px; }
+  :root { --text: 648px; --gutter: 72px; --margin-max: 340px; --size-h2: 40px; --size-h3: 26px; --size-code: 15px; --size-math: 19px; }
   body { font-size: 20px; }
   .chapter-head h1 { font-size: 58px; }
   main { display: grid; grid-template-columns: minmax(0, calc(var(--text) + var(--gutter) + var(--margin-max))) 224px; column-gap: 72px; justify-content: center; align-items: start; }
@@ -365,6 +385,10 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
     font-size: 15px; line-height: 1.45; }
   .chapter-nav::-webkit-scrollbar { display: none; }
   .chapter-nav h2 { margin: 0 0 var(--s-2); font-family: var(--font-ui); font-size: 14px; font-weight: 500; line-height: 22px; color: var(--ink-soft); }
+  /* The two halves of the chapter, each with its own list. */
+  .chapter-nav .nav-half { margin: var(--s-3) 0 var(--s-1); font-family: var(--font-ui); font-size: 12.5px; font-weight: 600; line-height: 20px; color: var(--ink-soft); }
+  .chapter-nav h2 + .nav-half { margin-top: 0; }
+  .chapter-nav .nav-half + ol { margin-bottom: 0; }
   /* One mark for the current section: the script gives it its place, and it slides there. */
   .chapter-nav ol { position: relative; list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-left: 1px solid var(--rule); }
   .chapter-nav ol::before { content: ""; position: absolute; left: -1px; top: 0; width: 2px; height: var(--mark-h, 0); background: var(--red); transform: translateY(var(--mark-y, 0)); }
@@ -424,6 +448,17 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
   const inlineCode = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
   const CONTAINER_LABEL = { exercise: "Ejercicio", solution: "Solución", review: "Pregunta", answer: "Respuesta", note: "Nota", bug: "Bug encontrado" };
   const MODE_LABEL = { test: "test de referencia", file: "fichero", diff: "cambio", listing: "fragmento" };
+  // The labels of a ```math and a ```pseudo block.
+  const MATH_LABEL = "Fórmula";
+  const PSEUDO_LABEL = "Pseudocódigo";
+  // The keywords of the pseudocode, set in bold. The longest go first, so «si no» is not read as «si». A keyword is a
+  // whole word: no letter, digit or _ on either side, so «casi» and «sino» stay as they are.
+  const PSEUDO_KEYWORDS = ["para cada", "si no", "entonces", "mientras", "devuelve", "función", "repetir", "hacer", "hasta", "sea", "fin", "si", "en"];
+  const PSEUDO_KEYWORD_RE = new RegExp("(?<![\\p{L}\\p{N}_])(" + PSEUDO_KEYWORDS.join("|") + ")(?![\\p{L}\\p{N}_])", "gu");
+  // The section that opens the practice half of a chapter, and the band the page draws before it.
+  const PRACTICE_START = "Tests primero";
+  const PRACTICE_BAND = '<div class="practice-band" role="separator" aria-label="Práctica. Desde aquí, a escribir código">' +
+    '<span class="practice-word">Práctica</span><span class="practice-line">Desde aquí, a escribir código</span></div>';
   // A code block longer than this many lines renders inside a closed fold.
   const FOLD_LINES = 30;
   // The header that `bookx` writes for {{cards}}, as the text of its cells.
@@ -432,6 +467,7 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
   const FOLDED_KINDS = new Set(["solution", "answer", "more"]);
   let foldLong = true; // chapterHtml turns it off while it renders the body of a folded container
   let sections = null; // chapterHtml points it at its list while it renders running text
+  let practice = false; // whether chapterHtml has gone past the start of the practice half
   const FFFD_MARKER = "%%U+FFFD%%";
   // The width at which the styles float the asides into the margin column.
   const MARGIN_QUERY = "(min-width: 1380px)";
@@ -510,6 +546,8 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
   const renderer = new marked.Renderer();
   renderer.code = function (code, info) {
     const { lang, attrs } = parseInfo(info);
+    if (lang === "math") return `<figure class="math"><figcaption>${MATH_LABEL}</figcaption><pre>${esc(code)}</pre></figure>`;
+    if (lang === "pseudo") return `<figure class="pseudo"><figcaption>${PSEUDO_LABEL}</figcaption><pre>${esc(code).replace(PSEUDO_KEYWORD_RE, "<b>$1</b>")}</pre></figure>`;
     const language = lang === "ki" ? "rust" : lang === "sh" ? "bash" : lang === "goasm" ? "x86asm" : lang;
     let html;
     try {
@@ -535,12 +573,15 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
     const cases = (body.match(/<tr>/g) || []).length;
     return `<details class="fold cards"><summary>Tarjetas de test · ${cases} casos</summary><div class="fold-body">${caseList(body)}</div></details>`;
   };
-  // The h2 and h3 of the running text get an id and enter the list of sections, not those inside a container.
+  // The h2 and h3 of the running text get an id and enter the list of sections, not those inside a container. The first
+  // h2 «Tests primero» opens the practice half: the band goes before it, and it and the sections after it are practice.
   renderer.heading = function (text, level) {
     if (!sections || (level !== 2 && level !== 3)) return `<h${level}>${text}</h${level}>\n`;
     const id = "sec-" + (sections.length + 1);
-    sections.push({ id, level, html: text });
-    return `${level === 2 ? '<div class="section-break"></div>' : ""}<h${level} id="${id}">${text}</h${level}>\n`;
+    const opens = level === 2 && !practice && text.trim() === PRACTICE_START;
+    if (opens) practice = true;
+    sections.push({ id, level, html: text, practice });
+    return `${level === 2 ? '<div class="section-break"></div>' : ""}${opens ? PRACTICE_BAND : ""}<h${level} id="${id}">${text}</h${level}>\n`;
   };
   marked.setOptions({ renderer, gfm: true });
 
@@ -582,6 +623,7 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
     let exercise = 0;
     const out = [];
     const list = [];
+    practice = false;
     for (const b of splitContainers(body)) {
       foldLong = !FOLDED_KINDS.has(b.kind);
       sections = b.kind === "" ? list : null;
@@ -623,10 +665,15 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
       movedAsides.push({ aside: el, anchor });
     }
   }
+  // The list of sections; a chapter with a practice half has two, under Teoría and Práctica. Either way the entries are
+  // the sections in their order, one li each.
   function chapterNavHtml(list, n) {
     if (!list.length) return "";
-    const items = list.map((s) => `<li class="level-${s.level}"><a href="#ch${pad(n)}" data-sec="${s.id}">${s.html}</a></li>`);
-    return `<h2>En este capítulo</h2><ol>${items.join("")}</ol>`;
+    const items = (part) => part.map((s) => `<li class="level-${s.level}"><a href="#ch${pad(n)}" data-sec="${s.id}">${s.html}</a></li>`).join("");
+    const at = list.findIndex((s) => s.practice);
+    if (at < 0) return `<h2>En este capítulo</h2><ol>${items(list)}</ol>`;
+    const half = (label, part) => part.length ? `<h3 class="nav-half">${label}</h3><ol>${items(part)}</ol>` : "";
+    return `<h2>En este capítulo</h2>${half("Teoría", list.slice(0, at))}${half("Práctica", list.slice(at))}`;
   }
   // The index of the last heading past the line, given the tops of the headings in the window; at the end of the page,
   // the last one, because a short last section may never reach the line. -1 if there are no sections.
@@ -717,13 +764,14 @@ details.fold > .fold-body > :last-child { margin-bottom: var(--fold-last); }
       visible[far] = false;
       items[far].hidden = true;
     }
-    const list = nav.querySelector("ol");
-    const top = list.getBoundingClientRect().top;
+    // The mark lives in the list of the current section: the other half's list has none.
+    nav.querySelectorAll("ol").forEach((ol) => ol.style.setProperty("--mark-h", "0px"));
     nav.querySelectorAll("a[data-sec]").forEach((a, i) => {
       if (i !== index) { a.removeAttribute("aria-current"); return; }
       a.setAttribute("aria-current", "location");
+      const list = a.closest("ol");
       const link = a.getBoundingClientRect();
-      list.style.setProperty("--mark-y", `${link.top - top}px`);
+      list.style.setProperty("--mark-y", `${link.top - list.getBoundingClientRect().top}px`);
       list.style.setProperty("--mark-h", `${link.height}px`);
       // On a window too short even for the h2, the list scrolls by itself; the page must not move for this.
       const box = nav.getBoundingClientRect();
