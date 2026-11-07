@@ -8,30 +8,17 @@ milestone: `unknown name 'fibb'; did you mean 'fib'?`, con el fix-it que lo sust
 
 ## Objetivo
 
-Al terminar, `ki check` sabe qué significa cada nombre. Si no significa nada, lo dice como rustc, con el arreglo:
+Al terminar, `ki check` sabe qué significa cada nombre. Si no significa nada, lo dice como rustc, con el arreglo. Aquí, `fibb` es un descuido:
 
-```console
-$ cat fib.ki
+```ki
 fn fib(n: Int) -> Int {
   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
 }
-
-fn main() {
-  print(fib(20))
-}
-$ build/bin/ki check fib.ki
-error[E0301]: unknown name `fibb`
- --> fib.ki:2:25
-  |
-2 |   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
-  |                         ^^^^ not found in this scope
-  = help: did you mean `fib`?
-  |
-2 -   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
-2 +   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 ```
 
-Las dos últimas líneas son un *fix-it*. La sesión 4 lleva a ese nivel los diecinueve códigos y crea el catálogo `docs/errors`: el hito, camino de M1.
+`ki check` lo da por desconocido, propone `fib` y añade un *fix-it*, la línea antes y después del arreglo (en «Ejecútalo»).
+
+La sesión 4 lleva a ese nivel los diecinueve códigos y crea el catálogo `docs/errors`: el hito, camino de M1.
 
 ## Teoría
 
@@ -39,10 +26,10 @@ Las dos últimas líneas son un *fix-it*. La sesión 4 lleva a ese nivel los die
 
 El capítulo 4 enseñó lo básico de `map[K]V`, con su `nil` que se lee y no se escribe. Falta lo que importa a un resolvedor:
 
-- **El orden** cambia a propósito, y ninguna salida del compilador depende de él: lo que se muestra se ordena antes, por id o por nombre.
-- **Semántica de referencia.** Pasar un map copia un puntero a su tabla: si `add(m)` hace `m["b"] = 2`, cambia el map de quien la llama.
-- **Claves comparables.** La clave tiene que admitir `==`, y un slice no: `map[[]byte]int` no compila.
-- **`clear(m)`** lo vacía, y sigue sin ser `nil`.
+- **El orden** cambia a propósito: lo que el compilador muestra se ordena antes, por id o por nombre.
+- **Semántica de referencia.** Pasar un map copia un puntero a su tabla: si la función que lo recibe añade una clave, quien la llama la ve.
+- **Claves comparables.** La clave admite `==`; un slice no, y `map[[]byte]int` no compila.
+- **`clear(m)`** lo vacía, sin volverlo `nil`.
 - **Tablas suizas.** Por dentro, grupos de 8 casillas; el orden sigue siendo aleatorio.
 
 :::from Rust
@@ -53,11 +40,11 @@ Nadie es dueño del map: copiar la variable comparte la tabla, lo que en Rust pe
 
 `slices.Sorted(maps.Keys(m))` saca de un map una lista que no depende del azar: `maps.Keys` da un `iter.Seq[K]` (capítulo 4) sin orden, y `slices.Sorted` lo recoge ordenado.
 
-Los ámbitos (más abajo) escriben su propio iterador: `visible` da los nombres que un ámbito ve. Devuelve `func(yield func(base.Symbol) bool)`, recorre de dentro afuera, ordena cada ámbito por `Symbol` y para cuando `yield` devuelve `false`.
+Un iterador propio entrega cada valor a `yield` y para cuando este devuelve `false`: los ámbitos tendrán uno.
 
 ### `//go:embed` y el preludio
 
-`print` lo declara `stdlib/prelude.ki`, que viaja dentro del binario. `//go:embed stdlib`, sobre `var Stdlib embed.FS`, hace que `go build` copie el directorio en el ejecutable. `embed.FS` es un `fs.FS` (`io/fs`): `fs.ReadFile(Stdlib, "stdlib/prelude.ki")` lo lee al ejecutar, con el directorio en la ruta.
+`print` lo declara `stdlib/prelude.ki`, que viaja dentro del binario: una directiva hace que `go build` copie el directorio en el ejecutable, y el programa lo lee como un sistema de ficheros, con el directorio en la ruta.
 
 `embed.go` vive en la raíz porque `embed` solo lee del directorio del paquete hacia abajo, y solo la raíz tiene `stdlib/` debajo.
 
@@ -65,32 +52,109 @@ Los ámbitos (más abajo) escriben su propio iterador: `visible` da los nombres 
 
 La **distancia de Levenshtein** es el menor número de inserciones, borrados y sustituciones que convierten una cadena en otra: `fibb` está a una de `fib`.
 
-Es programación dinámica: la casilla `[i][j]` es la distancia entre los `i` primeros bytes de `a` y los `j` primeros de `b`, y sale de tres vecinas:
+Es programación dinámica. `d(i, j)` es la distancia entre los `i` primeros bytes de `a` y los `j` primeros de `b`, y sale de tres vecinas (`[aᵢ ≠ bⱼ]` vale 1 si los bytes difieren y 0 si no):
 
-```text
-d[i][j] = min(d[i-1][j] + 1,                       // delete a[i-1]
-              d[i][j-1] + 1,                       // insert b[j-1]
-              d[i-1][j-1] + (a[i-1] != b[j-1]))    // keep or replace
+```math
+d(i, 0) = i            d(0, j) = j            borra i bytes, construye j desde nada
+d(i, j) = min( d(i−1, j) + 1,              borra aᵢ
+               d(i, j−1) + 1,              inserta bⱼ
+               d(i−1, j−1) + [aᵢ ≠ bⱼ] )   conserva o sustituye
+distancia(a, b) = d(|a|, |b|)
 ```
 
-La fila 0 vale `j` (construir `j` bytes desde nada) y la columna 0, `i`. Cada fila solo mira la anterior, así que bastan dos slices que se intercambian con `prev, cur = cur, prev`. Se cuentan bytes: `é` y `e` están a distancia 2.
+Cada fila solo mira la anterior, así que bastan dos:
+
+```pseudo
+función distancia(a, b):
+    prev ← [0, 1, …, |b|]                      // la fila 0
+    para i de 1 a |a|:
+        cur[0] ← i
+        para j de 1 a |b|:
+            cur[j] ← min(prev[j] + 1, cur[j−1] + 1, prev[j−1] + [aᵢ ≠ bⱼ])
+        intercambia prev y cur
+    devuelve prev[|b|]
+```
+
+Se cuentan bytes: `é` y `e` están a distancia 2.
 
 ### Tablas de símbolos, ámbitos y sombreado
 
 Resolver es decidir a qué se refiere cada `ExprName`: una definición o una variable local.
 
-- **Definiciones** (`Def`, y su `DefID`): cada función de cada módulo. Se buscan primero las del módulo y luego las `pub` del preludio: tu `print` tapa el de la biblioteca.
+- **Definiciones** (`Def`, y su `DefID`): cada función de cada módulo.
 - **Variables locales** (`Local`, y su `LocalID`): cada parámetro y cada `let`. Dos `let x` seguidos son dos variables.
 - **Ámbitos**: un map de nombres a `LocalID` con un puntero al de fuera. Los parámetros son uno; cada bloque, otro dentro.
-- **Sombreado**: gana el ámbito más interior. Un `let` liga *después* de resolver su inicializador: en `let x = x`, la `x` de la derecha es la de fuera.
 
-**Tres decisiones:**
+```pseudo
+// tops[m]: nombre → primera Def del módulo m;  rotas[m]: nombres de items ilegibles
+// res: la tabla lateral, por expresión
+función resolver(módulos):
+    para cada item de cada módulo m:                     // pasada 1: definiciones
+        si es una función entonces
+            comprueba sus atributos                      // E0304, E0305
+            crea su Def                                  // también si se repite
+            si m ya define el nombre entonces informa E0302   // el nombre sigue con la primera
+            si no, tops[m][nombre] ← la Def
+        si es un item ilegible con nombre entonces rotas[m] ← rotas[m] ∪ {nombre}
+    para cada Def f, en orden:                           // pasada 2: cuerpos
+        ámbito ← un ámbito con los parámetros de f
+        si f tiene cuerpo entonces recorre(cuerpo de f)
 
-- **Tablas laterales**: los pases no mutan el árbol. Lo aprendido va en slices por id, como `ExprRes[ExprID]`.
-- **Dos pasadas**: primero las definiciones, luego los cuerpos. Así `main` puede llamar a una función posterior.
-- **Sugerencias deterministas**: los candidatos se ordenan, y a igual distancia gana el primero en el alfabeto.
+función recorre(e):
+    si e es un nombre x entonces res[e] ← busca(x)
+    si no, si e es un bloque { s₁ … sₙ cola } entonces
+        ámbito ← un ámbito nuevo dentro del actual
+        para cada sᵢ:
+            si sᵢ es let x = ini entonces
+                recorre(ini)                             // x aún no se ve
+                liga x a una variable nueva en el ámbito
+            si no, recorre(sᵢ)
+        si hay cola entonces recorre(cola)
+        ámbito ← el de fuera
+    si no, recorre cada hijo de e
+
+función busca(x):
+    para cada ámbito, del actual hacia fuera:
+        si liga x entonces devuelve esa variable
+    si el módulo define x entonces devuelve su primera Def
+    si x ∈ rotas[módulo] entonces devuelve error         // el parser ya lo dijo
+    si el módulo no es el preludio y el preludio define x con pub entonces devuelve esa Def
+    informa E0301:
+        si x es el nombre de un let cuyo inicializador se recorre, señala el más interior
+        si el sink aún no ha descartado ningún error, añade la sugerencia
+    devuelve error
+```
+
+Las dos pasadas dejan que `main` llame a una función posterior. `busca` es el **sombreado**: gana el ámbito más interior, luego el módulo y al final lo `pub` del preludio; tu `print` tapa el de la biblioteca.
+
+Un `let` liga *después* de su inicializador: en `let x = x`, la `x` de la derecha es la de fuera; si no hay ninguna, el E0301 señala el `let`. Llamar a una función de firma ilegible no suma un E0301 al error del parser.
+
+Lo aprendido va en **tablas laterales**: los pases no mutan el árbol, escriben en slices por id, como `ExprRes[ExprID]`.
 
 Del resolvedor: E0302, función repetida; E0304, `#[extern]` fuera de la biblioteca estándar; y E0305, atributo desconocido. E0303, sin `main`, llega con `ki run` en el capítulo 10.
+
+### «Did you mean»: la sugerencia
+
+```pseudo
+función candidatos():
+    devuelve, ordenados y sin repetir, las variables visibles,
+        las Def del módulo y las pub del preludio
+
+función sugiere(nombre, candidatos):
+    si |nombre| > 128 entonces devuelve nada
+    límite ← max(1, ⌊|nombre| / 3⌋)
+    mejor ← nada
+    para cada c en candidatos:
+        si | |c| − |nombre| | > límite entonces pasa al siguiente
+        d ← distancia(nombre, c)
+        si d ≤ límite y (mejor = nada o d < d_mejor o (d = d_mejor y c < mejor)) entonces
+            mejor ← c
+    devuelve mejor
+```
+
+El umbral da una edición a un nombre corto y una más por cada tres bytes: `fibb` admite una; `zzzzzz`, dos. Como cada edición cambia el largo en uno como mucho, un candidato que difiere más que el umbral ni se mide.
+
+**Es determinista:** la lista llega ordenada y el empate lo gana el alfabeto. No se mide un nombre de más de 128 bytes (la distancia cuesta el producto de los largos), ni cuando el sink ya ha descartado un error, pasados los 100: nadie vería la ayuda.
 
 ### El listón: errores al nivel de rustc
 
@@ -157,28 +221,130 @@ Comparten la anatomía de un `Diagnostic`:
 
 **Una ayuda genérica es peor que ninguna.** «check your syntax» enseña a ignorar la línea de ayuda, también cuando sirve. Donde no hay nada concreto, Ki calla.
 
-Desde la sesión 4, los diecinueve códigos cumplen ese listón (spec 7.3), y cada código nuevo nace completo.
-
-Los capítulos 3, 5 y 6 no se reescriben, porque muestran la salida de sus etiquetas: una fe de erratas remite aquí.
+Desde la sesión 4, los diecinueve códigos cumplen ese listón, y cada código nuevo nace completo. Los capítulos 3, 5 y 6 no se reescriben, porque muestran la salida de sus etiquetas: una fe de erratas remite aquí.
 
 ### Los fix-its
 
-**Un fix-it es una edición `{span, replacement}`:** span vacío, inserción; reemplazo vacío, borrado. Se muestra como el diff de rustc, bajo la ayuda: `N - original` y `N + parcheada`. rustc lo usa cuando la edición borra algo y marca las inserciones con `+`; Ki usa siempre el par.
+```math
+fix-it f = (span [lo, hi), texto)        lo = hi: inserción        texto = "": borrado
 
-**Dos ediciones en una línea** usan las posiciones de la **original**, que equivale a aplicarlas de derecha a izquierda. En `x = fibb + gammaa`, cambiar `fibb` por `f` primero correría tres bytes la otra.
+si un diagnóstico d lleva los fix-its F ≠ ∅:
+    ayuda(d) ≠ ""
+    ∀ f ∈ F:  fichero(f) = fichero(primaria(d))  ∧  f no cruza un salto de línea
+    ∀ f, g ∈ F en una línea, f antes que g:  f.hi ≤ g.lo
+aplicar(F) = cada f sobre las posiciones de la línea original = aplicarlos de derecha a izquierda
+```
 
-**Un fix-it sin ayuda, en otro fichero, multilínea o solapado** es un fallo del pase que lo construyó: `RenderHuman` hace panic con el motivo.
+**Se muestra como el diff de rustc**, bajo la ayuda: `N - original` y `N + parcheada`. rustc lo usa cuando la edición borra algo y marca las inserciones con `+`; Ki usa siempre el par.
+
+**Las reglas del bloque** son un contrato del pase que construye el diagnóstico: romper una es un fallo del compilador, y el renderizador hace panic con el motivo.
+
+**Dos ediciones en una línea** usan las posiciones de la original. En `x = fibb + gammaa`, cambiar `fibb` por `f` primero correría tres bytes la otra.
 
 **No hay edición donde no sería mecánica:** qué dígitos querías, qué nombre lleva tu variable. A veces solo vale en un caso:
 
-- E0203 reescribe `a < b < c` como `a < b && b < c` solo si `b` es un token.
-- Un E0201 escribe el cierre solo si el token hallado es `}`, `]`, `;`, `let` o el comienzo de un item: en `print(1 2)` falta una coma, no un `)`.
+```math
+E0203:  a < b < c  ⟶  a < b && b < c         solo si b es un token: un nombre, un entero o un booleano
+E0201:  escribe el cierre que falta           solo si el token hallado ∈ { }, ], ;, let } ∪ { comienzos de item }
+```
+
+En `print(1 2)` falta una coma, no un `)`: el `2` no está en el conjunto.
 
 ### El catálogo
 
-Es documentación ejecutable. `docs/errors/E0301.md` explica su código y trae un ejemplo erróneo y uno corregido, cada uno en su valla de código. `tests/errors_docs_test.go` los ejecuta: el erróneo tiene que dar su código y el corregido, salir limpio. Un código sin fichero, o un fichero sin código, rompe la CI.
+Es documentación ejecutable. `docs/errors/E0301.md` explica su código y trae un ejemplo erróneo y uno corregido. Un test los ejecuta y exige:
+
+```math
+C = { los códigos que construye el fuente }        D = { c | existe docs/errors/c.md }
+C = D
+erróneo e de c:     c ∈ códigos(e)  ∧  códigos(e) ∖ {c} = also(e)
+corregido e de c:   c ∉ códigos(e)  ∧  códigos(e) = also(e)  ∧  (also(e) = ∅ ⇒ sale con 0 y no escribe nada)
+                                                         ∧  (also(e) ≠ ∅ ⇒ sale con ≠ 0)
+```
+
+Un código sin fichero, o al revés, rompe la CI. `also` son los otros códigos que un ejemplo da por fuerza.
 
 **El test saca los códigos del fuente, leído como Go.** `parser.ParseFile` (`go/parser`) da el árbol de un fichero, y `ast.Inspect` lo recorre buscando las llamadas a `diag.E` y `diag.W`. Una expresión regular contaría comentarios y cadenas, y el fichero de un código quitado seguiría vivo.
+
+## Preguntas de repaso
+
+:::review
+¿Por qué un `let` liga su nombre después de resolver el inicializador y no antes?
+:::
+
+:::answer
+Porque así `let x = x + 1` lee la `x` de fuera, que es lo que quien lo escribe quiere, y `let x = x` sin otra `x` es un error en el origen. Si ligara antes, la `x` de la derecha sería la propia variable, todavía sin valor.
+:::
+
+:::review
+¿Por qué las ayudas de «did you mean» no pueden depender del orden de un map, si el resultado «casi siempre» sale igual?
+:::
+
+:::answer
+Porque «casi siempre» es un test que falla en la CI una de cada pocas veces y una ayuda que cambia entre dos ejecuciones del mismo fichero. Con empates, el primero que llega depende de la semilla; el desempate alfabético y la lista ordenada lo fijan.
+:::
+
+:::review
+¿Por qué el renderizador hace panic ante un fix-it sin ayuda, en vez de pintarlo sin más?
+:::
+
+:::answer
+Porque es un fallo del pase que construyó el diagnóstico, no del programa que se compila: un parche sin la frase que dice qué hace no es una sugerencia. Un panic con el motivo lo hace visible en el primer test que lo pinta, también en los fuzz del parser y del análisis, que renderizan cada diagnóstico.
+:::
+
+:::review
+¿Por qué E0203 solo ofrece la edición cuando el operando central es un token?
+:::
+
+:::answer
+Porque la edición copia ese operando a la derecha del `&&`. Un nombre o un número se pueden copiar sin cambiar nada; `f(x)` o un bloque se evaluarían dos veces, con sus efectos.
+:::
+
+:::review
+`let a = g(1` seguido de una línea `h(2)` da el E0201 con su secundaria, sin ayuda ni edición, aunque faltaba un `)`. ¿Es un fallo del listón?
+:::
+
+:::answer
+No: el listón pide la edición solo cuando es mecánica. El token hallado es `h`, un nombre, que también seguiría a una coma olvidada, `g(1, h(2))`; un `)` arreglaría un caso y estropearía el otro, como en `print(1 2)`. rustc lo resuelve con niveles de confianza (`Applicability`, en «Go en el trabajo»); Ki, callando.
+:::
+
+:::review
+¿Qué gana el catálogo con ejecutar sus ejemplos, si un texto bien revisado ya los explica?
+:::
+
+:::answer
+Que no envejecen en silencio: si un código desaparece o deja de salir en su ejemplo, o si el parser empieza a admitir cadenas en una expresión, la CI falla en esa sesión. La palabra `also=` está hecha para eso: hay que quitarla en cuanto el E0201 deje de salir.
+:::
+
+## Resumen
+
+- Un map es un puntero a una tabla: copiarlo es compartirla.
+- Nada visible depende del orden de un map.
+- El preludio viaja en el binario.
+- La distancia de edición es programación dinámica con dos filas.
+- Resolver son dos pasadas, con ámbitos encadenados y tablas laterales.
+- Gana el ámbito más interior; un `let` no se ve en su inicializador.
+- Una sugerencia está dentro del umbral, y el alfabeto desempata.
+- Un diagnóstico explica el error en su sitio y solo da ayuda concreta.
+- Los fix-its usan las posiciones originales.
+- `docs/errors` trae ejemplos que un test ejecuta.
+
+## Go en el trabajo
+
+**Un map ganó casi siempre a un slice ordenado.** Una clave string hay que hashearla y compararla byte a byte: por eso el compilador busca por `Symbol`. Lo que tardó una búsqueda en orden salteado:
+
+| Búsqueda | Clave `string` | Clave `uint32` |
+|---|---|---|
+| `map`, 8 claves | unos 8 ns | 4,3 ns |
+| `map`, 1 000 claves | 11 ns | 6,8 ns |
+| `map`, 100 000 claves | 24 ns | 13,5 ns |
+| `slices.BinarySearch` sobre un slice ordenado | perdió en los tres tamaños | solo empató o ganó por poco con 8 claves |
+
+**La iteración aleatoria en CI.** Un test que compara las claves de un map, sin ordenar, pasa en tu portátil y a veces falla en la CI. `go test -count=100` lo destapa.
+
+**Los mensajes como producto.** La *rustc-dev-guide* va más allá que Ki: pide evitar la pregunta «did you mean». Cada sugerencia lleva su `Applicability`, un nivel de confianza, que Ki no distingue todavía.
+
+**`go vet` señala.** Sobre `fmt.Printf("%d\n", name)` con un `string`, dice qué y dónde, sin ayuda. Ninguna edición adivina si sobra el verbo o el argumento.
 
 ## Tests primero
 
@@ -186,11 +352,22 @@ Es documentación ejecutable. `docs/errors/E0301.md` explica su código y trae u
 
 Escribe el test, míralo fallar, implementa lo justo, y solo entonces despliega la referencia.
 
-Las tarjetas describen el final del capítulo. Las que cambian en la sesión 4 se escriben antes como en `git show ref/ch07-sK:book/tests/ch07.tests`, con la `K` de su sesión; cada sesión dice cuáles. Los ayudantes están en esa misma etiqueta.
+Las tarjetas describen el final del capítulo. Las que cambian en la sesión 4 se escriben antes como en `git show ref/ch07-sK:book/tests/ch07.tests`, con la `K` de su sesión. Los ayudantes están en esa misma etiqueta.
 
 ## Implementación
 
 ### Sesión 1: el preludio, `embed.go` y las definiciones (≈ 2 h)
+
+#### Go: `//go:embed` y `embed.FS`
+
+```go
+// go build copies the directory into the binary.
+//
+//go:embed stdlib
+var Stdlib embed.FS // an fs.FS (io/fs)
+
+prelude, err := fs.ReadFile(kilang.Stdlib, "stdlib/prelude.ki") // read at run time
+```
 
 #### Los tests, en rojo
 
@@ -255,7 +432,7 @@ func ErrorCodes(p *Program) []string
 
 {{file ch07-s1 internal/sema/resolve.go}}
 
-**`collect`** crea una `Def` por función, también por la repetida.
+**`collect`** es la pasada 1 de `resolver` en la Teoría, aún sin los items ilegibles.
 
 **El parser:** sin cuerpo, exige `#[extern]`.
 
@@ -279,6 +456,14 @@ Al terminar: tus tests en verde, commit y etiqueta `ch07-s1`; compárate con `re
 
 ### Sesión 2: ámbitos, variables locales y sombreado (≈ 2 h)
 
+#### Go: un iterador propio
+
+```go
+// package iter: visible returns one. It hands each value to yield and
+// stops as soon as yield returns false.
+type Seq[V any] func(yield func(V) bool)
+```
+
 #### Los tests, en rojo
 
 1. **Escribe T07.18–T07.25,** con T07.20 en su forma de esta sesión. `scope_internal_test.go` es `package sema`: `scope` no se exporta. La interfaz interna:
@@ -297,10 +482,12 @@ func (s *scope) visible() iter.Seq[base.Symbol] // for the suggestions of sessio
 
 {{file ch07-s2 internal/sema/scope.go}}
 
+**`visible`** recorre de dentro afuera y ordena cada ámbito por `Symbol`.
+
 {{diff ch07-s1..ch07-s2 internal/sema/resolve.go}}
 
 - **`bodies`** recorre las `Def`, no los items: cada variable tiene por dueña la definición que se recorre, también la segunda de un E0302.
-- **`name`** busca en los ámbitos y luego en las definiciones. Sin nada, informa E0301 y deja `ResError`: los pases siguientes lo dan por explicado.
+- **`name`** es `busca`, de la Teoría, sin rotas, etiqueta del `let` en curso ni sugerencia (sesiones 3 y 4). Los pases siguientes dan su `ResError` por explicado.
 
 Y un comentario:
 
@@ -341,9 +528,7 @@ func (r *resolver) candidates() []string
 
 {{diff ch07-s2..ch07-s3 internal/sema/resolve.go}}
 
-- **El umbral** es `max(1, len(name)/3)`: `fibb` admite una edición; `zzzzzz`, dos.
-- **El descarte por largo**: cada edición cambia el largo en uno como mucho, así que no se mide un candidato que difiere en más que el umbral.
-- **El freno**: pasados los 100 errores, no se buscan candidatos. La ayuda iría a un diagnóstico que nadie ve.
+`EditDistance` y `suggest` son `distancia` y `sugiere`, de la Teoría, sin el límite de 128 bytes (sesión 4). El freno del sink está en `name`.
 
 Y dos comentarios:
 
@@ -431,7 +616,7 @@ Un ejemplo va en una valla `ki erroneous` o `ki corrected`, con estas palabras d
 {{diff ch07-s3..ch07-s4 internal/diag/render.go}}
 
 :::more Cómo se pinta el diff
-- **`groupFixits`** comprueba las reglas de la teoría (ayuda, mismo fichero, una línea, sin solapes) y agrupa por línea.
+- **`groupFixits`** comprueba las reglas de los fix-its de la Teoría y agrupa por línea.
 - **`showWindow` y `writeNumbered`** salen de lo que pinta las etiquetas: el diff y la línea citada usan la misma función y no pueden pintar distinto (tabuladores, U+FFFD, ventana).
 :::
 
@@ -468,7 +653,7 @@ Un ejemplo va en una valla `ki erroneous` o `ki corrected`, con estas palabras d
 
 {{diff ch07-s3..ch07-s4 internal/syntax/recover.go}}
 
-:::more Dónde y cuándo el parser ofrece la edición
+:::more Dónde coloca el parser la edición
 - **`prev`** da el último token, sin contar los `Newline`, cuyo final es el principio de la línea siguiente. El cierre que falta va tras él, no ante el token hallado.
 - **`closerIsMissing`** es la lista de tokens de la teoría; la secundaria sobre el delimitador abierto sale siempre.
 - **`OneLine`.** Dentro de corchetes un salto de línea es un espacio, así que un atributo puede ocupar tres líneas. Borrarlo cruzaría saltos, y entonces solo hay ayuda.
@@ -480,9 +665,7 @@ Un ejemplo va en una valla `ki erroneous` o `ki corrected`, con estas palabras d
 
 {{diff ch07-s3..ch07-s4 internal/sema/suggest.go}}
 
-- **`initializing`** apila los `let` en curso: un nombre desconocido que es el de uno de ellos apunta al más interior.
-- **`broken`** guarda los nombres que conservan los `ItemError`: llamar a una función de firma rota no suma un E0301.
-- **`maxSuggestLen`.** La distancia cuesta el producto de los dos largos.
+Completan `busca` y `sugiere` de la Teoría: **`initializing`** apila los `let` en curso, **`broken`** es el conjunto de las rotas y **`maxSuggestLen`** es el límite de 128 bytes.
 
 Y un comentario:
 
@@ -538,7 +721,30 @@ Al terminar: tus tests en verde, commit y etiqueta `ch07-s4`; compárate con `re
 
 ## Ejecútalo
 
-Con `go build -o build/bin/ki ./cmd/ki`, el `fib.ki` del objetivo da lo de arriba y sale con 1. Un fichero con cuatro errores:
+Con `go build -o build/bin/ki ./cmd/ki`, el programa del objetivo da el error del hito y sale con 1:
+
+```console
+$ cat fib.ki
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  print(fib(20))
+}
+$ build/bin/ki check fib.ki
+error[E0301]: unknown name `fibb`
+ --> fib.ki:2:25
+  |
+2 |   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
+  |                         ^^^^ not found in this scope
+  = help: did you mean `fib`?
+  |
+2 -   if n < 2 { n } else { fibb(n - 1) + fib(n - 2) }
+2 +   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+```
+
+Un fichero con cuatro errores:
 
 ```console
 $ cat bad.ki
@@ -757,81 +963,3 @@ El test, `TestCLI/check_fix`, usa el `fib` del objetivo con un `main` que dice `
 
 Ordenadas de izquierda a derecha y sin la guarda, el `fibb` → `fib` de la línea 2 acorta el texto un byte, así que `prnt` → `print` cae un byte a la derecha: `pprintfib(20))`.
 :::
-
-## Preguntas de repaso
-
-:::review
-¿Por qué un `let` liga su nombre después de resolver el inicializador y no antes?
-:::
-
-:::answer
-Porque así `let x = x + 1` lee la `x` de fuera, que es lo que quien lo escribe quiere, y `let x = x` sin otra `x` es un error en el origen. Si ligara antes, la `x` de la derecha sería la propia variable, todavía sin valor.
-:::
-
-:::review
-¿Por qué las ayudas de «did you mean» no pueden depender del orden de un map, si el resultado «casi siempre» sale igual?
-:::
-
-:::answer
-Porque «casi siempre» es un test que falla en la CI una de cada pocas veces y una ayuda que cambia entre dos ejecuciones del mismo fichero. Con empates, el primero que llega depende de la semilla; el desempate alfabético y la lista ordenada lo fijan.
-:::
-
-:::review
-¿Por qué `RenderHuman` hace panic ante un fix-it sin ayuda, en vez de pintarlo sin más?
-:::
-
-:::answer
-Porque es un fallo del pase que construyó el diagnóstico, no del programa que se compila: un parche sin la frase que dice qué hace no es una sugerencia. Un panic con el motivo lo hace visible en el primer test que lo pinta, también en los fuzz del parser y del análisis, que renderizan cada diagnóstico.
-:::
-
-:::review
-¿Por qué E0203 solo ofrece la edición cuando el operando central es un token?
-:::
-
-:::answer
-Porque la edición copia ese operando a la derecha del `&&`. Un nombre o un número se pueden copiar sin cambiar nada; `f(x)` o un bloque se evaluarían dos veces, con sus efectos.
-:::
-
-:::review
-`let a = g(1` seguido de una línea `h(2)` da el E0201 con su secundaria, sin ayuda ni edición, aunque faltaba un `)`. ¿Es un fallo del listón?
-:::
-
-:::answer
-No: el listón pide la edición solo cuando es mecánica. El token hallado es `h`, un nombre, que también seguiría a una coma olvidada, `g(1, h(2))`; un `)` arreglaría un caso y estropearía el otro, como en `print(1 2)`. rustc lo resuelve con niveles de confianza (`Applicability`, en «Go en el trabajo»); Ki, callando.
-:::
-
-:::review
-¿Qué gana el catálogo con ejecutar sus ejemplos, si un texto bien revisado ya los explica?
-:::
-
-:::answer
-Que no envejecen en silencio: si un código desaparece o deja de salir en su ejemplo, o si el parser empieza a admitir cadenas en una expresión, la CI falla en esa sesión. La palabra `also=` está hecha para eso: hay que quitarla en cuanto el E0201 deje de salir.
-:::
-
-## Resumen
-
-- Un map es un puntero a una tabla: copiarlo es compartirla.
-- Nada visible depende del orden de un map.
-- `//go:embed stdlib` mete el preludio en el binario.
-- La distancia de edición es programación dinámica con dos filas.
-- Resolver son dos pasadas, con ámbitos encadenados y tablas laterales.
-- Un diagnóstico explica el error en su sitio y solo da ayuda concreta.
-- Los fix-its usan las posiciones originales.
-- `docs/errors` trae ejemplos que un test ejecuta.
-
-## Go en el trabajo
-
-**Un map ganó casi siempre a un slice ordenado.** Una clave string hay que hashearla y compararla byte a byte: por eso el compilador busca por `Symbol`. Lo que tardó una búsqueda en orden salteado:
-
-| Búsqueda | Clave `string` | Clave `uint32` |
-|---|---|---|
-| `map`, 8 claves | unos 8 ns | 4,3 ns |
-| `map`, 1 000 claves | 11 ns | 6,8 ns |
-| `map`, 100 000 claves | 24 ns | 13,5 ns |
-| `slices.BinarySearch` sobre un slice ordenado | perdió en los tres tamaños | solo empató o ganó por poco con 8 claves |
-
-**La iteración aleatoria en CI.** Un test que compara las claves de un map, sin ordenar, pasa en tu portátil y a veces falla en la CI. `go test -count=100` lo destapa.
-
-**Los mensajes como producto.** La *rustc-dev-guide* va más allá que Ki: pide evitar la pregunta «did you mean». Cada sugerencia lleva su `Applicability`, un nivel de confianza, que Ki no distingue todavía.
-
-**`go vet` señala.** Sobre `fmt.Printf("%d\n", name)` con un `string`, dice qué y dónde, sin ayuda. Ninguna edición adivina si sobra el verbo o el argumento.

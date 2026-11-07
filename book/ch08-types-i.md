@@ -8,10 +8,9 @@ milestone: errores de tipo con dos etiquetas y su origen
 
 ## Objetivo
 
-Al terminar, `ki check` sabe qué tipo tiene cada expresión. Cuando dos no encajan, lo dice con dos etiquetas: el sitio que está mal y el que explica por qué se esperaba otra cosa.
+Al terminar, `ki check` sabe qué tipo tiene cada expresión. Cuando dos no encajan, lo dice con dos etiquetas: el sitio que está mal y el que explica por qué se esperaba otra cosa. Aquí, `true` no es un `Int`:
 
-```console
-$ cat fib.ki
+```ki
 fn fib(n: Int) -> Int {
   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }
@@ -19,18 +18,9 @@ fn fib(n: Int) -> Int {
 fn main() {
   print(fib(true))
 }
-$ build/bin/ki check fib.ki
-error[E0401]: mismatched types
- --> fib.ki:6:13
-  |
-1 | fn fib(n: Int) -> Int {
-  |        ------ the parameter is declared here
-  ...
-6 |   print(fib(true))
-  |             ^^^^ expected `Int`, found `Bool`
 ```
 
-La secundaria es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406 y un objetivo: una equivocación, un error.
+La primaria señala `true`; la secundaria, el parámetro `n: Int` que lo pedía. Esa secundaria es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406 y un objetivo: una equivocación, un error.
 
 ## Teoría
 
@@ -38,22 +28,25 @@ La secundaria es el hito, camino de M1 (capítulo 10). Nacen E0401 a E0406 y un 
 
 Un tipo es un dato más: `Int`, `Bool`, `()`, una función o una variable por resolver. `internal/sema` los guarda en un `base.IdVec[TypeID, Type]` (capítulo 4), y un tipo nombra a otros por id, nunca por puntero.
 
-**Hash-consing.** La tabla construye cada tipo una vez. Así, comparar tipos es comparar ids, mientras ninguna variable ligada esté por medio.
+**Hash-consing.** La tabla construye cada tipo una vez: `Fun` busca la estructura de una función en un map antes de crear un nodo. Así, comparar tipos sin variables ligadas es comparar ids:
 
-**La clave de `Fun`.** `Fun`, que construye tipos de función, busca en un map antes de crear un nodo. Una clave tiene que admitir `==`, y un slice no. Así que `funKey` lleva los parámetros en un `string`, cuatro bytes por id: en decimal y pegados, `[1, 12]` y `[11, 2]` darían los dos `"112"`.
+```math
+Fun(ps, r, ε) = Fun(ps′, r′, ε′)   ⇔   (ps, r, ε) = (ps′, r′, ε′)
+τ, τ′ sin variables ligadas:   τ = τ′   ⇔   id(τ) = id(τ′)
+```
 
 **Inmutabilidad por convención.** Nadie debe cambiar lo compartido, pero Go no tiene valores `const` compuestos ni un `&` de solo lectura. Así que los tipos son ids, la tabla solo crece y `Fun` copia los parámetros, por si quien llama reutiliza su slice.
 
-No es una garantía: `tbl.Node(f).Params[0] = boolT` convierte `(Int) -> Int` en `(Bool) -> Int`.
+No es una garantía: quien tenga el nodo puede convertir `(Int) -> Int` en `(Bool) -> Int`.
 
 :::from Rust
 Una clave con `Vec<TypeId>` compila, y `&[TypeId]` garantiza lo que aquí nadie garantiza.
 :::
 
 :::more Embedding: ya lo usa el capítulo 9
-Un struct puede llevar otro sin nombre de campo (capítulo 3): `type Mark struct { Range; Text string }`. Si `Range` tiene `Lo` y un método `Len`, `m.Lo` y `m.Len()` son de `Range`, promocionados; `m.Range` nombra el campo entero.
+Un struct puede llevar otro sin nombre de campo (capítulo 3). Los campos y métodos del de dentro se usan como propios, promocionados, y el campo entero se nombra por su tipo.
 
-No es herencia: quien pide un `Range` necesita `m.Range`.
+No es herencia: quien pide el de dentro necesita ese campo.
 
 Lo verás en `Compiled`, con un `*Program`; el capítulo 14 lo desarrolla.
 :::
@@ -62,94 +55,282 @@ Lo verás en `Compiled`, con un `*Program`; el capítulo 14 lo desarrolla.
 
 Una variable de tipo se liga a otro tipo, que puede ser otra variable. Esos enlaces forman cadenas: un bosque *union-find*, sin punteros, donde el enlace al padre es un id.
 
-El nodo `TypeVariable` indexa con `Var` un registro `TypeVar`: si está ligada y a qué.
+```pseudo
+función liga(v, τ):                       // une, sin comprobar nada
+    enlace(v) ← τ;  v queda ligada
 
-- **`Bind(v, to)`** une: escribe el enlace y no comprueba nada.
-- **`Resolve(id)`** busca: sigue los enlaces hasta un tipo que no es una variable ligada. Un segundo bucle, la **compresión de caminos**, liga cada variable del camino a ese final, y la siguiente consulta da un solo paso.
+función resuelve(t):                      // busca
+    fin ← t
+    mientras fin es una variable ligada:  fin ← enlace(fin)
+    mientras t ≠ fin:                     // compresión de caminos
+        siguiente ← enlace(t);  enlace(t) ← fin;  t ← siguiente
+    devuelve fin
+```
+
+El segundo bucle de `resuelve`, la **compresión de caminos**, liga cada variable del camino al final: la siguiente consulta da un solo paso.
 
 ### Unificación de Robinson y el occurs check
 
-Comprobar es plantear ecuaciones: en `fn double(x) -> Int { x * 2 }`, `x` tiene que ser `Int`. **Unificar** dos tipos (`x ~ y`) es hacerlos iguales ligando variables.
+Comprobar es plantear ecuaciones: en `fn double(x) -> Int { x * 2 }`, `x` tiene que ser `Int`. **Unificar** dos tipos (`x ~ y`) es hacerlos iguales ligando variables. El algoritmo de Robinson mira sus cabezas (el nodo de fuera), ya resueltas:
 
-El algoritmo de Robinson mira sus cabezas (el nodo de fuera), ya resueltas:
+```pseudo
+función unifica(esperado, hallado, razón):
+    pendientes ← [(esperado, hallado)];  vistos ← ∅
+    mientras haya pendientes:
+        saca (e, f);  e ← resuelve(e);  f ← resuelve(f)
+        si e = f entonces pasa al siguiente                          // 1
+        si no, si e o f es {error} entonces pasa al siguiente        // 2: sin ligar nada
+        si no, si e es una variable v entonces liga_si_cabe(v, f)    // 3
+        si no, si f es una variable v entonces liga_si_cabe(v, e)
+        si no, si e y f son funciones con tantos parámetros:         // 4
+            si (e, f) ∉ vistos entonces
+                vistos ← vistos ∪ {(e, f)}
+                apila los resultados y cada par de parámetros, el primero arriba
+        si no:                                                       // 5
+            informa E0401 de (esperado, hallado) con la razón;  devuelve falso
+    devuelve verdadero
 
-1. Si son el mismo id, ya está.
-2. Si una es el tipo de error (más abajo), también.
-3. Si una es una variable sin ligar, se liga a la otra.
-4. Si las dos son funciones con el mismo número de parámetros, se unifican sus partes.
-5. Si no, E0401.
+función liga_si_cabe(v, τ):
+    si aparece(v, τ) entonces informa E0405;  unifica devuelve falso
+    si no, liga(v, τ)
 
-**El occurs check.** `a ~ (a) -> Int` no tiene solución: ningún tipo finito se contiene a sí mismo. Antes de ligar, `Unify`, no `Bind`, mira con `Occurs` si la variable aparece dentro del tipo; si aparece, es E0405. Por eso el paso 1 va primero: `a ~ a` daría un E0405 falso.
+función aparece(v, τ):
+    pendientes ← [τ];  vistos ← ∅
+    mientras haya pendientes:
+        t ← resuelve(saca uno)
+        si t es la variable v entonces devuelve verdadero
+        si t es una función y t ∉ vistos entonces
+            vistos ← vistos ∪ {t};  apila sus parámetros y su resultado
+    devuelve falso
+```
+
+El tipo de error del paso 2 llega más abajo.
+
+**El occurs check.** `a ~ (a) -> Int` no tiene solución: ningún tipo finito se contiene a sí mismo. `liga` no lo mira; `liga_si_cabe` sí, y da E0405. Por eso el paso 1 va primero: `a ~ a` daría un E0405 falso.
 
 **Compartir también explota.** Como cada tipo existe una vez, `(t, t) -> Int`, con `t` el nivel de abajo, lleva el mismo nodo dos veces. Cuarenta niveles son cuarenta nodos y 2⁴⁰ caminos: recorrerlos tardaría horas.
 
-Unas cuarenta líneas lo construyen con parámetros sin anotación: llamar a uno lo liga a una función de los tipos de sus argumentos (`p1(p0, p0)`, `p2(p1, p1)`…).
+Unas cuarenta líneas lo construyen con parámetros sin anotación, `p1(p0, p0)`, `p2(p1, p1)`…: la regla (App-var), más abajo.
 
-Por eso `Occurs` y `Unify` llevan un conjunto de lo ya visitado: un map con valores `struct{}` (el valor se escribe `struct{}{}`); solo importa la clave. El tipo mide cero bytes, pero en Go 1.27 su hueco en el map ocupa lo mismo que con `bool`.
+Por eso los dos llevan `vistos`, el conjunto de lo ya visitado.
 
 Usan pila propia, sin recursión, porque la profundidad de un tipo la decide el programa.
 
 ### Comprobación bidireccional
 
-`infer` deduce el tipo de una expresión de lo que lleva dentro: `n < 2` es `Bool`.
+Hay dos juicios, *inferir* y *comprobar*, y cada regla dice cómo se obtiene uno:
 
-`check` recibe el tipo que su sitio espera y, cuando puede, lo pasa hacia dentro: un bloque se lo da a su cola. Las dos se encuentran en `Unify`, cuando no hay hacia dónde empujar.
+```math
+Γ              lo que se sabe de cada nombre: el tipo de cada variable y de cada función
+Γ ⊢ e ⇒ τ      inferir: τ sale de lo que e lleva dentro
+Γ ⊢ e ⇐ τ      comprobar: e recibe el τ que su sitio espera
+Γ ⊢ s ⊣ Γ′     una sentencia: s deja el contexto Γ′ (un let añade x : τ)
 
-En `let x: Bool = { 1 }`, inferir y comparar pondría el error sobre las llaves; empujar la expectativa, sobre el `1`.
+                                                        x : τ ∈ Γ
+ ──────────── (Int)      ──────────────── (Bool)      ─────────── (Var)
+  Γ ⊢ n ⇒ Int             Γ ⊢ true ⇒ Bool              Γ ⊢ x ⇒ τ
 
-Un `if` con `else` no empuja lo esperado: compara sus ramas y, sobre el `if` entero, el resultado con lo esperado.
+  Γ ⊢ f ⇒ (τ₁, …, τₙ) → τ      Γ ⊢ eᵢ ⇐ τᵢ  (1 ≤ i ≤ n)
+ ────────────────────────────────────────────────────── (App)
+                 Γ ⊢ f(e₁, …, eₙ) ⇒ τ
 
-Las funciones son un solo grupo **monomórfico**, cada una con un solo tipo: primero todas las firmas (un parámetro sin anotación recibe una variable nueva), después los cuerpos.
+  Γ ⊢ f ⇒ α, sin ligar      Γ ⊢ eᵢ ⇒ τᵢ      β nueva      α ~ (τ₁, …, τₙ) → β
+ ────────────────────────────────────────────────────────────────────── (App-var)
+                         Γ ⊢ f(e₁, …, eₙ) ⇒ β
 
-Una llamada encuentra así la firma de una función definida más abajo. Lo que un cuerpo o una llamada aprende de un parámetro lo ve cada uso de la función. La generalización (una función con tipos distintos) llega en el capítulo 13.
+  op : (σ, σ) → ρ      Γ ⊢ e₁ ⇒ τ₁      σ ~ τ₁      Γ ⊢ e₂ ⇒ τ₂      σ ~ τ₂
+ ─────────────────────────────────────────────────────────────────── (Op)
+                         Γ ⊢ e₁ op e₂ ⇒ ρ
+  + − * / % : (Int, Int) → Int     < <= > >= : (Int, Int) → Bool     && || : (Bool, Bool) → Bool
+  − : (Int) → Int     ! : (Bool) → Bool          el unario, igual con un operando
+  el error va sobre el operando entero: un operando no recibe la expectativa
+
+  Γ ⊢ e₁ ⇒ τ      τ ∈ {Int, Bool}      Γ ⊢ e₂ ⇒ τ′      τ ~ τ′
+ ───────────────────────────────────────────────────────────── (Eq)    igual con !=
+                   Γ ⊢ e₁ == e₂ ⇒ Bool
+  si τ es aún una variable, τ ∈ {Int, Bool} se juzga al final
+
+  Γ ⊢ e ⇒ τ′      τ ~ τ′
+ ──────────────────────── (Sub)          el error va sobre e entero
+        Γ ⊢ e ⇐ τ
+
+  Γ ⊢ s₁ … sₙ ⊣ Γ′      Γ′ ⊢ e ⇐ τ
+ ────────────────────────────────── (Bloque)
+       Γ ⊢ { s₁ … sₙ e } ⇐ τ
+
+  Γ ⊢ s₁ … sₙ ⊣ Γ′      τ ~ ()
+ ──────────────────────────────── (Bloque-())    el error va sobre el bloque
+       Γ ⊢ { s₁ … sₙ } ⇐ τ
+
+  Γ ⊢ c ⇐ Bool      Γ ⊢ e₁ ⇒ τ      Γ ⊢ e₂ ⇐ τ
+ ──────────────────────────────────────────────── (If)    si e₂ no cuadra, el if es {error}
+        Γ ⊢ if c { e₁ } else { e₂ } ⇒ τ
+
+  Γ ⊢ c ⇐ Bool      Γ ⊢ e₁ ⇐ ()
+ ──────────────────────────────── (If-sin-else)
+     Γ ⊢ if c { e₁ } ⇒ ()
+
+  Γ ⊢ c ⇐ Bool      τ ~ ()      Γ ⊢ e₁ ⇐ ()
+ ─────────────────────────────────────────── (If⇐)    si τ ~ () falla, e₁ solo se infiere
+           Γ ⊢ if c { e₁ } ⇐ τ
+
+         Γ ⊢ e ⇐ τ                                  Γ ⊢ e ⇒ τ
+ ──────────────────────────── (Let:)      ──────────────────────── (Let)
+  Γ ⊢ let x: τ = e ⊣ Γ, x : τ              Γ ⊢ let x = e ⊣ Γ, x : τ
+```
+
+(Bloque) pasa lo esperado hacia la cola, y las dos direcciones se encuentran en (Sub), cuando no hay hacia dónde empujar, y en los operandos. En `let x: Bool = { 1 }`, inferir y comparar pondría el error sobre las llaves; (Bloque) lo pone sobre el `1`.
+
+Un `if` con `else` no empuja lo esperado: (If) compara sus ramas y (Sub), el resultado sobre el `if` entero. Si las ramas no cuadran, el `if` tiene el tipo de error, para que cada uso no dé otro.
+
+Sin `else`, (If⇐) compara primero `()` con lo esperado, sobre el `if` entero.
+
+Las funciones son un solo grupo **monomórfico**, cada una con un solo tipo:
+
+```pseudo
+función comprueba(programa):
+    para cada Def f:                                  // las firmas
+        un parámetro anotado tiene su tipo; uno sin anotar, una variable nueva
+        sin ->, el resultado es ()
+    comprueba que main es fn main()                   // E0404
+    para cada Def f con cuerpo:  Γ ⊢ cuerpo(f) ⇐ resultado(f)
+    juzga las igualdades aplazadas
+```
+
+Una llamada encuentra así la firma de una función definida más abajo. Lo que un cuerpo o una llamada aprende de un parámetro lo ve cada uso de la función. Por eso (Eq) aplaza una variable: una llamada posterior puede ligarla, y el veredicto no debe depender del orden. La generalización (una función con tipos distintos) llega en el capítulo 13.
 
 ### Procedencia y mensajes al estilo de rustc
 
-La secundaria es el **origen** de la expectativa: la anotación, el tipo de retorno, el parámetro, la otra rama.
+La secundaria es el **origen** de la expectativa. Cada `unifica` lleva un `Reason` con ese sitio y, si falla, elige:
 
-Cada `Unify` lleva un `Reason` con ese sitio y, si falla, elige la secundaria.
+```math
+razón                      lo que dice el E0401
+anotación                  secundaria en la anotación
+cola del cuerpo, retorno   secundaria en el tipo de retorno, o en el nombre si no hay ->
+argumento                  secundaria en el parámetro
+ramas del if               secundaria en la otra rama, o en el `if` si no hay else
+condición del if           nota: la condición tiene que ser Bool
+operando                   secundaria en el operador
+sin secundaria si su sitio no existe o está en otro fichero
+```
 
-Una condición de `if` no tiene sitio que la explique: lleva una nota con la regla. Una cola de función con valor donde se espera `()` lleva una ayuda: ligarlo con `let` o, si devolverlo lo arregla, devolverlo.
+Una cola de función con valor donde se espera `()` lleva una ayuda: ligarlo con `let` o, si devolverlo lo arregla, devolverlo.
 
-Un mensaje con dos tipos usa una sola serie de letras (`showAll`): si cada uno empezara en `a`, parecerían hablar de la misma variable.
+Una secundaria se pinta bajo el fragmento de la primaria: la del parámetro de `print`, en el preludio, no se dibuja.
+
+Un mensaje con dos tipos usa una sola serie de letras: si cada uno empezara en `a`, parecerían hablar de la misma variable.
+
+```math
+nombre(v) = la k-ésima letra, con k el orden en que v aparece al escribir el esperado y luego el hallado
+una variable que está en los dos tipos lleva la misma letra
+```
 
 ### El tipo de error, que unifica en silencio
 
 Si el comprobador inventara un tipo para un nombre desconocido, que ya dio su E0301, `nope + 1` añadiría un E0401 por el mismo descuido.
 
-`TypeErr`, escrito `{error}`, es el tipo de lo que una fase anterior no entendió. `Unify` lo da por igual a cualquier otro, sin ligar variables: una variable ligada al error taparía los errores de después.
+`TypeErr`, escrito `{error}`, es el tipo de lo que una fase anterior no entendió:
 
-Una operación con un operando de tipo error tiene tipo error. La excepción es `==`, que rechaza una función o `()`: si rechaza su operando izquierdo, el `==` es `Bool`, aunque el derecho sea de tipo error.
+```math
+{error} ~ τ   y   τ ~ {error}   aciertan para todo τ, sin ligar nada
+Γ ⊢ e₁ ⇒ {error}  ∨  Γ ⊢ e₂ ⇒ {error}   ⟹   Γ ⊢ e₁ op e₂ ⇒ {error}
+salvo:  Γ ⊢ e₁ ⇒ τ, con τ una función o ()   ⟹   Γ ⊢ e₁ == e₂ ⇒ Bool, y un E0401 sobre e₁
+```
+
+`unifica` no liga variables al error: una variable ligada al error taparía los errores de después. La última línea es la excepción de `==`, que ya ha dado su error.
 
 ### Una goroutine que vigila: `within`
 
-Un recorrido equivocado de 40 niveles no falla, se cuelga: `go test` lo corta a los diez minutos sin decir la fila. `within.Run` ejecuta el trabajo en otra goroutine y espera con un `select`. En pequeño:
+Un recorrido equivocado de 40 niveles no falla, se cuelga: `go test` lo corta a los diez minutos sin decir la fila. `within.Run` le pone un plazo:
 
-```go
-func within(t *testing.T, d time.Duration, work func()) {
-	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		work()
-	}()
-	select {
-	case <-done:
-	case <-time.After(d):
-		t.Fatalf("not finished after %v", d)
-	}
-}
+```pseudo
+función dentro_de(plazo, trabajo):
+    hecho ← un canal nuevo
+    en otra goroutine:  trabajo();  cierra hecho
+    espera lo primero que ocurra:
+        hecho se cierra   → vuelve
+        pasa el plazo     → el test falla
 ```
 
-- `go f()` lanza `f` en una goroutine nueva.
-- `make(chan struct{})` crea un canal; `close(done)` lo cierra, y recibir de un canal cerrado (`<-done`) no espera.
-- `time.Duration` cuenta nanosegundos; `time.After(d)` devuelve un canal que recibe un valor pasado `d`.
-- `select` espera al primero de sus casos que pueda avanzar.
-- `t.Fatalf` va en la goroutine del test: dentro del `go func()`, `go vet` lo rechaza.
-- La goroutine colgada no se puede matar: solo se deja de esperarla.
+La goroutine colgada no se puede matar: solo se deja de esperarla.
 
 :::from Rust
 Es `thread::spawn` con un `mpsc::channel` y `rx.recv_timeout(d)`.
+:::
+
+## Preguntas de repaso
+
+:::review
+¿Por qué un `if` cuyas ramas no cuadran tiene el tipo de error, en vez del de su rama `then`?
+:::
+
+:::answer
+Porque el `if` no tiene ningún tipo válido: elegir el de `then` sería apostar por una rama, y si la buena era la otra, cada uso del `if` daría un segundo error por la misma equivocación.
+:::
+
+:::review
+¿Por qué `let x: Int = if true { 1 }` da su error sobre el `if` entero y no sobre el `1`?
+:::
+
+:::answer
+Porque la equivocación es el `else` que falta: con él, el `1` estaría bien. Por eso (If⇐) compara primero `()` con lo esperado y, si falla, solo infiere la rama, para no perder los errores que tenga dentro. Si lo esperado es `()`, la comparación cuadra y entonces sí sobra el `1`.
+:::
+
+:::review
+¿Por qué `aparece`, el occurs check, necesita un conjunto de visitados, si un tipo de la Parte I no puede ser cíclico?
+:::
+
+:::answer
+Porque no hace falta un ciclo para que un recorrido en árbol explote: basta compartir. Cuarenta niveles de `(t, t) -> Int` son cuarenta nodos y 2⁴⁰ caminos. Un programa válido de unas cuarenta líneas lo construye, y el occurs check corre en cada ligadura.
+:::
+
+:::review
+¿Por qué desaparece la secundaria de un argumento de `print(true)`, si el parámetro tiene un sitio?
+:::
+
+:::answer
+Porque ese sitio está en `std/prelude.ki`, otro fichero, y el renderizador dibuja las secundarias bajo el fragmento de la primaria: con esa, haría panic.
+:::
+
+:::review
+¿Por qué `unifica` compara los ids antes de mirar si un lado es una variable?
+:::
+
+:::answer
+Porque `a ~ a` llegaría al paso 3, y el occurs check encontraría `a` dentro de `a`: un E0405 falso. Tras resolver los dos lados, ids iguales son ya el mismo tipo, y no hay nada que ligar.
+:::
+
+:::review
+¿Por qué `unifica` no liga una variable al tipo de error, si este unifica con todo?
+:::
+
+:::answer
+Porque desde entonces la variable sería `{error}` en cada uso, y con el error todo unifica en silencio: una equivocación distinta, más abajo, ya no daría su E0401. Sin ligarla, la variable sigue abierta y el resto del programa se comprueba.
+:::
+
+## Resumen
+
+- Con hash-consing, comparar tipos sin variables ligadas es comparar ids.
+- Sin `const` compuestos, la inmutabilidad es una convención.
+- Las variables son un union-find con compresión de caminos.
+- Unificar es resolver, comparar, ligar con occurs check y bajar por las partes.
+- Compartir nodos multiplica los caminos: se recuerda lo visitado.
+- Comprobar empuja la expectativa, cuando puede, hacia la expresión que está mal.
+- Las funciones son un grupo monomórfico: firmas, luego cuerpos.
+- Un `Reason` elige la secundaria, la nota o la ayuda.
+- El tipo de error unifica en silencio y se propaga.
+- Un plazo en otra goroutine hace de un cuelgue un fallo.
+
+## Go en el trabajo
+
+**Los mensajes, revisados como producto.** Los UI tests de rustc guardan la salida esperada y exigen anotar los errores en la fuente. En Ki, un golden guarda el texto entero, y otro el código y la posición de todos los errores.
+
+**Claves compuestas.** `go/types` también reutiliza instancias genéricas idénticas, con claves `string`: dos tipos idénticos pueden ser punteros distintos, así que la clave escribe su estructura.
+
+:::more Por qué un `string` busca más rápido
+Los maps tienen caminos rápidos para dos formas de clave: 4 u 8 bytes que se comparan como memoria, y strings. Cualquier otra va por el camino general, que llama a las funciones de hash e igualdad del tipo.
+
+Una medida, con 1 000 claves ya construidas: buscar con la forma de `funKey` (dos `uint32` y un `string`) costó unos 14,3 ns, y con todo en un `string`, unos 8,7. `funKey` se queda como struct por legibilidad: su coste está en construir la clave (ejercicio 4).
 :::
 
 ## Tests primero
@@ -172,6 +353,42 @@ Los tests de referencia y las soluciones de los ejercicios cuentan con ellos; es
 ## Implementación
 
 ### Sesión 1: la tabla de tipos (≈ 2 h)
+
+#### Go: una clave de map compuesta
+
+`Fun` busca en un map con clave `funKey`. Una clave tiene que admitir `==`, y un slice no. Así que `funKey` lleva los parámetros en un `string`, cuatro bytes por id: en decimal y pegados, `[1, 12]` y `[11, 2]` darían los dos `"112"`.
+
+`binary.LittleEndian.PutUint32`, de `encoding/binary`, pone un `uint32` en cuatro bytes; `word[:]` es un slice sobre el array entero.
+
+#### Go: goroutines, canales y `select`
+
+`within.Run` es `dentro_de`, de la Teoría: ejecuta el trabajo en otra goroutine y espera con un `select`. En pequeño:
+
+```go
+func within(t *testing.T, d time.Duration, work func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		work()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("not finished after %v", d)
+	}
+}
+```
+
+- `go f()` lanza `f` en una goroutine nueva.
+- `make(chan struct{})` crea un canal; `close(done)` lo cierra, y recibir de un canal cerrado (`<-done`) no espera.
+- `time.Duration` cuenta nanosegundos; `time.After(d)` devuelve un canal que recibe un valor pasado `d`.
+- `select` espera al primero de sus casos que pueda avanzar.
+- `t.Fatalf` va en la goroutine del test: dentro del `go func()`, `go vet` lo rechaza.
+
+#### Go: `struct{}` como conjunto
+
+El `vistos` de `Occurs` es un `map[TypeID]struct{}`: solo importa la clave. El valor, `struct{}{}`, mide cero bytes, pero en Go 1.27 su hueco en el map ocupa lo mismo que un `bool`.
 
 #### Los tests, en rojo
 
@@ -213,7 +430,7 @@ func Run(t *testing.T, what string, work func())
 
 {{file ch08-s1 internal/sema/types.go}}
 
-`binary.LittleEndian.PutUint32`, de `encoding/binary`, pone un `uint32` en cuatro bytes; `word[:]` es un slice sobre el array entero.
+`Resolve`, `Bind` y `Occurs` son `resuelve`, `liga` y `aparece`, de la Teoría.
 
 {{reftest T08.08}}
 
@@ -302,16 +519,15 @@ func VarOrigin(t *TypeTable, v TypeVarID) Origin
 
 #### El código
 
-:::more Los dos caminos de `checkIf`
-`checkIf`, sin `else`, compara primero `()` con lo esperado y, si falla, solo infiere la rama. Con `else`, `elseBranch` compara la rama `else` con la `then` y da el tipo de error si no cuadran, para que el `if` no dé otro donde se usa.
-:::
-
 {{file ch08-s3 internal/sema/check.go}}
 
-- **`call`.** Otra aridad es E0402 sobre la lista de argumentos; lo que no es función, E0403.
-- **`equality`.** Un operando izquierdo aún sin ligar se aplaza a `judgeEqualities`: así, que haya error no depende del orden de las funciones.
+`Check` es `comprueba`, de la Teoría:
 
-`Unify` omite una secundaria en otro fichero, como el parámetro de `print`:
+- **`inferIf`** es (If-sin-else) o, con `else`, (If) vía `elseBranch`; **`checkIf`**, (If⇐) o (If) y (Sub).
+- **`call`** es (App) y (App-var). Otra aridad es E0402 sobre la lista de argumentos; lo que no es función, E0403.
+- **`equality`** es (Eq), y `judgeEqualities`, su juicio aplazado.
+
+`Unify` omite la secundaria en otro fichero:
 
 {{diff ch08-s2..ch08-s3 internal/sema/unify.go}}
 
@@ -399,7 +615,29 @@ Al terminar: tus tests en verde, commit y etiqueta `ch08-s4`; compárate con `re
 
 ## Ejecútalo
 
-Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da lo de arriba y sale con 1. Cuatro equivocaciones:
+Con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el programa del objetivo da el error del hito y sale con 1:
+
+```console
+$ cat fib.ki
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  print(fib(true))
+}
+$ build/bin/ki check fib.ki
+error[E0401]: mismatched types
+ --> fib.ki:6:13
+  |
+1 | fn fib(n: Int) -> Int {
+  |        ------ the parameter is declared here
+  ...
+6 |   print(fib(true))
+  |             ^^^^ expected `Int`, found `Bool`
+```
+
+Cuatro equivocaciones:
 
 ```console
 $ cat bad.ki
@@ -680,75 +918,18 @@ Una medida, con `go test ./internal/sema -run '^$' -bench BenchmarkFun -benchmem
 Las reservas casi empatan (101 041 frente a 100 038): con hash-consing, casi todas son la clave, el `string` que `encodeIDs` construye en cada llamada, también cuando la función ya existe.
 :::
 
-## Preguntas de repaso
-
-:::review
-¿Valdría como `params` de `funKey` escribir los ids en decimal separados por comas (`"1,12"`)? ¿Por qué cuatro bytes por id?
+:::exercise
+**5. La clave de `Fun`.** ¿Valdría como `params` de `funKey` escribir los ids en decimal separados por comas (`"1,12"`)? ¿Por qué cuatro bytes por id?
 :::
 
-:::answer
+:::solution
 Valdría: con la coma, `[1, 12]` y `[11, 2]` dan `"1,12"` y `"11,2"`. Pero hay que convertir con `strconv`, y con dos ids de cuatro cifras la clave ya es más larga. Cuatro bytes fijos no necesitan separador: el ancho dice dónde acaba cada id.
 :::
 
-:::review
-¿Por qué `elseBranch` devuelve el tipo de error cuando las ramas no cuadran, en vez del de `then`?
+:::exercise
+**6. `pending=`, que caduca.** ¿Por qué `pending=` hace fallar el test cuando el ejemplo ya da su código, en vez de no ejecutarlo?
 :::
 
-:::answer
-Porque el `if` no tiene ningún tipo válido: elegir el de `then` sería apostar por una rama, y si la buena era la otra, cada uso del `if` daría un segundo error por la misma equivocación.
-:::
-
-:::review
-¿Por qué `let x: Int = if true { 1 }` da su error sobre el `if` entero y no sobre el `1`?
-:::
-
-:::answer
-Porque la equivocación es el `else` que falta: con él, el `1` estaría bien. Por eso `checkIf` compara primero `()` con lo esperado y, si falla, solo infiere la rama, para no perder los errores que tenga dentro. Si lo esperado es `()`, la comparación cuadra y entonces sí sobra el `1`.
-:::
-
-:::review
-¿Por qué `Occurs` necesita un conjunto de visitados, si un tipo de la Parte I no puede ser cíclico?
-:::
-
-:::answer
-Porque no hace falta un ciclo para que un recorrido en árbol explote: basta compartir. Cuarenta niveles de `(t, t) -> Int` son cuarenta nodos y 2⁴⁰ caminos. Un programa válido de unas cuarenta líneas lo construye, y el occurs check corre en cada ligadura.
-:::
-
-:::review
-¿Por qué desaparece la secundaria de un argumento de `print(true)`, si el parámetro tiene un sitio?
-:::
-
-:::answer
-Porque ese sitio está en `std/prelude.ki`, otro fichero, y el renderizador dibuja las secundarias bajo el fragmento de la primaria: `RenderHuman` haría panic.
-:::
-
-:::review
-¿Por qué `pending=` hace fallar el test cuando el ejemplo ya da su código, en vez de no ejecutarlo?
-:::
-
-:::answer
+:::solution
 Porque una palabra que no molesta se queda para siempre: el ejemplo seguiría sin comprobarse aunque el código ya existiera. Al fallar en cuanto el comprobador funciona, la sesión que lo hace alcanzable tiene que quitarla, y el ejemplo pasa a la regla normal.
-:::
-
-## Resumen
-
-- Con hash-consing, comparar tipos sin variables ligadas es comparar ids.
-- Sin `const` compuestos, la inmutabilidad es una convención.
-- Las variables son un union-find con compresión de caminos.
-- Unificar es resolver, comparar, ligar con occurs check y bajar por las partes.
-- `check` empuja la expectativa, cuando puede, hacia la expresión que está mal.
-- Un `Reason` elige la secundaria, la nota o la ayuda.
-- El tipo de error unifica en silencio y se propaga: lo que depende de un error no da otro.
-- `pending=` deja nacer una entrada del catálogo antes de que su código sea alcanzable, y caduca.
-
-## Go en el trabajo
-
-**Los mensajes, revisados como producto.** Los UI tests de rustc guardan la salida esperada y exigen anotar los errores en la fuente. En Ki, un golden guarda el texto entero, y otro el código y la posición de todos los errores.
-
-**Claves compuestas.** `go/types` también reutiliza instancias genéricas idénticas, con claves `string`: dos tipos idénticos pueden ser punteros distintos, así que la clave escribe su estructura.
-
-:::more Por qué un `string` busca más rápido
-Los maps tienen caminos rápidos para dos formas de clave: 4 u 8 bytes que se comparan como memoria, y strings. Cualquier otra va por el camino general, que llama a las funciones de hash e igualdad del tipo.
-
-Una medida, con 1 000 claves ya construidas: buscar con la forma de `funKey` (dos `uint32` y un `string`) costó unos 14,3 ns, y con todo en un `string`, unos 8,7. `funKey` se queda como struct por legibilidad: su coste está en construir la clave (ejercicio 4).
 :::

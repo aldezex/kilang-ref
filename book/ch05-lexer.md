@@ -8,29 +8,17 @@ milestone: `ki emit tokens`
 
 ## Objetivo
 
-Al terminar, `ki` tiene su primera etapa de compilador: un lexer que convierte bytes en tokens, decide qué saltos de línea terminan una sentencia y sigue adelante tras cada error. Lo enseña un comando nuevo:
+Al terminar, `ki` tiene su primera etapa de compilador: un lexer que convierte bytes en tokens, decide qué saltos de línea terminan una sentencia y sigue tras cada error. Lo enseña `ki emit tokens`, que vuelca los tokens de un fichero como este:
 
-```console
-$ cat fib.ki
+```ki
 fn main() {
   let n = fib(20)
     |> show
   print("fib = ${n}\n")
 }
-$ build/bin/ki emit tokens fib.ki
-…
-2:17 RParen
-3:5 Pipe
-3:8 LowerIdent(show)
-3:12 Newline
-…
-4:9 StringHead("fib = ")
-4:18 LowerIdent(n)
-4:19 StringTail("\n")
-…
 ```
 
-No hay `Newline` antes de `|>`, que continúa la línea, y el string se parte en cabeza, expresión y cola. El parser del capítulo 6 leerá estos tokens, camino del hito M1 (capítulo 10).
+Al ejecutarlo no sale `Newline` antes de `|>`, que continúa la línea, y el string se parte en cabeza, expresión y cola. El parser del capítulo 6 leerá estos tokens, camino del hito M1 (capítulo 10).
 
 :::note
 **Fe de erratas (2026-10-28).** Los mensajes de error de este capítulo mejoran en el capítulo 7.
@@ -42,19 +30,308 @@ No hay `Newline` antes de `|>`, que continúa la línea, y el string se parte en
 
 El lexer trabaja casi siempre con bytes: lo que tiene significado es ASCII, y ningún byte de un carácter multibyte baja de 0x80.
 
-Solo decodifica, con `utf8.DecodeRune(b)` (capítulo 2), donde importa el carácter entero:
+Solo decodifica el carácter entero (capítulo 2) donde importa:
 
 - un carácter inesperado: byte a byte, `é` daría dos errores;
 - un escape inválido: `\é` consume la `é` entera;
 - un literal de carácter: `'é'` debe ser un code point.
 
-Un `\u{…}` solo admite escalares Unicode, code points que no son sustitutos: lo comprueba `utf8.ValidRune(r)`.
+Un `\u{…}` solo admite escalares Unicode, code points que no son sustitutos.
 
 :::from Rust
 `char` de Rust solo admite escalares; un `rune` de Go es un `int32` cualquiera, y la comprobación es tuya.
 :::
 
-**Maximal munch.** Ante `|>=>`, el lexer toma siempre el token más largo: `|>`, después `=>`. Ninguna puntuación de Ki pasa de dos caracteres: basta mirar un byte más.
+**Maximal munch.** Ante `|>=>`, el lexer toma siempre el token más largo: `|>`, después `=>`.
+
+```math
+token = el p ∈ Puntuación más largo que es prefijo de la entrada
+|p| ≤ 2   ∀ p ∈ Puntuación
+```
+
+Como `|p| ≤ 2`, basta mirar un byte más.
+
+### Los literales numéricos
+
+La gramática de los números (`{ x }`: cero o más veces; `[ x ]`: opcional):
+
+```math
+Int   = D  |  0x H  |  0b B
+Float = D . D [ Exp ]  |  D Exp
+Exp   = ( e | E ) [ + | - ] D
+
+D = d { d | _ }          d ∈ 0…9
+H = { _ } h { h | _ }    h ∈ 0…9, a…f, A…F
+B = { _ } b { b | _ }    b ∈ { 0, 1 }
+```
+
+Una racha de dígitos que acaba en `_` es E0107. El `.` exige un dígito detrás: si no, `1..2` empezaría por un `Float`.
+
+Dos comportamientos de `strconv`, que convierte el texto, deciden el diseño:
+
+- **Un desbordamiento da el máximo (o `+Inf`) junto al error.** Guardarlo daría valor a un literal rechazado; por eso el token se queda con 0.
+- **Los `_` de `1_000`.** La conversión en base 10 los rechaza, así que el lexer los quita él.
+
+### Código generado
+
+Los tipos de token viven en una sola lista, `token_kinds.txt`, y un programa Go genera con ella `token_kind.go`: las constantes, sus nombres y el mapa de palabras clave.
+
+- **Solo a mano.** `go generate` lo ejecuta cuando se lo pides; `go build` y `go test`, nunca. Por eso lo generado se versiona.
+- **Un test lo vigila.** Como nada regenera solo, un test compara la salida del generador con el fichero versionado.
+
+### Los modos del lexer y la interpolación
+
+En `"a${x}b"`, la `x` es código y la `b`, texto: el lexer cambia de modo. Un `${…}` puede contener otro string, así que los modos se apilan. Con dos interpolaciones, `"a${x}b${y}c"` da `StringHead`, `x`, `StringMid`, `y`, `StringTail`.
+
+Lo difícil es la `}`: en `"${ g({ y }) }"`, la primera cierra una llave y la segunda, la interpolación. Por eso hay una pila de llaves, con un **centinela** por cada `${`:
+
+```pseudo
+en código, al leer:
+  «"»  →  apila el modo texto y lee el texto
+  «{»  →  apila una llave normal; emite LBrace
+  «}»  →  si la cima de la pila de llaves es un centinela entonces
+            desapila el centinela y el modo código; sigue en el texto
+          si no
+            desapila una llave, si hay alguna; emite RBrace
+  salto de línea o fin de fichero, dentro de una interpolación  →  string sin cerrar (E0110)
+en texto, al leer:
+  fin de línea o de fichero  →  string sin cerrar (E0110)
+  «"»   →  emite String (StringTail si hubo «${»); desapila el modo
+  «${»  →  emite StringHead (StringMid si hubo otro); apila un centinela y el modo código
+  «\»   →  resuelve el escape
+  otro  →  lo añade al texto
+```
+
+Solo las llaves entran en la pila, porque solo la `}` tiene que decidir: en `${ ( }`, cierra igual la interpolación.
+
+### La regla de línea
+
+Ki no pide `;`. El lexer anota cada salto en el token siguiente (`NewlineBefore`) e inserta un `Newline` donde acaba una sentencia. El `\r\n` es un solo salto, y su `Newline` ocupa los dos bytes. Un `\r` suelto es un espacio.
+
+Un salto ante el token `t`, tras el token `a`, acaba una sentencia si:
+
+```math
+Newline antes de t  ⟺  t.NewlineBefore  ∧  t ≠ Eof
+                       ∧  cima(abiertos) ∈ { «{», ninguno }     (1)
+                       ∧  a ∈ Cierran                           (2)
+                       ∧  t ∉ Continúan                         (3)
+
+Cierran   = { LowerIdent, UpperIdent, Int, Float, Char, String, StringTail,
+              «)», «]», «}», «?», «_», true, false, return, break, continue }
+Continúan = { «|>», «.», «&&», «||», else }
+```
+
+Se lee así: (1) dentro de `(` y `[`, un salto es un espacio; (2) la línea ya está completa; (3) la siguiente no la continúa.
+
+Una pasada al final aplica la regla:
+
+```pseudo
+función insertarSeparadores(toks):
+  abiertos ← pila vacía, con un contador por tipo de delimitador
+  para cada token t, que sigue al token a:
+    si t es el primero tras el salto que cortó un string sin cerrar entonces
+      cierra el nivel de interpolación de ese string
+    si la regla se cumple entonces emite un Newline (el salto tras a)
+    emite t
+    si t es «(», «[» o «{»  →  lo apila
+    si t es «)», «]» o «}»  →  si el contador de su tipo marca una abierta,
+                                desapila hasta ella; si no, nada
+    si t es StringHead      →  abre un nivel de interpolación
+    si t es StringTail      →  cierra el nivel y lo que se abrió dentro de él
+    si t es el Error de un string sin cerrar  →  abre un nivel
+```
+
+Ningún delimitador entra ni sale dos veces: coste lineal. El nivel de interpolación evita que `"${ f(a }"` deje el `(` abierto y apague los saltos del resto del fichero.
+
+Go inserta `;` mirando solo el final de la línea; Ki mira también los delimitadores y la línea siguiente, y no corta donde Go corta (`⏎`: salto de línea):
+
+- una línea que empieza por `.`;
+- `}` y `else` en dos líneas;
+- `f(1, 2⏎)`.
+
+:::from TS
+JavaScript inserta `;` sobre todo si el token siguiente no puede continuar la línea: `let x = a⏎-b` es una resta. En Ki, dos sentencias.
+:::
+
+### La recuperación
+
+Recuperarse es seguir lexando tras un error sin inventar nada:
+
+- Un carácter inesperado da un `Error` (E0104), y el lexer sigue.
+- Un literal no admite saltos de línea: una comilla olvidada estropea una línea, no el fichero.
+- Un literal roto deja un token en su sitio, para que el parser no añada otro error: `Int` con 0, `Char` con U+FFFD, y un `Error` que sustituye a los trozos de un string sin cerrar **en el sitio del primero**.
+
+**Un token `Error` nunca cierra una expresión:** no está en `Cierran`. Tras un error no se sabe qué quería decir la línea, y un `Newline` tras un `$` suelto daría al parser un segundo error.
+
+### Fuzzing
+
+A un lexer, con cualquier entrada, no se le pide el resultado exacto, sino **propiedades**:
+
+```math
+∀ src, con toks = Lex(src) y n = |toks|:
+  Lex(src) no hace panic
+  toks[n−1].Kind = Eof
+  ∀ i:      toks[i].Lo ≤ toks[i].Hi ≤ len(src)
+  ∀ i < j:  toks[i].Lo ≤ toks[j].Lo
+  ∀ i:      la línea i del volcado empieza por la posición de toks[i]   (src ≤ 16 KiB)
+```
+
+Un fuzzer genera las entradas guiado por la cobertura. La que rompe una propiedad se guarda como semilla, y los tests la ejecutan siempre.
+
+## Preguntas de repaso
+
+:::review
+¿Por qué un literal que desborda deja un token `Int` con valor 0, y no el que da `strconv` ni ningún token?
+:::
+
+:::answer
+Sin token, el parser daría un segundo error por la misma equivocación. Con ese valor, el máximo, un programa rechazado llevaría un número que nadie escribió. El 0 marca el sitio; el diagnóstico ya dice qué pasó.
+:::
+
+:::review
+¿Por qué `token_kind.go` se versiona y un test lo compara con la salida del generador?
+:::
+
+:::answer
+Porque `go generate` no corre solo: sin versionar, el paquete no compilaría hasta generarlo. Y si alguien cambia la lista sin regenerar, una palabra clave nueva se lee como un nombre sin que nada avise; el test lo convierte en un fallo que pide regenerar.
+:::
+
+:::review
+¿Por qué la pila de llaves del lexer guarda solo llaves y centinelas, y no `(` ni `[`?
+:::
+
+:::answer
+Porque solo la `}` tiene que decidir algo: si cierra una llave o una interpolación, y para eso basta mirar si la cima es un centinela. Un `(` abierto no cambia la respuesta: en `${ ( }`, la `}` cierra la interpolación igual. Los paréntesis los sigue la regla de línea, con su propia pila.
+:::
+
+:::review
+¿Por qué `f(a⏎b)` no recibe `Newline` y `f({⏎a⏎b⏎})` recibe dos?
+:::
+
+:::answer
+Manda el delimitador abierto más interno: dentro de `(` un salto es un espacio, y dentro de `{` termina sentencias, como pide un bloque pasado a una función. Por eso la regla lleva una pila y no un contador.
+:::
+
+:::review
+¿Por qué el `Error` de un string sin cerrar va en el sitio de su primer token y no al final?
+:::
+
+:::answer
+Porque así los `Lo` no decrecen, como pide el fuzz target: al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después. Y el parser lee el `Error` donde estaba el string, antes que el código de dentro: al final, ese código le daría errores de más.
+:::
+
+:::review
+¿Qué gana un fuzz target frente a una tabla de casos?
+:::
+
+:::answer
+La tabla prueba las entradas que alguien pensó, con su resultado exacto. El fuzz target prueba propiedades con entradas que genera él, guiado por la cobertura: un error de límite en el lexer lo encontró por sí mismo, un `\r` como último byte del fichero dentro de un string sin cerrar (lo verás en la sesión 4). Y lo que encuentra se queda en `testdata/fuzz/` como semilla, que `go test` ejecuta siempre.
+:::
+
+## Resumen
+
+- El lexer trabaja con bytes y solo decodifica donde importa el carácter entero.
+- Cada token es el más largo posible.
+- Un literal que desborda deja un token con 0, y los `_` se quitan antes de convertir.
+- El código generado se versiona, y un test lo vigila.
+- Una pila de modos y un centinela parten los strings con interpolación.
+- La regla de línea mira el delimitador más interno, el token anterior y la línea siguiente, en una pasada lineal.
+- Un token `Error` nunca cierra una expresión, y un literal roto deja un token en su sitio.
+- Un fuzz target comprueba propiedades con entradas guiadas por la cobertura.
+
+## Go en el trabajo
+
+**Funciones de estado.** En «Lexical Scanning in Go» (2011), Rob Pike presentó el lexer de `text/template`: cada estado es una función que devuelve el siguiente (`type stateFn func(*lexer) stateFn`), y los tokens van por un canal.
+
+Hoy ese lexer ejecuta los estados en un bucle, sin goroutines ni canales. El de Ki es un bucle con un `switch`: la interpolación anidada pide una pila de modos de todas formas.
+
+La biblioteca trae dos scanners: `go/scanner`, el del propio Go, y `text/scanner`, genérico.
+
+**`go generate` en repositorios reales.** Más de cien ficheros de `$GOROOT/src` lo usan. Según «Generating code» (Rob Pike, blog de Go, 2014), es para el autor del paquete, no para sus clientes. Para llegarles, lo generado «must be checked into the source code repository».
+
+## Tests primero
+
+{{cards}}
+
+Escribe el test de cada tarjeta, míralo fallar, implementa y solo entonces despliega su referencia. Describen el final del capítulo; cada sesión dice qué filas aplaza.
+
+:::more Los ayudantes de test
+Están al principio de cada fichero de test, en `ref/ch05-sK`.
+
+- **`lexer_test.go`.** `lexAll` y `lexFile` lexan un texto y devuelven los tokens y el sink (`lexFile`, además, el id del fichero y el interner); `lexKinds` y `wantKinds` comparan la lista de tipos; `dumpTokens` devuelve el volcado. `wantOne`, de `source_check_test.go` (capítulo 3), exige un único diagnóstico con su código, mensaje, span y etiqueta.
+- **`numbers_test.go`.** `intValues` y `floatValues` sacan los valores de los literales, y `wantNoDiags` exige cero diagnósticos.
+- **`strings_test.go`.** `shape` escribe cada token como en el volcado y `wantShape` compara esa lista.
+- **`line_rule_test.go`.** Una fila `lineRow` lleva el texto, la forma de sus tokens, los spans de sus `Newline` y cuántos diagnósticos da, y `checkLineRows` comprueba las tres cosas.
+- **`update_test.go`.** `runUpdate` ejecuta el runner con `Update` sobre un fichero temporal y devuelve el fichero resultante y el informe.
+:::
+
+## Implementación
+
+### Sesión 1: tokens, `go generate` y el esqueleto del lexer (≈ 2 h)
+
+#### Go: `go generate`
+
+- **La directiva.** `//go:generate go run ./gen -o token_kind.go`, sin espacio tras `//`. `go generate ./internal/syntax` la ejecuta en el directorio del paquete.
+- **La cabecera.** `// Code generated … DO NOT EDIT.` avisa a personas y herramientas de que no se edita a mano.
+- **`go/format`.** `format.Source(src)` formatea como `gofmt`: el generador no alinea nada.
+- **El test.** Ejecuta `go run ./gen` con `os/exec` (capítulo 1).
+
+:::more Leer por líneas con `bufio.Scanner`
+`gen` lee la lista entera; para leer por líneas, lo habitual es `sc := bufio.NewScanner(r)`, `for sc.Scan() { line := sc.Text() }` y `sc.Err()` al final. El `Scanner` quita el `\r` de un CRLF, y una línea de 64 KiB o más (`bufio.MaxScanTokenSize`) detiene el bucle con un error.
+:::
+
+#### Los tests, en rojo
+
+1. **Escribe T05.01–T05.13,** en `package syntax_test`. Describen esta interfaz:
+
+```go
+//go:generate go run ./gen -o token_kind.go     // in token.go
+type TokenKind uint8                             // generated: KwFn … Error, and String()
+var keywords map[string]TokenKind                // generated: "fn" → KwFn, …
+type Token struct { Kind TokenKind; Span base.Span; Payload uint32; NewlineBefore bool }
+type TokenBuffer struct { Tokens []Token; Ints []int64; Floats []float64; Strings []string }
+func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.Sink) TokenBuffer
+func DumpTokens(tb *TokenBuffer, sm *base.SourceManager, in *base.Interner) string
+```
+
+2. **Deja T05.07 sin su `Newline`,** que llega en la sesión 4: `LowerIdent LowerIdent Eof`, con `NewlineBefore` en `false, true, false`.
+3. **Míralos fallar.** Sobre `ch04-s2`, no compilan:
+
+```console doctest="red"
+$ go test ./internal/syntax/
+# github.com/aldezex/kilang/internal/syntax_test [github.com/aldezex/kilang/internal/syntax.test]
+internal/syntax/lexer_test.go:13:47: undefined: syntax.TokenBuffer
+…
+internal/syntax/lexer_test.go:65:52: too many errors
+FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
+FAIL
+```
+
+4. **Escribe la lista, el generador y `token.go`,** y ejecuta `go generate ./internal/syntax`.
+5. **Añade dos stubs** para que compile: `Lex` devuelve `TokenBuffer{Tokens: []Token{{Kind: Eof}}}` y `DumpTokens`, `""`. Pasan las tres primeras tarjetas; las demás fallan sin panic si compruebas la longitud con `t.Fatalf` antes de indexar.
+
+#### El código
+
+{{file ch05-s1 internal/syntax/token_kinds.txt}}
+
+{{file ch05-s1 internal/syntax/gen/main.go}}
+
+`gen` usa el `FlagSet` global de `flag` (`flag.String`, `flag.Parse`), que ante un flag malo sale con 2. Aquí sirve, porque nadie lo ejecuta en proceso.
+
+{{file ch05-s1 internal/syntax/token.go}}
+
+`Token` no guarda texto y ocupa 24 bytes: `Payload` apunta a las tablas de `TokenBuffer`, la idea del capítulo 4.
+
+`token_kind.go` declara sus nombres con `[...]string{KwFn: "KwFn", …}`, un literal de array con claves: el compilador cuenta el tamaño, y reordenar la lista no desplaza la tabla.
+
+{{file ch05-s1 internal/syntax/lexer.go}}
+
+- **`switch c := lx.src[lx.pos]; {`** lleva sentencia inicial: `c` se ve en todos los `case`, y sin expresión, cada `case` es una condición.
+- **`punctuation`** es el maximal munch de la Teoría. `return two('.', DotDot, Dot)` devuelve los tres resultados del closure `two`.
+- **`ident`** busca con `keywords[string(text)]`, una conversión que no reserva memoria (capítulo 4, ejercicio 3).
+- **`unexpected`** decodifica con `utf8.DecodeRune(b)` (capítulo 2).
+- **`visible`** escribe como `<U+XXXX>`, en los mensajes, lo que `unicode.IsPrint(r)` rechaza.
+- **`DumpTokens`** cita los textos con `strconv.Quote` y escribe los `Float` con `strconv.FormatFloat(v, 'g', -1, 64)`, la forma más corta que vuelve a leerse igual. Hasta la sesión 4 es cuadrático en una línea larga: `LineCol` la recuenta en cada token.
 
 :::more Clasificar bytes con una tabla
 Muchos lexers clasifican cada byte con una tabla `[256]uint8`. El tamaño es parte del tipo: indexada con un `byte`, nunca se sale. A Ki, con pocas clases, le basta un `switch`.
@@ -83,166 +360,6 @@ func class(c byte) uint8 { return classes[c] }
 `classes` se calcula una vez, al iniciar el paquete, con una función literal que se llama en el acto. El compilador también sabe que el índice no se sale: en `class` no deja comprobación de límites, y con un parámetro `int` sí.
 :::
 
-### Números con `strconv`
-
-`strconv.ParseInt(s, base, 64)` y `strconv.ParseFloat(s, 64)` convierten texto en `int64` y `float64`. Sus errores son `*strconv.NumError`: `Err` guarda la causa (`strconv.ErrRange`, `strconv.ErrSyntax`), y `errors.Is` (capítulo 2) la encuentra.
-
-Dos comportamientos de `strconv` deciden el diseño:
-
-- **Un desbordamiento da el máximo (o `+Inf`) junto al error.** Guardarlo daría valor a un literal rechazado; por eso el token se queda con 0.
-- **Los `_` de `1_000`.** `ParseInt` en base 10 los rechaza, así que el lexer los quita él.
-
-:::more `ParseInt` y `ParseFloat` en los límites
-Lo que devuelve cada llamada. Un underflow no es un error, y por eso `1e-999` vale 0 sin diagnóstico.
-
-| Llamada | Resultado |
-|---|---|
-| `ParseInt("9223372036854775808", 10, 64)` | `9223372036854775807` y `value out of range` |
-| `ParseInt("1_000", 10, 64)` | `0` y `invalid syntax` (con base 0, `1000`) |
-| `ParseFloat("1e999", 64)` | `+Inf` y `value out of range` |
-| `ParseFloat("1e-999", 64)` | `0` y `nil` |
-| `ParseFloat("1_000.5", 64)` | `1000.5` y `nil`; con `1__0.5`, `invalid syntax` |
-:::
-
-### `go generate`: el generador escrito a mano
-
-Los tipos de token viven en una sola lista, `token_kinds.txt`, y un programa Go genera con ella `token_kind.go`: las constantes, los nombres de `String` y el mapa de palabras clave.
-
-- **La directiva.** `//go:generate go run ./gen -o token_kind.go`, sin espacio tras `//`. `go generate ./internal/syntax` la ejecuta en el directorio del paquete; `go build` y `go test`, nunca, y por eso lo generado se versiona.
-- **La cabecera.** `// Code generated … DO NOT EDIT.` avisa a personas y herramientas de que no se edita a mano.
-- **`go/format`.** `format.Source(src)` formatea como `gofmt`: el generador no alinea nada.
-- **El test.** Como nada regenera solo, un test ejecuta `go run ./gen` con `os/exec` (capítulo 1) y compara su stdout con `token_kind.go`.
-
-:::more Leer por líneas con `bufio.Scanner`
-`gen` lee la lista entera; para leer por líneas, lo habitual es `sc := bufio.NewScanner(r)`, `for sc.Scan() { line := sc.Text() }` y `sc.Err()` al final. El `Scanner` quita el `\r` de un CRLF, y una línea de 64 KiB o más (`bufio.MaxScanTokenSize`) detiene el bucle con un error.
-:::
-
-### Los modos del lexer y la interpolación
-
-En `"a${x}b"`, la `x` es código y la `b`, texto: el lexer cambia de modo. Un `${…}` puede contener otro string, así que los modos se apilan (`modeString`, `modeCode`). Con dos interpolaciones, `"a${x}b${y}c"` da `StringHead`, `x`, `StringMid`, `y`, `StringTail`.
-
-Lo difícil es la `}`: en `"${ g({ y }) }"`, la primera cierra una llave y la segunda, la interpolación. Por eso hay una pila de llaves: cada `{` apila una entrada normal y cada `${`, un **centinela** (`InterpSentinel`). Con el centinela en la cima, la `}` vuelve al texto.
-
-Solo las llaves entran, porque solo la `}` tiene que decidir: en `${ ( }`, cierra igual la interpolación.
-
-### La regla de línea y la de Go
-
-Ki no pide `;`. El lexer anota cada salto en el token siguiente (`NewlineBefore`) e inserta un `Newline` donde acaba una sentencia.
-
-El `\r\n` es un solo salto, y su `Newline` ocupa los dos bytes. Un `\r` suelto es un espacio.
-
-Un salto acaba una sentencia si:
-
-1. el delimitador abierto más interno es una llave, o no hay ninguno (dentro de `(` y `[`, es un espacio);
-2. el token anterior puede cerrar una expresión: un nombre, un literal, `)`, `]`, `}`, `?`, `_`, `true`, `false`, `return`, `break`, `continue`;
-3. y la línea siguiente no empieza por `|>`, `.`, `&&`, `||` o `else`.
-
-Nunca hay `Newline` ante el `Eof`.
-
-Go inserta `;` mirando solo el final de la línea; Ki mira también los delimitadores y la línea siguiente, y no corta donde Go corta (`⏎`: salto de línea):
-
-- una línea que empieza por `.`;
-- `}` y `else` en dos líneas;
-- `f(1, 2⏎)`.
-
-:::from TS
-JavaScript inserta `;` sobre todo si el token siguiente no puede continuar la línea: `let x = a⏎-b` es una resta. En Ki, dos sentencias.
-:::
-
-### La recuperación
-
-Recuperarse es seguir lexando tras un error sin inventar nada:
-
-- Un carácter inesperado da un `Error` (E0104), y el lexer sigue.
-- Un literal no admite saltos de línea: una comilla olvidada estropea una línea, no el fichero.
-- Un literal roto deja un token en su sitio (`Int` con 0, `Char` con `utf8.RuneError`, `Error` en un string sin cerrar), para que el parser, cuando lo lea, no añada otro error.
-
-**Un token `Error` nunca cierra una expresión.** Tras un error no se sabe qué quería decir la línea, y un `Newline` tras un `$` suelto daría al parser un segundo error.
-
-### Fuzzing nativo
-
-A un lexer, con cualquier entrada, no se le pide el resultado exacto, sino **propiedades**:
-
-- que no haga panic;
-- que el último token sea `Eof`;
-- que cada span cumpla `Lo <= Hi <= len`;
-- que los `Lo` no decrezcan.
-
-Un test de fuzzing es una función `FuzzXxx(f *testing.F)`. `f.Add(…)` registra semillas y `f.Fuzz(func(t *testing.T, src string) { … })` recibe el objetivo (el *fuzz target*).
-
-`go test` solo corre las semillas. `go test -run='^$' -fuzz=FuzzLex -fuzztime=10s` genera entradas, guiado por la cobertura. Una entrada que hace fallar el objetivo va a `testdata/fuzz/FuzzLex/` y pasa a ser una semilla.
-
-## Tests primero
-
-{{cards}}
-
-Escribe el test de cada tarjeta, míralo fallar, implementa y solo entonces despliega su referencia. Describen el final del capítulo; cada sesión dice qué filas aplaza.
-
-:::more Los ayudantes de test
-Están al principio de cada fichero de test, en `ref/ch05-sK`.
-
-- **`lexer_test.go`.** `lexAll` y `lexFile` lexan un texto y devuelven los tokens y el sink (`lexFile`, además, el id del fichero y el interner); `lexKinds` y `wantKinds` comparan la lista de tipos; `dumpTokens` devuelve el volcado. `wantOne`, de `source_check_test.go` (capítulo 3), exige un único diagnóstico con su código, mensaje, span y etiqueta.
-- **`numbers_test.go`.** `intValues` y `floatValues` sacan los valores de los literales, y `wantNoDiags` exige cero diagnósticos.
-- **`strings_test.go`.** `shape` escribe cada token como en el volcado y `wantShape` compara esa lista.
-- **`line_rule_test.go`.** Una fila `lineRow` lleva el texto, la forma de sus tokens, los spans de sus `Newline` y cuántos diagnósticos da, y `checkLineRows` comprueba las tres cosas.
-- **`update_test.go`.** `runUpdate` ejecuta el runner con `Update` sobre un fichero temporal y devuelve el fichero resultante y el informe.
-:::
-
-## Implementación
-
-### Sesión 1: tokens, `go generate` y el esqueleto del lexer (≈ 2 h)
-
-#### Los tests, en rojo
-
-1. **Escribe T05.01–T05.13,** en `package syntax_test`. Describen esta interfaz:
-
-```go
-//go:generate go run ./gen -o token_kind.go     // in token.go
-type TokenKind uint8                             // generated: KwFn … Error, and String()
-var keywords map[string]TokenKind                // generated: "fn" → KwFn, …
-type Token struct { Kind TokenKind; Span base.Span; Payload uint32; NewlineBefore bool }
-type TokenBuffer struct { Tokens []Token; Ints []int64; Floats []float64; Strings []string }
-func Lex(sm *base.SourceManager, id base.FileID, in *base.Interner, sink *diag.Sink) TokenBuffer
-func DumpTokens(tb *TokenBuffer, sm *base.SourceManager, in *base.Interner) string
-```
-
-2. **Deja T05.07 sin su `Newline`,** que llega en la sesión 4: `LowerIdent LowerIdent Eof`, con `NewlineBefore` en `false, true, false`.
-3. **Míralos fallar.** Sobre `ch04-s2`, no compilan:
-
-```console
-$ go test ./internal/syntax/
-# github.com/aldezex/kilang/internal/syntax_test [github.com/aldezex/kilang/internal/syntax.test]
-internal/syntax/lexer_test.go:13:47: undefined: syntax.TokenBuffer
-…
-internal/syntax/lexer_test.go:65:52: too many errors
-FAIL	github.com/aldezex/kilang/internal/syntax [build failed]
-```
-
-4. **Escribe la lista, el generador y `token.go`,** y ejecuta `go generate ./internal/syntax`.
-5. **Añade dos stubs** para que compile: `Lex` devuelve `TokenBuffer{Tokens: []Token{{Kind: Eof}}}` y `DumpTokens`, `""`. Pasan las tres primeras tarjetas; las demás fallan sin panic si compruebas la longitud con `t.Fatalf` antes de indexar.
-
-#### El código
-
-{{file ch05-s1 internal/syntax/token_kinds.txt}}
-
-{{file ch05-s1 internal/syntax/gen/main.go}}
-
-`gen` usa el `FlagSet` global de `flag` (`flag.String`, `flag.Parse`), que ante un flag malo sale con 2. Aquí sirve, porque nadie lo ejecuta en proceso.
-
-{{file ch05-s1 internal/syntax/token.go}}
-
-`Token` no guarda texto y ocupa 24 bytes: `Payload` apunta a las tablas de `TokenBuffer`, la idea del capítulo 4.
-
-`token_kind.go` declara sus nombres con `[...]string{KwFn: "KwFn", …}`, un literal de array con claves: el compilador cuenta el tamaño, y reordenar la lista no desplaza la tabla.
-
-{{file ch05-s1 internal/syntax/lexer.go}}
-
-- **`switch c := lx.src[lx.pos]; {`** lleva sentencia inicial: `c` se ve en todos los `case`, y sin expresión, cada `case` es una condición.
-- **`punctuation`** es el maximal munch. `return two('.', DotDot, Dot)` devuelve los tres resultados del closure `two`.
-- **`ident`** busca con `keywords[string(text)]`, una conversión que no reserva memoria (capítulo 4, ejercicio 3).
-- **`visible`** escribe como `<U+XXXX>`, en los mensajes, lo que `unicode.IsPrint(r)` rechaza.
-- **`DumpTokens`** cita los textos con `strconv.Quote` y escribe los `Float` con `strconv.FormatFloat(v, 'g', -1, 64)`, la forma más corta que vuelve a leerse igual. Hasta la sesión 4 es cuadrático en una línea larga: `LineCol` la recuenta en cada token.
-
 `source_check.go` cambia un comentario:
 
 {{diff ch04-s2..ch05-s1 internal/syntax/source_check.go}}
@@ -257,6 +374,22 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s1`; compárate con `re
 
 ### Sesión 2: números (≈ 2 h)
 
+#### Go: `strconv`
+
+`strconv.ParseInt(s, base, 64)` y `strconv.ParseFloat(s, 64)` convierten texto en `int64` y `float64`. Sus errores son `*strconv.NumError`: `Err` guarda la causa (`strconv.ErrRange`, `strconv.ErrSyntax`), y `errors.Is` (capítulo 2) la encuentra.
+
+:::more `strconv` en los límites
+Un underflow no es un error, y por eso `1e-999` vale 0 sin diagnóstico.
+
+| Llamada | Resultado |
+|---|---|
+| `ParseInt("9223372036854775808", 10, 64)` | `9223372036854775807` y `value out of range` |
+| `ParseInt("1_000", 10, 64)` | `0` y `invalid syntax` (con base 0, `1000`) |
+| `ParseFloat("1e999", 64)` | `+Inf` y `value out of range` |
+| `ParseFloat("1e-999", 64)` | `0` y `nil` |
+| `ParseFloat("1_000.5", 64)` | `1000.5` y `nil`; con `1__0.5`, `invalid syntax` |
+:::
+
 #### Los tests, en rojo
 
 1. **Escribe T05.14–T05.26.**
@@ -269,7 +402,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s1`; compárate con `re
 {{file ch05-s2 internal/syntax/numbers.go}}
 
 - **`digitRun`** recibe la clase de dígito como valor de tipo función, `isDigit func(byte) bool`, y sirve a las tres bases. En sus resultados, `_` deja el primero sin nombre.
-- **El punto y la `e`.** Un `.` es del número solo si lo sigue un dígito (si no, `1..2` empezaría por un `Float`); una `e`, solo si la siguen dígitos, con signo opcional.
+- **`number`** sigue la gramática de la Teoría.
 - **`emitInt`** marca un invariante con `panic`: con los dígitos ya comprobados, solo cabe el error de rango.
 
 {{reftest T05.17}}
@@ -297,8 +430,9 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s2`; compárate con `re
 
 {{file ch05-s3 internal/syntax/strings.go}}
 
-- **Escapes.** Uno inválido aporta U+FFFD. `utf8.AppendRune(b, r)` añade la codificación de un escalar a un `[]byte`.
-- **`unterminated`** sustituye los `StringHead` y `StringMid` sin final por un único `Error`, **en el sitio del primer token**: al final, los spans retrocederían. Como `append(toks[:outer.first], Token{…})` reutiliza el array, antes copia lo que conserva en `kept`.
+- **Modos y centinela.** `modeString`, `modeCode` e `InterpSentinel` son los de la Teoría; `endInterpolation` y `trackBraces` deciden la `}`.
+- **Escapes.** Uno inválido aporta U+FFFD. `utf8.ValidRune(r)` comprueba que un `\u{…}` es un escalar, y `utf8.AppendRune(b, r)` añade su codificación a un `[]byte`.
+- **`unterminated`** pone el `Error` en el sitio del primer token, como pide la Teoría. Como `append(toks[:outer.first], Token{…})` reutiliza el array, antes copia lo que conserva en `kept`.
 
 {{reftest T05.38}}
 
@@ -363,10 +497,8 @@ func (s *bracketStack) leave()               // it ends: close the brackets open
 
 {{file ch05-s4 internal/syntax/line_rule.go}}
 
-- **Una pasada al final.** `insertSeparators` recorre los tokens con su propia pila, que sí lleva `(` y `[`, y pone cada `Newline`.
-- **`bracketStack`** guarda los delimitadores abiertos y un contador por tipo. `*s.count(open)++` incrementa el contador a través del puntero que devuelve `count`.
-- **Un cierre** sin pareja (contador a 0) no hace nada. Con pareja, saca lo de encima con `for s.pop() != want {}`, un bucle de cuerpo vacío. Ningún delimitador entra ni sale dos veces: coste lineal.
-- **`enter` y `leave`.** `StringHead` abre un nivel y `StringTail` lo cierra: sin `leave`, `"${ f(a }"` dejaría el `(` abierto y apagaría los saltos del resto del fichero.
+- **`insertSeparators`** es la pasada de la Teoría: `endsExpression` y `continuesLine` son sus conjuntos, y `enter` y `leave`, los niveles de interpolación.
+- **`bracketStack`** lleva los contadores por tipo de la Teoría. `*s.count(open)++` incrementa el contador a través del puntero que devuelve `count`, y `for s.pop() != want {}` es un bucle de cuerpo vacío.
 
 {{diff ch05-s3..ch05-s4 internal/syntax/lexer.go}}
 
@@ -401,7 +533,7 @@ Un golden comprueba el comando entero:
 {{diff ch05-s3..ch05-s4 internal/kitest/runner.go}}
 
 - Solo toca `expect-stdout` y `expect-stderr`: si ajustara el `expect-exit`, `--update` aprobaría un panic nuevo.
-- Solo reescribe si `exit >= 0`: una ejecución que no llegó a salir (-1) no tiene salida que guardar.
+- Solo reescribe si `exit >= 0` (ejercicio 6).
 
 {{diff ch05-s3..ch05-s4 internal/driver/test.go}}
 
@@ -411,7 +543,9 @@ Un golden comprueba el comando entero:
 `var errText *string` es un puntero que puede ser `nil`: con anotaciones, stderr no se escribe.
 :::
 
-#### El primer fuzz
+#### Go: fuzzing nativo
+
+Un test de fuzzing es una función `FuzzXxx(f *testing.F)`: `f.Add(…)` registra semillas y `f.Fuzz(func(t *testing.T, src string) { … })` recibe el objetivo (el *fuzz target*). `go test` solo corre las semillas; `-fuzz` busca más y guarda en `testdata/fuzz/` las que fallan.
 
 {{reftest T05.62}}
 
@@ -429,6 +563,12 @@ Al terminar: tus tests en verde, commit y etiqueta `ch05-s4`; compárate con `re
 Desde la raíz de tu repo, con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el programa del objetivo:
 
 ```console
+$ cat fib.ki
+fn main() {
+  let n = fib(20)
+    |> show
+  print("fib = ${n}\n")
+}
 $ build/bin/ki emit tokens fib.ki
 1:1 KwFn
 1:4 LowerIdent(main)
@@ -731,73 +871,10 @@ t.Run("int_octal", func(t *testing.T) {
 Veintiún sietes son 63 bits a uno, el mayor `Int`; un 1 y 21 ceros, 2⁶³. `code` es `uint16` porque `diag.E` lo pide. `0o8` da E0107 sobre `0o` y después `Int(8)`, como `0b2`. Con `c <= '8'`, `0o8` llega al `panic` de `emitInt`.
 :::
 
-## Preguntas de repaso
-
-:::review
-¿Por qué un literal que desborda deja un token `Int` con valor 0, y no el valor de `ParseInt` ni ningún token?
+:::exercise
+**6. Una ejecución que no salió.** ¿Por qué `--update` no guarda la salida de una ejecución que dio -1?
 :::
 
-:::answer
-Sin token, el parser daría un segundo error por la misma equivocación. Con el valor de `ParseInt`, el máximo, un programa rechazado llevaría un número que nadie escribió. El 0 marca el sitio; el diagnóstico ya dice qué pasó.
-:::
-
-:::review
-¿Por qué `token_kind.go` se versiona y un test lo compara con la salida del generador?
-:::
-
-:::answer
-Porque `go generate` no corre solo: sin versionar, el paquete no compilaría hasta generarlo. Y si alguien cambia la lista sin regenerar, una palabra clave nueva se lee como un nombre sin que nada avise; el test lo convierte en un fallo que pide regenerar.
-:::
-
-:::review
-¿Por qué `ki test --update` no escribe la salida de una ejecución que dio -1?
-:::
-
-:::answer
+:::solution
 Porque -1 significa que el programa no llegó a salir: no arrancó o murió por una señal. Lo que imprimió es el motivo del fallo o una salida a medias, y guardarlo haría de un fallo el golden esperado. El fichero se queda como estaba y falla por el código de salida.
 :::
-
-:::review
-¿Por qué `f(a⏎b)` no recibe `Newline` y `f({⏎a⏎b⏎})` recibe dos?
-:::
-
-:::answer
-Manda el delimitador abierto más interno: dentro de `(` un salto es un espacio, y dentro de `{` termina sentencias, como pide un bloque pasado a una función. Por eso la regla lleva una pila y no un contador.
-:::
-
-:::review
-¿Por qué el `Error` de un string sin cerrar va en el sitio de su primer token y no al final?
-:::
-
-:::answer
-Porque así los `Lo` no decrecen, como pide el fuzz target: al final, el `Error`, que empieza en la comilla, quedaría detrás de tokens que empiezan después. Y el parser lee el `Error` donde estaba el string, antes que el código de dentro: al final, ese código le daría errores de más.
-:::
-
-:::review
-¿Qué gana un fuzz target frente a una tabla de casos?
-:::
-
-:::answer
-La tabla prueba las entradas que alguien pensó, con su resultado exacto. El fuzz target prueba propiedades con entradas que genera él, guiado por la cobertura: con `<=` en `lineEndAt` encontró por sí mismo un `\r` como último byte del fichero, dentro de un string sin cerrar. Y lo que encuentra se queda en `testdata/fuzz/` como semilla, que `go test` ejecuta siempre.
-:::
-
-## Resumen
-
-- El lexer trabaja con bytes y solo decodifica donde importa el carácter entero. Cada token es el más largo posible.
-- `errors.Is(err, strconv.ErrRange)` detecta un desbordamiento; su valor no se guarda.
-- `go generate` solo corre a mano; lo generado se versiona y un test lo vigila.
-- Una pila de modos y un centinela parten los strings con interpolación.
-- La regla de línea mira el delimitador más interno, el token anterior y la línea siguiente.
-- Un token `Error` nunca cierra una expresión, y un literal roto deja un token en su sitio.
-- Un fuzz target corre semillas con `go test` y busca entradas con `-fuzz`.
-- `ki test --update` reescribe solo las salidas esperadas.
-
-## Go en el trabajo
-
-**Funciones de estado.** En «Lexical Scanning in Go» (2011), Rob Pike presentó el lexer de `text/template`: cada estado es una función que devuelve el siguiente (`type stateFn func(*lexer) stateFn`), y los tokens van por un canal.
-
-Hoy ese lexer ejecuta los estados en un bucle, sin goroutines ni canales. El de Ki es un bucle con un `switch`: la interpolación anidada pide una pila de modos de todas formas.
-
-La biblioteca trae dos scanners: `go/scanner`, el del propio Go, y `text/scanner`, genérico.
-
-**`go generate` en repositorios reales.** Más de cien ficheros de `$GOROOT/src` lo usan. Según «Generating code» (Rob Pike, blog de Go, 2014), es para el autor del paquete, no para sus clientes. Para llegarles, lo generado «must be checked into the source code repository».

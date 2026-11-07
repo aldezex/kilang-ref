@@ -8,10 +8,9 @@ milestone: `ki emit ast` (S-expresiones)
 
 ## Objetivo
 
-Al terminar, `ki` lee la estructura de un programa: el parser convierte tokens en un árbol de sintaxis (AST) y no se para en el primer error. Lo enseña `ki emit ast`:
+Al terminar, `ki` lee la estructura de un programa: el parser convierte tokens en un árbol de sintaxis (AST) y no se para en el primer error. Lo enseña `ki emit ast`, que vuelca el árbol de un fichero como este:
 
-```console
-$ cat fib.ki
+```ki
 fn fib(n: Int) -> Int {
   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }
@@ -20,12 +19,9 @@ fn main() {
   let n = fib(20)
   print(n)
 }
-$ build/bin/ki emit ast fib.ki
-(fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))
-(fn main (params) (ret _) (block (let n _ (call fib 20)) (call print n)))
 ```
 
-Una línea por función, en S-expresiones: cada nodo entre paréntesis, su clase delante. `_` es un tipo que el programa no escribió. `print` aún no existe: capítulo 7.
+Sale una línea por función, en S-expresiones: cada nodo entre paréntesis, su clase delante, como `(- n 1)`. `print` aún no existe: capítulo 7.
 
 Es el hito, camino de M1 (capítulo 10).
 
@@ -39,20 +35,20 @@ Es el hito, camino de M1 (capítulo 10).
 
 Un parser de **descenso recursivo** tiene una función por regla de la gramática, y las llamadas se anidan como el texto. Así, el fichero decide la profundidad de la pila.
 
-La pila de una goroutine crece por copia, duplicándose, hasta 512 MiB. Duplicarla otra vez pasa del límite de 1 GB, y entonces no hay panic, sino un error fatal:
-
-```text
-runtime: goroutine stack exceeds 1000000000-byte limit
-runtime: sp=… stack=[…]
-fatal error: stack overflow
-```
+La pila de una goroutine crece por copia, duplicándose, hasta 512 MiB. Duplicarla otra vez pasa del límite de 1 GB, y entonces no hay panic, sino un error fatal: `stack overflow`.
 
 Un `fatal error` no se puede capturar: `recover()` no lo ve, y el proceso termina con código 2. Sin límite, 10⁶ paréntesis anidados lo provocan.
 
 Por eso los límites son del parser, el pase que crea el árbol:
 
-- **`MaxNesting`** (256 niveles, E0204) acota lo que anida.
-- **`MaxChain`** (1 024, E0205) acota lo que no anida en el texto: `1 + 1 + … + 1` tiene en su árbol un nivel por operador. Cuenta operadores binarios y llamadas de la expresión entera de una sentencia, con sus paréntesis y argumentos.
+```math
+niveles anidados (paréntesis, argumentos, prefijos,
+                  condiciones, ramas y bloques)            ≤ MaxNesting = 256     si no, E0204
+operadores binarios + llamadas de una expresión de sentencia,
+con sus paréntesis y argumentos                            ≤ MaxChain = 1 024     si no, E0205
+```
+
+La cadena acota lo que no anida en el texto: `1 + 1 + … + 1` tiene en su árbol un nivel por operador, y cada sentencia cuenta la suya.
 
 Juntos acotan el árbol: un pase posterior no se desborda si gasta poca pila por nivel.
 
@@ -65,6 +61,21 @@ Con los límites, el árbol tiene como mucho unos 256 × 1 024 niveles, porque c
 ### Descenso recursivo y Pratt
 
 Para firmas y sentencias basta mirar el token actual. Ki no hace *backtracking*: ninguna decisión se deshace. Lo pide el 5.3 de su especificación, «el spec» (`docs/superpowers/specs/2026-10-24-ki-design-go.md` en la referencia).
+
+La gramática:
+
+```math
+item  = { attr } [ 'pub' ] 'fn' lower '(' [ param { ',' param } ] ')' [ '->' type ] [ block ]
+attr  = '#' '[' lower [ '(' string { ',' string } ')' ] ']'
+param = lower [ ':' type ]
+type  = Upper | '(' ')'
+block = '{' { stmt sep } [ expr ] '}'          sep = Newline | ';'
+stmt  = 'let' lower [ ':' type ] '=' expr | expr
+if    = 'if' expr block [ 'else' ( block | if ) ]
+
+'x': un token   [ x ]: opcional   { x }: cero o más veces   |: alternativas   ( ): agrupa
+lower, Upper, string, Newline: clases de token
+```
 
 Las expresiones necesitan más. Con una función por nivel de precedencia, `1` pasaría por seis llamadas hasta el literal. **Pratt** pone los niveles en una tabla de **potencias de enlace**: cuanto mayor, más sujeta el operador a sus operandos.
 
@@ -82,23 +93,36 @@ Las expresiones necesitan más. Con una función por nivel de precedencia, `1` p
 
 El algoritmo:
 
-```text
-pratt(minBP):
-  lhs = prefix()                       // a literal, a name, a group, -x, !x
-  loop:
-    if the token is `(`: lhs = call(lhs, arguments); continue
-    if the token is an operator with power bp >= minBP:
-      consume it; rhs = pratt(bp + 1); lhs = (op lhs rhs)
-    else: return lhs
+```pseudo
+función pratt(minBP):
+  lhs ← prefijo()
+  repite:
+    t ← token actual
+    si t es «(» entonces
+      cuenta t en la cadena; si pasa del límite, sal del bucle
+      consume t; lhs ← llamada(lhs, argumentos), o un error si no se cierran
+      sigue con la vuelta siguiente
+    si t no es un operador binario, o su potencia bp < minBP, sal del bucle
+    cuenta t en la cadena; si pasa del límite, sal del bucle
+    consume t; rhs ← pratt(bp + 1)
+    si la expresión se abandonó, sal del bucle
+    lhs ← (op lhs rhs)
+    si bp = 3 y el token actual es otra comparación entonces
+      informa E0203, lee el resto de la cadena y lhs ← un error que la cubre
+  devuelve lhs
+
+función prefijo():
+  si el token es «-» o «!» entonces
+    consúmelo; entra en un nivel (si pasa de MaxNesting, E0204 y un error)
+    devuelve (op pratt(7))
+  si no, devuelve una primaria: literal, nombre, grupo, bloque o if
 ```
 
 Con `1 - 2 * 3`, `pratt(0)` lee `1` y ve `-` (5): pide el operando derecho con `pratt(6)`, que lee `2`, ve `*` (6 ≥ 6) y devuelve `(* 2 3)`. El resultado: `(- 1 (* 2 3))`.
 
 El `bp + 1` decide la **asociatividad**. En `1 - 2 - 3`, el `pratt(6)` del operando derecho ve el segundo `-` (5 < 6) y vuelve, y el bucle de fuera lo toma: `(- (- 1 2) 3)`. Con `pratt(bp)`, saldría `(- 1 (- 2 3))`.
 
-**Las comparaciones no se encadenan.** En Python, `a < b < c` es `a < b and b < c`; en Go compara un `bool` con un `int` y no compila.
-
-Ki, como Rust, la rechaza: un E0203 sobre el segundo operador, y un nodo de error por toda la cadena.
+**Las comparaciones no se encadenan.** En Python, `a < b < c` es `a < b and b < c`; en Go compara un `bool` con un `int` y no compila. Ki, como Rust, la rechaza: un E0203 sobre el segundo operador, y un nodo de error por toda la cadena.
 
 ### Recuperación, sincronización y supresión
 
@@ -106,7 +130,20 @@ Detenerse en el primer error obliga a compilar una vez por error. Ki sigue, con 
 
 **Nodos de error.** Donde el texto deja de tener sentido queda un nodo de error (`ExprError`, `StmtError`…): en el volcado, `(error)`. El árbol queda completo, y los pases posteriores no deben informar sobre ellos.
 
-**Sincronización.** Tras un error, `syncStatement` salta al final de la sentencia: un `Newline`, `;` o `}` que no pertenezcan a lo saltado, o un `let` al empezar una línea. Tras un error en un item (una definición de primer nivel), el parser salta al comienzo de otro.
+**Sincronización.** Tras un error, el parser salta al final de la sentencia:
+
+```pseudo
+función syncStatement():
+  abiertos ← pila vacía              // lo que abren los tokens saltados
+  repite:
+    t ← token actual
+    si t es Eof, devuelve
+    si abiertos está vacía y t es Newline, «;» o un let que empieza línea, devuelve
+    si t es «}» y abiertos no tiene ninguna «{», devuelve
+    apila o cierra t en abiertos, como la regla de línea; avanza
+```
+
+Tras un error en un item (una definición de primer nivel), el parser salta, igual, hasta un token que pueda empezar otro.
 
 El `let` hace falta en `let =⏎let y`: tras un `=` la regla de línea no pone `Newline`, y el salto se comería `let y`.
 
@@ -114,30 +151,48 @@ Un delimitador abierto al final del fichero es E0202.
 
 **Supresión.** El spec (7.3) pide no emitir errores «a menos de 3 tokens del anterior»: suelen ser el mismo visto desde otro sitio.
 
+```math
+se informa el error en el token i  ⟺  no se ha informado ninguno  ∨  i − último ≥ 3
+i = posición del token contando solo los que no son Newline   (un Newline toma la del token anterior)
+último = la i del último error informado; uno callado no la mueve
+```
+
 Se cuentan **tokens que no son `Newline`**: contar esa marca de la regla de línea daría errores distintos al mismo código según cómo se reparta en líneas.
 
 Un token `Error` del lexer ya tiene su diagnóstico: el parser no añade otro.
 
 :::more Los errores de más que quedan
-La promesa es no dar cascadas. Un segundo error de la sentencia sale si el parser llega a él a 3 tokens o más del primero: `g(,) + h(,)` da dos. `f(1 2) + g(,)` da uno: tras el `)` que falta, el salto se come `g(,)`.
+Un segundo error de la sentencia sale si el parser llega a él a 3 tokens o más del primero: `g(,) + h(,)` da dos. `f(1 2) + g(,)` da uno: tras el `)` que falta, el salto se come `g(,)`.
 
 La `{` sin cerrar es la única entrada que da errores de más sin límite: se traga lo de detrás. Un `fn` dentro de un bloque será una sentencia (funciones locales), así que cada línea que empieza un item da un error. Con 100 líneas o más, el E0202, que se informa el último, pasa del límite de `diag.MaxErrors`.
 :::
 
 ### La búsqueda acotada
 
-Ki tendrá lambdas, `(x, y) => x + y`, y al ver `(` el parser no sabe si es una lambda o un grupo. El spec (5.3) lo resuelve con una **búsqueda acotada**: buscar el `)` emparejado contando niveles y mirar si lo sigue `=>`.
+Ki tendrá lambdas, `(x, y) => x + y`, y al ver `(` el parser no sabe si es una lambda o un grupo. El spec (5.3) lo resuelve con una **búsqueda acotada**:
+
+```pseudo
+función esLambda():                 // el token actual es «(»
+  nivel ← 0
+  para cada token t desde ese «(», sin consumir ninguno:
+    si t es Eof, devuelve falso
+    si t es «(» entonces nivel ← nivel + 1
+    si t es «)» entonces nivel ← nivel − 1; si nivel = 0, sal del bucle
+  devuelve: el token tras ese «)» es «=>»
+```
 
 Es barata, no consume nada, y no es *backtracking*: se decide antes de leer. Llega en el capítulo 15.
 
 ### El AST en tablas: `IdVec`, pools y `ListRange`
 
-Un `Module`, el árbol de un fichero, guarda cuatro `IdVec` (items, sentencias, expresiones y tipos) y cuatro pools. Un nodo nombra a otro por su id, y una lista de hijos es un `ListRange` (capítulo 4). Lo nuevo:
+Un `Module`, el árbol de un fichero, guarda cuatro `IdVec` (items, sentencias, expresiones y tipos) y cuatro pools. Un nodo nombra a otro por su id, y una lista de hijos es un `ListRange` (capítulo 4):
 
-- **Contigüidad.** Añadidos según se leen, los argumentos de `g` en `f(1, g(2), 3)` se intercalarían con los de `f`. Por eso cada lista se junta en un slice local y `appendRange` la añade de una vez.
-- **`*[]T`.** `appendRange` recibe un puntero al slice porque `append` devuelve una cabecera nueva y el `Module` debe quedarse con ella.
+```math
+hijos(r) = pool[r.First, r.First + r.Count)       un tramo contiguo del pool
+```
+
+- **Contigüidad.** Añadidos según se leen, los argumentos de `g` en `f(1, g(2), 3)` se intercalarían con los de `f`. Por eso cada lista se junta aparte y se añade al pool de una vez.
 - **El id 0 es un id,** no «nada»: un hijo opcional lleva una marca al lado, `Ret` y `HasRet`.
-- **Vistas recortadas.** `ExprList` devuelve `pool[First:end:end]` (capítulo 2): un `append` de quien la recibe realoja, y no pisa la lista siguiente.
 
 ¿Por qué ids y no punteros en un lenguaje con recolector?
 
@@ -164,31 +219,111 @@ Un `match` sobre un `enum` sí es exhaustivo: olvidar una variante no compila.
 
 ### Closures en los tests
 
-Un closure (capítulo 1) ve las variables de la función que lo contiene **como variables**, no como copias. Aquí, `get()` devuelve 2:
-
-```go
-n := 1
-get := func() int { return n }
-n = 2
-```
+Un closure (capítulo 1) ve las variables de la función que lo contiene **como variables**, no como copias: si una cambia, el closure ve el cambio.
 
 :::from Rust
-En Rust no compila: no se puede asignar a `n` mientras el closure la tiene prestada. En Go la variable es compartida y, si el closure sobrevive a la función, el recolector la mantiene viva.
+En Rust, asignar a una variable que un closure tiene prestada no compila. En Go la variable es compartida y, si el closure sobrevive a la función, el recolector la mantiene viva.
 :::
 
 Los tests lo usan: sus ayudantes capturan `t` y `src` sin recibirlos.
 
 ### El impresor y las S-expresiones
 
-`PrintModule` acumula el texto en un `strings.Builder` (capítulo 3) y devuelve un `string`; `ki emit` lo escribe en un `io.Writer`. Las S-expresiones no son ambiguas, y un golden las compara línea a línea.
+Las S-expresiones no son ambiguas, y un golden las compara línea a línea.
 
 ### Fuzzing del parser
 
-`FuzzParse` comprueba, como `FuzzLex` en el lexer, que ninguna entrada da panic, tampoco al recorrer el árbol con `PrintModule`, y que todo span cae dentro del fichero.
+El fuzz target del parser comprueba, como el del lexer, propiedades:
+
+```math
+∀ src, con m = Parse(Lex(src)):
+  Parse y PrintModule(m) no hacen panic
+  ∀ span s ≠ cero de m o de una etiqueta de diagnóstico:
+      s.File = el fichero  ∧  s.Lo ≤ s.Hi ≤ len(src)
+(que terminen no lo comprueba: un bucle sin fin no falla, se queda colgado)
+```
 
 ### Nombres
 
 La guía de estilo de Google pide no repetir el paquete (`syntax.Parse`, no `syntax.SyntaxParse`) y accesores sin `Get` (`Params`).
+
+## Preguntas de repaso
+
+:::review
+¿Por qué los límites de anidamiento y de cadena son del parser y no de cada pase?
+:::
+
+:::answer
+Porque un desbordamiento de pila en Go es un `fatal error` que nada captura: ningún pase podría convertirlo en un diagnóstico. El parser es el pase que crea el árbol; si el árbol que entrega está acotado, el impresor, el comprobador y el intérprete pueden recorrerlo con una pila acotada.
+:::
+
+:::review
+¿Por qué `pratt` lee el operando derecho con `bp + 1` y no con `bp`?
+:::
+
+:::answer
+Porque así un operador de la misma potencia no entra en el operando derecho: lo deja para el bucle de fuera, que lo aplica a lo ya construido, y la asociatividad es por la izquierda.
+:::
+
+:::review
+¿Por qué la supresión cuenta tokens que no son `Newline`, y no líneas?
+:::
+
+:::answer
+Porque un `Newline` lo pone la regla de línea, no quien programa: contarlo, o contar líneas, haría que el mismo código diera errores distintos según cómo se reparta en líneas.
+:::
+
+:::review
+¿Por qué `syncStatement` para en un `let` que empieza una línea?
+:::
+
+:::answer
+Porque tras un `=` la línea no ha acabado y la regla de línea no pone `Newline`: en `let =⏎let y }`, el salto no encontraría separador antes del `}` y se comería la sentencia siguiente. Y solo una sentencia empieza por `let`: es un final seguro.
+:::
+
+:::review
+¿Por qué una cadena de comparaciones da un solo nodo de error, y no un árbol de comparaciones?
+:::
+
+:::answer
+Porque el error ya está informado: el E0203 sobre el segundo operador. Un árbol `(< (< a b) c)` compararía un `Bool` con lo que sea `c`, y el comprobador de tipos daría un segundo error por la misma equivocación.
+:::
+
+:::review
+¿Qué gana `ki check` con que el parser siga tras un error, y por qué necesita la supresión?
+:::
+
+:::answer
+Gana informar en una pasada de varios errores, no solo del primero. Pero seguir en el token siguiente produce cascadas: un `let =` daba tres mensajes sobre el mismo `=`. La sincronización salta lo que ya no tiene sentido y la supresión calla lo que es el mismo error visto otra vez.
+:::
+
+## Resumen
+
+- Desbordar la pila es un `fatal error`: el parser acota anidamiento y cadenas.
+- Descenso recursivo sin *backtracking*, y Pratt para las expresiones.
+- `pratt(bp + 1)` asocia por la izquierda.
+- Un error deja un nodo de error; el parser salta lo roto y calla los errores a menos de 3 tokens del anterior.
+- La búsqueda acotada mira hacia delante sin consumir nada.
+- El AST en tablas: listas contiguas, nodos sin punteros, tablas laterales, volcados estables.
+- Un panic en la rama por defecto hace ruidoso lo que un `switch` no comprueba.
+- Un closure captura variables, no valores.
+- El fuzz target vigila panics y spans; un bucle sin fin, no.
+
+## Go en el trabajo
+
+**Parsers a mano.** Lo son `go/parser` y el del compilador, que lee las expresiones binarias con un bucle, como `pratt`.
+
+**Errores en el editor.** Casi siempre ve programas a medias: un parser que se rinde no le sirve.
+
+:::more Cómo se recupera `go/parser`
+`go/ast`, el AST de `gofmt` y otras herramientas, tiene nodos de error: `BadExpr`, `BadStmt` y `BadDecl`.
+
+`go/parser` se recupera como Ki, con otras piezas: `advance(stmtStart)` salta hasta una palabra clave que empieza sentencia, y un contador, `syncCnt`, garantiza que el parser avanza.
+
+Sin el modo `AllErrors`, descarta todo error en la misma línea que el anterior: `f(1 2); f(1 2); f(1 2)` da un error, y repartido en tres líneas, tres. `ki check` da tres en los dos.
+:::
+
+**Variables de bucle.** Desde `go 1.22` en el `go.mod`, cada vuelta de un `for` tiene su propia variable, y sus closures no comparten una (sesión 1).
 
 ## Tests primero
 
@@ -209,6 +344,26 @@ Si un test de la referencia usa uno que no conoces, búscalo en `ref/ch06-sK`: s
 ## Implementación
 
 ### Sesión 1: el AST y las firmas de función (≈ 3 h)
+
+#### Go: closures
+
+Aquí, `get()` devuelve 2:
+
+```go
+n := 1
+get := func() int { return n }
+n = 2
+```
+
+¿Y qué da llamar a cada función de `fs`?
+
+```go
+for i := 0; i < 3; i++ {
+	fs = append(fs, func() int { return i })
+}
+```
+
+Con `go 1.21` en el `go.mod`, da `3 3 3`: los closures capturan la única variable `i`. Con `go 1.22`, `0 1 2`: cada vuelta tiene la suya.
 
 #### Los tests, en rojo
 
@@ -253,13 +408,18 @@ Fallan sin panic; los de la estructura del AST y el del módulo vacío ya pasan.
 
 #### El código
 
-Las reglas de la gramática van en los comentarios: entre comillas, un token; `[ x ]`, opcional; `{ x }`, cero o más veces; `|`, alternativas; `( )` agrupa. `lower`, `string` y `Newline` son clases de token.
+Las reglas de la gramática de la Teoría van en los comentarios.
 
 {{file ch06-s1 internal/syntax/parser.go}}
 
 Sin un `{` en la línea de la firma, `pub fn print(x: Int)` no tiene cuerpo: es una declaración externa.
 
+- **`appendRange`** recibe un puntero al slice, `*[]T`, porque `append` devuelve una cabecera nueva y el `Module` debe quedarse con ella.
+- **`ExprList`** devuelve una vista recortada, `pool[First:end:end]` (capítulo 2): un `append` de quien la recibe realoja, y no pisa la lista siguiente.
+
 {{file ch06-s1 internal/syntax/ast_printer.go}}
+
+`PrintModule` acumula el texto en un `strings.Builder` (capítulo 3) y devuelve un `string`; `ki emit` lo escribe en un `io.Writer`.
 
 Y un comentario:
 
@@ -315,7 +475,7 @@ El diff añade el campo `chain`: quita antes el tuyo.
 {{diff ch06-s1..ch06-s2 internal/syntax/parser.go}}
 
 - **`pratt`** es el algoritmo de la teoría, y **`binaryOp`**, la tabla.
-- **La cadena.** Los prefijos no cuentan: son asunto del anidamiento. Pasado el límite, `countChain` informa E0205 una vez, `expr` salta el resto de la sentencia y la expresión queda **abandonada**: un nodo de error.
+- **La cadena.** Los prefijos no cuentan: son asunto del anidamiento. `countChain` informa E0205 una vez, `expr` salta el resto de la sentencia y la expresión queda **abandonada**: un nodo de error.
 
 `Parse` aún no llama a `expr`: todo cuerpo es `{}`.
 
@@ -350,7 +510,7 @@ El parser empieza a informar E0201, `expected <what>, found <token>`, y tras un 
 4. **Míralos fallar.** No compila (`r.p.letStmt undefined`). Añade un `letStmt` que devuelva `p.m.Stmts.Push(Stmt{Kind: StmtError})`.
 5. **Dos subtests de la referencia hacen panic en rojo:** indexan sin comprobar la longitud. En tu versión, pon delante un `t.Fatalf` que la compruebe; con la referencia, usa `-skip`, el contrario de `-run`:
 
-```console
+```console doctest="skip: necesita el stub de letStmt del paso 4"
 $ go test ./internal/syntax -skip 'TestParseStmt/(let_missing_equals_keeps_the_name|found_text_is_the_source_text)$'
 ```
 
@@ -382,6 +542,16 @@ Si te atascas o tu versión se desvía demasiado, copia el fichero de `ref/ch06-
 Al terminar: tus tests en verde, commit y etiqueta `ch06-s3`; compárate con `ref/ch06-s3`.
 
 ### Sesión 4: recuperación, límite de anidamiento y `ki emit ast` (≈ 2,5 h)
+
+#### Go: el desbordamiento de pila
+
+Lo que imprime Go al pasar del límite de la pila:
+
+```text
+runtime: goroutine stack exceeds 1000000000-byte limit
+runtime: sp=… stack=[…]
+fatal error: stack overflow
+```
 
 #### Los tests, en rojo
 
@@ -421,7 +591,7 @@ Lo demás de estos diffs ya lo tienes: la referencia tenía esas tarjetas en otr
 
 - **El separador.** Tras una sentencia, `block` lo pide solo en la misma línea (`!p.tok().NewlineBefore`): tras un `(` sin cerrar no hay `Newline` hasta el `}`, y basta el salto de línea del fichero.
 - **Abandono.** E0204 abandona la expresión, igual que E0205, y una condición abandonada arrastra al `if` y a lo que lo contiene: lo que esperaban ya se saltó.
-- **Anidamiento.** `enter` y `leave` rodean cada paréntesis, argumento, prefijo, condición, rama y bloque.
+- **Anidamiento.** `enter` y `leave` rodean cada nivel de la Teoría.
 - **Las tres guardas «Cannot happen today»** no tienen test: puedes omitirlas.
 
 {{reftest T06.86}}
@@ -448,7 +618,7 @@ Lo demás de estos diffs ya lo tienes: la referencia tenía esas tarjetas en otr
 
 Ejecútalo; debe dar unas 10⁶ entradas, `PASS` y nada en `testdata/`:
 
-```console
+```console doctest="skip: un fuzz de 10 s"
 $ go test ./internal/syntax -run='^$' -fuzz=FuzzParse -fuzztime=10s
 ```
 
@@ -457,7 +627,7 @@ $ go test ./internal/syntax -run='^$' -fuzz=FuzzParse -fuzztime=10s
 2. **Repite con `-parallel=1`,** un solo proceso. El contador se para en `gathering baseline coverage: k/n completed` (con la caché vacía, en `execs: N (0/sec)`), y termina en `PASS`: una entrada que no vuelve no es un fallo.
 3. **Lo caza el tiempo máximo,** que corta el test de la llave sin cerrar con `panic: test timed out after 20s`:
 
-```console
+```console doctest="skip: necesita el bucle del paso 1"
 $ go test -run TestRecover -timeout 20s ./internal/syntax
 ```
 
@@ -470,7 +640,24 @@ Al terminar: tus tests en verde, commit y etiqueta `ch06-s4`; compárate con `re
 
 ## Ejecútalo
 
-Desde la raíz de tu repo, con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el `fib.ki` del objetivo da las dos líneas de arriba. Un fichero con cuatro errores:
+Desde la raíz de tu repo, con `ki` construido (`go build -o build/bin/ki ./cmd/ki`), el programa del objetivo; `_` es un tipo que el programa no escribió:
+
+```console
+$ cat fib.ki
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  let n = fib(20)
+  print(n)
+}
+$ build/bin/ki emit ast fib.ki
+(fn fib (params (n Int)) (ret Int) (block (if (< n 2) (block n) (block (+ (call fib (- n 1)) (call fib (- n 2)))))))
+(fn main (params) (ret _) (block (let n _ (call fib 20)) (call print n)))
+```
+
+Un fichero con cuatro errores:
 
 ```console
 $ cat bad.ki
@@ -706,87 +893,10 @@ En `ast.go`, `BinPipe` tras `BinOr` y su texto, `BinPipe: "|>"`. En `parser_expr
 Con `bpPipe = 1`, la cuarta fila da `(|| (|> a f) g)`. Y la fila `BinOp(13)` de los nombres de operador falla hasta que pase a `BinOp(14)`: `BinOp(13).String() = "|>", want "BinOp(13)"`. Convertir `e |> f(…)` en `f(e, …)` es trabajo de la elaboración, el pase que traduce el AST a Core (capítulo 9), no del parser.
 :::
 
-## Preguntas de repaso
-
-:::review
-¿Por qué los límites de anidamiento y de cadena son del parser y no de cada pase?
+:::exercise
+**6. Listas contiguas.** ¿Por qué `callArgs` junta los argumentos en un slice local antes de añadirlos al pool?
 :::
 
-:::answer
-Porque un desbordamiento de pila en Go es un `fatal error` que nada captura: ningún pase podría convertirlo en un diagnóstico. El parser es el pase que crea el árbol; si el árbol que entrega está acotado, el impresor, el comprobador y el intérprete pueden recorrerlo con una pila acotada.
-:::
-
-:::review
-¿Por qué `pratt` lee el operando derecho con `bp + 1` y no con `bp`?
-:::
-
-:::answer
-Porque así un operador de la misma potencia no entra en el operando derecho: lo deja para el bucle de fuera, que lo aplica a lo ya construido, y la asociatividad es por la izquierda.
-:::
-
-:::review
-¿Por qué la supresión cuenta tokens que no son `Newline`, y no líneas?
-:::
-
-:::answer
-Porque un `Newline` lo pone la regla de línea, no quien programa: contarlo, o contar líneas, haría que el mismo código diera errores distintos según cómo se reparta en líneas.
-:::
-
-:::review
-¿Por qué `syncStatement` para en un `let` que empieza una línea?
-:::
-
-:::answer
-Porque tras un `=` la línea no ha acabado y la regla de línea no pone `Newline`: en `let =⏎let y }`, el salto no encontraría separador antes del `}` y se comería la sentencia siguiente. Y solo una sentencia empieza por `let`: es un final seguro.
-:::
-
-:::review
-¿Por qué `callArgs` junta los argumentos en un slice local antes de añadirlos al pool?
-:::
-
-:::answer
+:::solution
 Porque un argumento puede ser otra llamada, que añade sus propios argumentos al pool mientras se lee: los de dentro quedarían intercalados con los de fuera, y un `ListRange` tiene que ser contiguo.
 :::
-
-:::review
-¿Qué gana `ki check` con que el parser siga tras un error, y por qué necesita la supresión?
-:::
-
-:::answer
-Gana informar en una pasada de varios errores, no solo del primero. Pero seguir en el token siguiente produce cascadas: un `let =` daba tres mensajes sobre el mismo `=`. La sincronización salta lo que ya no tiene sentido y la supresión calla lo que es el mismo error visto otra vez.
-:::
-
-## Resumen
-
-- Desbordar la pila es un `fatal error` que nada captura: el parser acota anidamiento y cadenas.
-- Descenso recursivo sin *backtracking*, y Pratt para las expresiones: `pratt(bp + 1)` asocia por la izquierda.
-- Un error deja un nodo de error; el parser salta lo roto y calla los errores a menos de 3 tokens del anterior.
-- La búsqueda acotada mira hacia delante sin consumir nada.
-- El AST en tablas: nodos sin punteros, tablas laterales por id, volcados estables.
-- `default: panic("unreachable")` hace ruidoso lo que un `switch` no comprueba.
-- Un closure captura variables, no valores.
-- `FuzzParse` vigila panics y spans; un bucle sin fin lo caza `-timeout`.
-
-## Go en el trabajo
-
-**Parsers a mano.** Lo son `go/parser` y el del compilador, que lee las expresiones binarias con un bucle, como `pratt`.
-
-**Errores en el editor.** Casi siempre ve programas a medias: un parser que se rinde no le sirve.
-
-:::more Cómo se recupera `go/parser`
-`go/ast`, el AST de `gofmt` y otras herramientas, tiene nodos de error: `BadExpr`, `BadStmt` y `BadDecl`.
-
-`go/parser` se recupera como Ki, con otras piezas: `advance(stmtStart)` salta hasta una palabra clave que empieza sentencia, y un contador, `syncCnt`, garantiza que el parser avanza.
-
-Sin el modo `AllErrors`, descarta todo error en la misma línea que el anterior: `f(1 2); f(1 2); f(1 2)` da un error, y repartido en tres líneas, tres. `ki check` da tres en los dos.
-:::
-
-**Variables de bucle.** ¿Qué da llamar a cada función de `fs`?
-
-```go
-for i := 0; i < 3; i++ {
-	fs = append(fs, func() int { return i })
-}
-```
-
-Con `go 1.21` en el `go.mod`, da `3 3 3`: los closures capturan la única variable. Con `go 1.22`, `0 1 2`.

@@ -8,21 +8,7 @@ milestone: **M1**: `ki run fib.ki` imprime `6765`
 
 ## Objetivo
 
-Al terminar, Ki ejecuta programas. Es el hito M1, y acaba la Parte I:
-
-```console
-$ cat fib.ki
-fn fib(n: Int) -> Int {
-  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
-}
-
-fn main() {
-  let x = fib(20)
-  print(x)
-}
-$ build/bin/ki run fib.ki
-6765
-```
+Al terminar, Ki ejecuta programas: `build/bin/ki run fib.ki` imprime `6765`, que es `fib(20)` (véase «Ejecútalo»). Es el hito M1, y acaba la Parte I.
 
 ## Teoría
 
@@ -32,9 +18,9 @@ Recorrer el árbol con recursión de Go heredaría su pila, y desbordarla mata e
 
 Este intérprete es el **oráculo**: con él se comparan los otros backends. Tiene tres partes:
 
-- **Control:** la expresión que toca evaluar, o el valor que acaba de salir.
-- **Entorno:** las variables de la función en curso.
-- **Continuación** (*Kontinuation*, la K): qué hacer con ese valor, una pila de marcos.
+- **Control** `c`: la expresión que toca evaluar, o el valor que acaba de salir, `↑v`.
+- **Entorno** `E`: las variables de la función en curso.
+- **Continuación** `K` (*Kontinuation*): qué hacer con ese valor, una pila de marcos, con la cima a la izquierda.
 
 Una expresión compuesta empuja un marco y pasa a su primera parte; un valor va al marco de arriba. Así corre `fn f() -> Int { 1 + 2 }`:
 
@@ -46,17 +32,58 @@ Una expresión compuesta empuja un marco y pasa a su primera parte; un valor va 
 | `2` | pasa a valor | `[prim 1]` |
 | valor 2 | saca el marco y calcula: valor 3 | `[]` |
 
-Los cinco marcos:
+**Las transiciones** van de un estado `⟨c, E, K⟩` al siguiente. Evaluar una expresión:
 
-| Marco | Espera | Cuando llega |
-|---|---|---|
-| `primFrame` | un argumento de una primitiva | pasa al segundo o calcula |
-| `argFrame` | la función o un argumento | con todos, llama |
-| `letFrame` | la inicialización de un `let` | lo escribe |
-| `matchFrame` | lo que compara un `match` | elige el brazo |
-| `retFrame` | el cuerpo de una función | recorta los entornos y baja el valor |
+```math
+⟨n, E, K⟩                  ⟶  ⟨↑n, E, K⟩          igual con true, false, () y una función f
+⟨x, E, K⟩                  ⟶  ⟨↑E[slot(x)], E, K⟩
+⟨let x = e₁; e₂, E, K⟩     ⟶  ⟨e₁, E, let(x, e₂) · K⟩
+⟨p(e₁, …), E, K⟩           ⟶  ⟨e₁, E, prim(p, _) · K⟩
+⟨e₀(e₁, …, eₙ), E, K⟩      ⟶  ⟨e₀, E, arg() · K⟩
+⟨match e { … }, E, K⟩      ⟶  ⟨e, E, match(…) · K⟩
+```
 
-Sacar el `retFrame` es volver. Como la continuación son datos, capturarla, en el capítulo 21, será copiar un trozo de esa pila.
+Devolver un valor al marco de arriba:
+
+```math
+⟨↑v, E, let(x, e₂) · K⟩      ⟶  ⟨e₂, E[slot(x) ↦ v], K⟩
+⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨e₂, E, prim(p, v) · K⟩      si aridad(p) = 2
+⟨↑v, E, prim(p, _) · K⟩      ⟶  ⟨↑p(v), E, K⟩                si aridad(p) = 1
+⟨↑v₂, E, prim(p, v₁) · K⟩    ⟶  ⟨↑p(v₁, v₂), E, K⟩
+⟨↑v, E, prim(p, …) · K⟩      ⟶  Halt 101                     en lugar de las dos anteriores, si p falla: un desbordamiento,
+                                                             como neg_int(MinInt64), o una división por 0
+⟨↑v, E, arg(vs) · K⟩         ⟶  ⟨eₖ, E, arg(vs v) · K⟩       k = |vs v|, si k ≤ n
+⟨↑v, E, match(…) · K⟩        ⟶  ⟨el brazo que encaja con v, E, K⟩
+⟨↑v, E, ret(E′) · K⟩         ⟶  ⟨↑v, E′, K⟩
+
+let, prim, arg, match y ret son letFrame, primFrame, argFrame, matchFrame y retFrame;
+cada marco recuerda su expresión: e₂ y eₖ son sus argumentos segundo y k-ésimo;
+_ es el hueco del primer operando, y vs v es vs con v al final
+```
+
+Cuando `|vs v| = n + 1`, `arg` llama; las reglas se prueban en orden:
+
+```math
+vs v = f v₁ … vₙ        la función y sus n argumentos
+E_f                     el entorno nuevo, con cada vᵢ en el slot de su parámetro
+
+⟨↑v, E, arg(vs) · K⟩            ⟶  ⟨↑f(v₁, …, vₙ), E, K⟩          si f no tiene cuerpo: un extern
+⟨↑v, E, arg(vs) · ret(E′) · K⟩  ⟶  ⟨cuerpo(f), E_f, ret(E′) · K⟩   (Cola)
+⟨↑v, E, arg(vs) · K⟩            ⟶  ⟨cuerpo(f), E_f, ret(E) · K⟩    (Llamada) si |K| < límite
+⟨↑v, E, arg(vs) · K⟩            ⟶  Halt 103                       (Desborde) si |K| ≥ límite
+```
+
+El bucle:
+
+```pseudo
+función run():
+  mientras la máquina no se haya parado:
+    si el control es una expresión e entonces aplica la regla de evaluar e
+    si no, si K no está vacía entonces saca el marco de arriba y devuélvele el valor
+    si no devuelve el valor
+```
+
+Como la continuación son datos, capturarla, en el capítulo 21, será copiar un trozo de esa pila.
 
 ### Interfaces selladas y uniones a mano
 
@@ -73,17 +100,25 @@ Un `enum Value` con `match` daría la exhaustividad en compilación; aquí la da
 
 ### `int64`: desborda sin avisar
 
-En Go, el desbordamiento con signo está definido: sin panic, `MaxInt64 + 1` da `MinInt64`. Solo una expresión constante da error de compilación.
+En Go, el desbordamiento con signo está definido: sin panic, `MaxInt64 + 1` da `MinInt64`. Una expresión constante que desborda no compila.
 
-Ki exige un panic: cada operación calcula `r` y comprueba, con aritmética explícita, sin `math/bits`:
+Ki exige un panic: cada operación calcula `r` y comprueba, con aritmética explícita, sin `math/bits`. `⊕` es el o exclusivo bit a bit, el `^` de Go:
 
-- **Suma:** `(a^r)&(b^r) < 0`. `x^r` tiene el bit de signo a 1 si `x` y `r` difieren en signo, y una suma desborda si los dos operandos difieren del resultado.
-- **Resta:** `(a^b)&(a^r) < 0`. Operandos de signo distinto, y un resultado sin el signo de `a`.
-- **Producto:** `r/b != a`: si dio la vuelta, dividir no devuelve `a`. Un operando 0 va antes, porque dividir por 0 sí es un panic de Go.
+```math
+r = a + b    desborda  ⇔  (a ⊕ r) & (b ⊕ r) < 0
+r = a − b    desborda  ⇔  (a ⊕ b) & (a ⊕ r) < 0
+r = a × b    desborda  ⇔  a ≠ 0  ∧  b ≠ 0  ∧  ( {a, b} = {MinInt64, −1}  ∨  r / b ≠ a )
+r = −a       desborda  ⇔  a = MinInt64
+a / b  =  trunc(a ÷ b)       b = 0 → «division by zero»     a = MinInt64 ∧ b = −1 → «integer overflow»
+a % b  =  a − b·(a / b)      b = 0 → «division by zero»     MinInt64 % −1 = 0
+```
+
+- **Suma:** `x ⊕ r` es negativo si `x` y `r` difieren en signo: desborda si los dos operandos difieren del resultado.
+- **Resta:** operandos de signo distinto, y un resultado sin el signo de `a`.
+- **Producto:** si dio la vuelta, dividir no devuelve `a`. El 0 va antes: dividir por 0 sí es un panic de Go.
 - **El punto ciego:** en Go, `MinInt64 / -1` no falla y da `MinInt64`, así que `MinInt64 * -1` pasaría la prueba del producto. El par va aparte.
-- **Negar `MinInt64`** también desborda.
 
-`/` trunca hacia cero y `%` toma el signo del dividendo: `-7 / 2` es -3 y `-7 % 3` es -1. En Ki, `MinInt64 / -1` es un panic y `MinInt64 % -1` vale 0.
+`/` trunca hacia cero y `%` toma el signo del dividendo: `-7 / 2` es -3 y `-7 % 3` es -1.
 
 :::more Desplazamientos en Go
 Ki aún no tiene `<<` ni `>>`, y Core no tiene primitivas de desplazamiento. Para cuando los tenga:
@@ -100,17 +135,7 @@ Empujar es `append` y sacar es `s[:n-1]`. La máquina tiene dos pilas: `stack []
 
 El «marco» del capítulo 9, el de `FrameSize` y `Slot`, es aquí un entorno, y sus slots, casillas.
 
-El código indexa `envs` y nunca guarda `&envs[i]`, porque un `append` puede copiar las cabeceras a otro array:
-
-```go
-envs := make([][]int, 1, 1)
-envs[0] = []int{1, 2}
-p, slot := &envs[0], &envs[0][0]
-envs = append(envs, []int{3}) // no room: the headers are copied to a new array
-fmt.Println(p == &envs[0], slot == &envs[0][0]) // false true
-```
-
-`p` se queda en el array viejo. Las casillas no se mueven: cada cabecera apunta a su propio array.
+El código indexa `envs` y nunca guarda `&envs[i]`. Un `append` puede copiar las cabeceras a otro array, y ese puntero se quedaría en el viejo. Las casillas no se mueven: cada cabecera apunta a su propio array.
 
 :::from Rust
 `let p = &v[0]; v.push(2); use(p)` no compila. Go lo acepta, y la regla es tuya.
@@ -125,7 +150,7 @@ Un `panic` de Go es un bug del compilador, y el `recover` de cada pase (capítul
 | Código | Significado |
 |---|---|
 | 0 | terminó bien |
-| 1 | errores de compilación, fichero ilegible o stdout perdido |
+| 1 | errores de compilación, fichero ilegible o stdout que falla |
 | 2 | uso incorrecto de `ki` |
 | 70 | ICE |
 | 101 | panic de Ki |
@@ -135,23 +160,28 @@ Un `panic` de Go es un bug del compilador, y el `recover` de cada pase (capítul
 
 ### Llamadas de cola
 
-Una llamada normal empuja un `retFrame`, que recuerda el entorno de quien llama, y añade un entorno.
+Una llamada está **en cola** si es lo último que hace su función: arriba ya hay un `retFrame`, y nada espera el valor salvo el retorno. (Cola) reutiliza ese marco y **sustituye** el entorno; (Llamada) empuja uno nuevo, con el entorno de quien llama.
 
-Una llamada está en cola si es lo último que hace su función. Si el marco de arriba ya es un `retFrame`, nada espera el valor salvo el retorno: la llamada reutiliza ese marco y **sustituye** el entorno.
-
-`Let` y `Match` ya no están en la pila cuando corre su cuerpo o su brazo: `count(n - 1)` en un brazo está en cola. En `n + sumTo(n - 1)`, no, porque un `primFrame` espera.
+Las reglas de `let` y `match` no empujan nada al seguir: `count(n - 1)` en un brazo está en cola. En `n + sumTo(n - 1)`, no, porque un `primFrame` espera.
 
 Ki aún no tiene `while` (capítulo 23): su bucle es la llamada de cola, de profundidad constante.
 
 ### El límite de la pila
 
-La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: la variable `KI_STACK_MB`, en MiB, 256 por defecto. Cada MiB son 1<<14 marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables de la función.
+La recursión de Ki vive en un slice, en el heap, así que el límite es nuestro: `KI_STACK_MB`, en MiB.
+
+```math
+límite = min(mb, ⌊MaxInt / 2¹⁴⌋) × 2¹⁴ marcos      mb = KI_STACK_MB si es un entero > 0; si no, 256
+                                                   (el min impide que el producto dé la vuelta)
+```
+
+Cada MiB son 2¹⁴ marcos, a 64 bytes nominales, sin contar los entornos, que crecen con las variables.
 
 **Fe de erratas.** Muchas variables llenan la memoria antes del 103: la rama `main` limita también las casillas, a 16 bytes, y borra lo que saca, contra el comentario de `run`.
 
-Empujar un `retFrame` con la pila en el límite termina en `panic: stack overflow at <posición>`, con 103. Una llamada de cola no empuja, así que pasa.
+El 103 de (Desborde) escribe `panic: stack overflow at <posición>`. (Cola) no empuja, así que no mira el límite.
 
-La pila de Go es lo contrario. Su límite es 1 GB y, como se duplica, muere con 512 MiB: `fatal error: stack overflow`. Ningún `recover` lo detiene y sale con 2.
+La pila de Go no es nuestra: su límite es 1 GB y, como se duplica, muere con 512 MiB: `fatal error: stack overflow`. Ningún `recover` lo detiene y sale con 2.
 
 ### `kirt/out`: un solo escritor
 
@@ -160,17 +190,36 @@ La pila de Go es lo contrario. Su límite es 1 GB y, como se duplica, muere con 
 - **`bufio.Writer`** junta las escrituras en 64 KiB: una llamada al sistema por línea saldría cara. Recuerda su primer error y lo repite.
 - **`sync.Mutex`** hace de cada `Write` o `Flush` un todo, para cuando escriban varias goroutines.
 - **Una terminal** vacía en cada línea: `f.Stat()` da el modo, y `os.ModeCharDevice` marca un dispositivo de caracteres (también `/dev/null`). `Stderr` vacía siempre por líneas.
-- **`out.Exit`** vacía y llama a `os.Exit`, que se salta los `defer`. Si stdout falló y el código iba a ser 0, lo dice por stderr y sale con 1.
 
-Un panic vacía stdout antes de escribir su mensaje: así sale detrás de lo impreso.
+**`out.Exit`** vacía antes de llamar a `os.Exit`, que se salta los `defer`:
+
+```pseudo
+función Exit(código):
+  err ← vacía Stdout
+  vacía Stderr
+  si err no es nulo y código = 0 entonces
+    escribe «ki: cannot write to stdout: …» por Stderr
+    código ← 1
+  os.Exit(código)
+```
+
+Un panic de Ki vacía stdout antes de escribir su mensaje: así sale detrás de lo impreso.
 
 ### El test de imports
 
-Un test hace cumplir tres reglas; de `kirt`, aún solo existe `out`:
+Un test hace cumplir tres reglas; de `kirt`, aún solo existe `out`. Con `M` la ruta del módulo:
 
-- **`kirt` solo importa la biblioteca estándar y a sí mismo.** `ki build` (capítulo 48) copiará `kirt` junto al programa generado, y esa copia tiene que compilar sola.
-- **De `kirt`, el oráculo solo importa `out`, `splitmix` y `fmtnum`,** hojas que no importan nada más de `kirt`. Si usara el planificador o los canales de `kirt`, no podría encontrar sus fallos.
-- **`unsafe` solo bajo `kirt/heap`,** el único sitio donde un entero se convierte en puntero.
+```math
+std = { i | el primer elemento de i no tiene punto }
+
+∀ import i bajo kirt/              i ∈ std  ∨  i empieza por M/kirt/
+∀ import i bajo internal/interp/   i = M/kirt ∨ i empieza por M/kirt/  ⇒  i ∈ { M/kirt/out, M/kirt/splitmix, M/kirt/fmtnum }
+∀ fichero f que importa unsafe     f está bajo kirt/heap/
+```
+
+- **`kirt`:** `ki build` (capítulo 48) lo copiará junto al programa generado, y esa copia tiene que compilar sola.
+- **El oráculo:** solo importa hojas, que no importan nada más de `kirt`. Con el planificador o los canales de `kirt`, no podría encontrar sus fallos.
+- **`unsafe`:** `kirt/heap` es el único sitio donde un entero se convierte en puntero.
 
 `parser.ParseFile` (capítulo 7), con `parser.ImportsOnly`, lee solo los `import`, así que un comentario no cuenta.
 
@@ -184,15 +233,7 @@ Sin el `Mutex`, dos goroutines tocarían el mismo `bufio.Writer` a la vez, y `go
 
 ### El proceso ayudante
 
-Un test no puede ver morir a su proceso: relanza su binario con otro cometido, como `runKi` (capítulo 1):
-
-```go
-// -test.run is go test's -run, as the test binary spells it
-cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
-cmd.Env = append(os.Environ(), "KI_TEST_HELPER=panic")
-```
-
-`TestHelperProcess` hace `return` si la variable no está (un `go test` normal); si está, `panic("boom")` o `os.Exit(101)`. El padre lee su código de salida.
+Un test no puede ver morir a su proceso: relanza su propio binario, como `runKi` (capítulo 1), y lee el código de salida del hijo. Una variable de entorno dice al hijo si hace `panic("boom")` u `os.Exit(101)`; sin ella, en un `go test` normal, no hace nada.
 
 ### Delve
 
@@ -211,6 +252,95 @@ Cada capítulo ha construido una fila, sobre `tests/golden/ch10/fib.ki` (`fn` es
 | `elaborate` | `if` a `match`, `+` a `add_int` | `ki emit core` |
 | `lint` | valida ese Core | ICE si no vale |
 | `run` | `6765` | `ki run` |
+
+## Preguntas de repaso
+
+:::review
+¿Por qué `Value` es una interfaz sellada y `core.Expr` un struct con `Kind`?
+:::
+
+:::answer
+Los nodos son muchos y viven en un array sin punteros durante toda la compilación: una interfaz haría de cada uno una reserva y un puntero. Los valores tienen formas con campos distintos y vidas cortas, y el type switch solo deja leer los campos de cada forma. Se paga en reservas, y este intérprete no compite en velocidad.
+:::
+
+:::review
+¿Por qué un panic de Ki no se implementa con `panic` de Go y un `recover`?
+:::
+
+:::answer
+Porque un `panic` de Go en la máquina significa un bug del compilador, y ya tiene su camino: un ICE con 70. Si los dos usaran el mismo mecanismo, habría que distinguirlos por el valor, y un bug podría parecer un panic del programa. Como estado, `Halt{101}` es un resultado más, que los otros backends deben reproducir.
+:::
+
+:::review
+¿Por qué el producto necesita un caso aparte para `MinInt64` y `-1`, si ya divide de vuelta?
+:::
+
+:::answer
+Porque `MinInt64 * -1` da `MinInt64` al dar la vuelta, y `MinInt64 / -1`, en Go, también da `MinInt64`, sin fallar: `r/b` es `a` y la prueba diría que no desbordó. Es el único par con ese punto ciego.
+:::
+
+:::review
+¿Por qué `count(n - 1)` dentro de un `if` está en cola y `1 + count(n - 1)` no?
+:::
+
+:::answer
+Un `if` es un `match` en Core, y su `matchFrame` sale de la pila antes de que el brazo corra: lo único que espera el valor es el `retFrame`. En `1 + …`, un `primFrame` espera el resultado para sumar, así que la función no ha terminado y su entorno tiene que seguir vivo.
+:::
+
+:::review
+¿Por qué `retFrame` guarda un índice de `envs` y no `&envs[i]`?
+:::
+
+:::answer
+Porque un `append` a `envs` puede copiar las cabeceras a otro array, y `&envs[i]` se quedaría en el viejo, sin que nada avise. El índice sigue valiendo tras cualquier `append`, y volver es solo cortar `envs` al índice guardado.
+:::
+
+:::review
+¿Por qué `out.Exit` vacía de forma explícita y no con un `defer` que vacíe al salir de `main`?
+:::
+
+:::answer
+Porque `os.Exit` no ejecuta los `defer`: el vaciado no ocurriría y lo que siguiera en el buffer se perdería, con código 0. Además, `Exit` necesita el resultado del vaciado para decidir el código: si la respuesta no se pudo escribir, 0 sería mentira.
+:::
+
+:::review
+¿Por qué un panic de Ki vacía stdout antes de escribir su mensaje?
+:::
+
+:::answer
+Porque stdout retiene y stderr no. Si los dos van al mismo sitio, como en `2>&1 | cat`, el mensaje saldría antes que las líneas previas al panic. El orden engañaría a quien lo lee.
+:::
+
+:::review
+¿Por qué el test de imports corre también sobre árboles escritos a propósito?
+:::
+
+:::answer
+Porque una regla que no encuentra nada puede estar rota: un prefijo mal escrito, un directorio que no recorre. Los árboles con un error, como `kirtx`, que solo empieza igual, demuestran que caza lo que dice.
+:::
+
+## Resumen
+
+- Una máquina CEK guarda control, entorno y continuación en datos: ejecutar es un bucle.
+- `Value` es una interfaz sellada; los nodos, un struct con `Kind`.
+- Go da la vuelta sin avisar: Ki comprueba con aritmética explícita.
+- Un panic de Ki es `Halt{101}`; un `panic` de Go, un ICE con 70.
+- Una llamada de cola reutiliza el `retFrame`: los bucles no crecen.
+- `KI_STACK_MB` da un límite propio, con salida 103.
+- `kirt/out` es el único escritor, y `out.Exit` vacía antes de `os.Exit`.
+- El proceso ayudante prueba lo que termina el proceso; `go/parser` hace cumplir las reglas de imports.
+
+## Go en el trabajo
+
+**Uniones etiquetadas.** Lua representa cada valor con un `TValue`: una unión y un byte de etiqueta. CPython usa las dos formas: `struct _expr`, con `kind` y una unión, para el AST, y un puntero a su tipo en los objetos, más cerca de una interfaz.
+
+**Desbordamiento y CVE.** En CVE-2015-1538, en Android, una multiplicación sin comprobar en datos MP4 permitía ejecutar código a distancia.
+
+La especificación de Go define el desbordamiento y prohíbe al compilador suponer que no ocurre. Donde es indefinido, como en C con signo, el compilador puede borrar la comprobación.
+
+Definirlo no lo evita: CVE-2022-23772 es un desbordamiento en `Rat.SetString`, de `math/big`, con consumo de memoria sin control.
+
+**El flush olvidado.** La documentación de `bufio.Writer` pide llamar a `Flush` al terminar. Sin él se pierde lo que quedaba, y un disco lleno puede no verse hasta ese vaciado.
 
 ## Tests primero
 
@@ -249,12 +379,25 @@ func FunNamed(t *testing.T, c *Compiled, name string) core.FunID
 
 2. **Míralos fallar.** Sobre `ch09-s3`, `internal/interp` no compila:
 
-```console
+```console doctest="red"
 $ go test ./internal/interp
 # github.com/aldezex/kilang/internal/interp [github.com/aldezex/kilang/internal/interp.test]
 internal/interp/value_internal_test.go:20:9: undefined: Value
 …
 FAIL	github.com/aldezex/kilang/internal/interp [build failed]
+FAIL
+```
+
+#### Go: un puntero a un slice que crece
+
+El caso de la Teoría, «Pilas como slices»:
+
+```go
+envs := make([][]int, 1, 1)
+envs[0] = []int{1, 2}
+p, slot := &envs[0], &envs[0][0]
+envs = append(envs, []int{3}) // no room: the headers are copied to a new array
+fmt.Println(p == &envs[0], slot == &envs[0][0]) // false true
 ```
 
 #### El código
@@ -265,7 +408,7 @@ FAIL	github.com/aldezex/kilang/internal/interp [build failed]
 
 {{diff ch09-s3..ch10-s1 internal/testsupport/compile.go}}
 
-- **`run`** es el bucle: con una expresión llama a `step`; con un valor, a `applyFrame`.
+- **`run`** es el bucle de la Teoría; `step` evalúa y `applyFrame` devuelve.
 - **El `default: panic("unreachable")` de `Show`** se prueba con `fakeV`, un `Value` que no conoce, en un test interno: solo el paquete puede escribir `value()`.
 
 {{reftest T10.06}}
@@ -335,7 +478,7 @@ func framesFor(setting string) int // frames for that value of KI_STACK_MB; bad 
 {{diff ch10-s2..ch10-s3 internal/interp/prims.go}}
 
 - **`argFrame`** acumula la función llamada (el *callee*) y los argumentos. El callee es una expresión más: una función en una variable se llama igual.
-- **`enter`** aplica la regla de cola. La función que arranca `Call` no tiene `retFrame`, así que su primera llamada de cola empuja uno.
+- **`enter`** aplica (Cola), (Llamada) y (Desborde). La función que arranca `Call` no tiene `retFrame`, así que su primera llamada de cola empuja uno.
 
 {{reftest T10.43}}
 
@@ -401,7 +544,7 @@ Tres de los golden:
 
 {{reftest T10.57}}
 
-Aquí, ocho goroutines escriben a la vez y otra llama a `Flush` hasta el `close(stop)`. Un canal cerrado siempre está listo, y `select` con `default` lo consulta sin bloquearse. `runtime.Gosched()` no sincroniza: solo cede el procesador.
+Aquí, ocho goroutines escriben a la vez y otra llama a `Flush` hasta el `close(stop)`. Un canal cerrado siempre se puede leer sin esperar, y `select` con `default` lo consulta sin bloquearse. `runtime.Gosched()` no sincroniza: solo cede el procesador.
 
 `string(rune('a'+g))` convierte un code point en texto.
 
@@ -447,14 +590,24 @@ Compila, exige `main` y ejecuta la máquina como un pase más.
 
 {{file ch10-s4 kirt/imports_test.go}}
 
-:::more Cómo recorre y lee `imports_test.go`
+:::more El recorrido de `imports_test.go`
 - **`filepath.SkipDir`,** devuelto desde la función de `WalkDir`, salta ese directorio.
-- **`file.Imports` y `spec.Path.Value`** dan cada import y su ruta tal como está escrita, con comillas; `strconv.Unquote` (capítulo 7) se las quita.
+- **`file.Imports` y `spec.Path.Value`** dan cada import y su ruta escrita, con comillas; `strconv.Unquote` (capítulo 7) se las quita.
 - **Un primer elemento sin punto** es la biblioteca estándar: una ruta de módulo empieza por un dominio.
 - **La barra de `modulePath+"/kirt/"`** deja fuera a `kirtx`.
 :::
 
-Estos dos ficheros montan el proceso ayudante; `// bookx: not-in-book` dispensa de tarjeta al segundo.
+#### Go: el proceso ayudante
+
+El relanzamiento de la Teoría:
+
+```go
+// -test.run is go test's -run, as the test binary spells it
+cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+cmd.Env = append(os.Environ(), "KI_TEST_HELPER=panic")
+```
+
+Estos dos ficheros lo montan; `// bookx: not-in-book` dispensa de tarjeta al segundo.
 
 {{file ch10-s4 internal/toolchain/exitcodes_test.go}}
 
@@ -468,7 +621,7 @@ Estos dos ficheros montan el proceso ayudante; `// bookx: not-in-book` dispensa 
 
 Construye `ki` (`go build -o build/bin/ki ./cmd/ki`) e instala Delve en una versión fijada, nunca `@latest`. No entra en `go.mod`. `dlv` queda por defecto en `~/go/bin`: tiene que estar en tu `PATH`.
 
-```console
+```console doctest="skip: necesita un terminal"
 $ GOTOOLCHAIN=local go install github.com/go-delve/delve/cmd/dlv@v1.27.2
 $ dlv exec build/bin/ki -- run tests/golden/ch10/fib.ki
 (dlv) break interp.(*Machine).enter
@@ -504,10 +657,19 @@ Al terminar: tus tests en verde, commit y etiqueta `ch10-s4`; compárate con `re
 
 ## Ejecútalo
 
-Desde la raíz de tu repo, con `ki` construido; crea `so.ki` y `nomain.ki`:
+Desde la raíz de tu repo, con `ki` construido; crea `fib.ki`, `so.ki` y `nomain.ki`:
 
 ```console
-$ build/bin/ki run tests/golden/ch10/fib.ki
+$ cat fib.ki
+fn fib(n: Int) -> Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+  let x = fib(20)
+  print(x)
+}
+$ build/bin/ki run fib.ki
 6765
 $ echo $?
 0
@@ -793,91 +955,3 @@ fn main() {
 Con un `Writer` que cuenta las escrituras de su destino, pasan de 106 a 211. A un fichero, los dos tardan unos 0,48 s y la salida es idéntica: nada medible, porque la máquina domina y una escritura cada 32 KiB sigue siendo rara. Lo que sí se nota es vaciar por líneas: con `> /dev/null`, un dispositivo de caracteres, tarda 0,87 s.
 :::
 
-## Preguntas de repaso
-
-:::review
-¿Por qué `Value` es una interfaz sellada y `core.Expr` un struct con `Kind`?
-:::
-
-:::answer
-Los nodos son muchos y viven en un array sin punteros durante toda la compilación: una interfaz haría de cada uno una reserva y un puntero. Los valores tienen formas con campos distintos y vidas cortas, y el type switch solo deja leer los campos de cada forma. Se paga en reservas, y este intérprete no compite en velocidad.
-:::
-
-:::review
-¿Por qué un panic de Ki no se implementa con `panic` de Go y un `recover`?
-:::
-
-:::answer
-Porque un `panic` de Go en la máquina significa un bug del compilador, y ya tiene su camino: un ICE con 70. Si los dos usaran el mismo mecanismo, habría que distinguirlos por el valor, y un bug podría parecer un panic del programa. Como estado, `Halt{101}` es un resultado más, que los otros backends deben reproducir.
-:::
-
-:::review
-¿Por qué `mulInt` necesita un caso aparte para `MinInt64` y `-1`, si ya divide de vuelta?
-:::
-
-:::answer
-Porque `MinInt64 * -1` da `MinInt64` al dar la vuelta, y `MinInt64 / -1`, en Go, también da `MinInt64`, sin fallar: `r/b` es `a` y la prueba diría que no desbordó. Es el único par con ese punto ciego.
-:::
-
-:::review
-¿Por qué `count(n - 1)` dentro de un `if` está en cola y `1 + count(n - 1)` no?
-:::
-
-:::answer
-Un `if` es un `match` en Core, y su `matchFrame` sale de la pila antes de que el brazo corra: lo único que espera el valor es el `retFrame`. En `1 + …`, un `primFrame` espera el resultado para sumar, así que la función no ha terminado y su entorno tiene que seguir vivo.
-:::
-
-:::review
-¿Por qué `retFrame` guarda un índice de `envs` y no `&envs[i]`?
-:::
-
-:::answer
-Porque un `append` a `envs` puede copiar las cabeceras a otro array, y `&envs[i]` se quedaría en el viejo, sin que nada avise. El índice sigue valiendo tras cualquier `append`, y volver es solo cortar: `envs[:f.env+1]`.
-:::
-
-:::review
-¿Por qué `out.Exit` vacía de forma explícita y no con `defer out.FlushAll()` en `main`?
-:::
-
-:::answer
-Porque `os.Exit` no ejecuta los `defer`: el vaciado no ocurriría y lo que siguiera en el buffer se perdería, con código 0. Además, `Exit` necesita el resultado del vaciado para decidir el código: si la respuesta no se pudo escribir, 0 sería mentira.
-:::
-
-:::review
-¿Por qué `haltAt` vacía stdout antes de escribir el mensaje del panic?
-:::
-
-:::answer
-Porque stdout retiene y stderr no. Si los dos van al mismo sitio, como en `2>&1 | cat`, el mensaje saldría antes que las líneas previas al panic. El orden engañaría a quien lo lee.
-:::
-
-:::review
-¿Por qué el test de imports corre también sobre árboles escritos a propósito?
-:::
-
-:::answer
-Porque una regla que no encuentra nada puede estar rota: un prefijo mal escrito, un directorio que no recorre. Los árboles con un error, como `kirtx`, que solo empieza igual, demuestran que caza lo que dice.
-:::
-
-## Resumen
-
-- Una máquina CEK guarda control, entorno y continuación en datos: ejecutar es un bucle.
-- `Value` es una interfaz sellada; los nodos, un struct con `Kind`.
-- Go da la vuelta sin avisar: Ki comprueba con aritmética explícita.
-- Un panic de Ki es `Halt{101}`; un `panic` de Go, un ICE con 70.
-- Una llamada de cola reutiliza el `retFrame`: los bucles no crecen.
-- `KI_STACK_MB` da un límite propio, con salida 103.
-- `kirt/out` es el único escritor, y `out.Exit` vacía antes de `os.Exit`.
-- El proceso ayudante prueba lo que termina el proceso; `go/parser` hace cumplir las reglas de imports.
-
-## Go en el trabajo
-
-**Uniones etiquetadas.** Lua representa cada valor con un `TValue`: una unión y un byte de etiqueta. CPython usa las dos formas: `struct _expr`, con `kind` y una unión, para el AST, y un puntero a su tipo en los objetos, más cerca de una interfaz.
-
-**Desbordamiento y CVE.** En CVE-2015-1538, en Android, una multiplicación sin comprobar en datos MP4 permitía ejecutar código a distancia.
-
-La especificación de Go define el desbordamiento y prohíbe al compilador suponer que no ocurre. Donde es indefinido, como en C con signo, el compilador puede borrar la comprobación.
-
-Definirlo no lo evita: CVE-2022-23772 es un desbordamiento en `Rat.SetString`, de `math/big`, con consumo de memoria sin control.
-
-**El flush olvidado.** La documentación de `bufio.Writer` pide llamar a `Flush` al terminar. Sin él se pierde lo que quedaba, y un disco lleno puede no verse hasta ese vaciado.

@@ -14,66 +14,53 @@ Al terminar, `internal/base` tiene las tres piezas que usa el compilador:
 - `Arena`, que reparte bytes desde bloques grandes;
 - `Interner`, que convierte cada nombre en un entero.
 
-`ki` no cambia; ejecutas los benchmarks del paquete:
-
-```console
-$ go test ./internal/base -run '^$' -bench 'Intern|UniqueMake' -benchmem
-…
-BenchmarkIntern-16        	72985978	        15.80 ns/op	       0 B/op	       0 allocs/op
-BenchmarkUniqueMake-16    	46069453	        26.58 ns/op	       0 B/op	       0 allocs/op
-```
-
-Tus números variarán, pero no el orden de magnitud ni los `0 allocs/op`. El lexer usa `Interner` desde el capítulo 5; el parser, `IdVec` desde el 6, camino de M1 (capítulo 10).
+`ki` no cambia: ejecutas los tests y los benchmarks del paquete. El lexer usa `Interner` desde el capítulo 5; el parser, `IdVec` desde el 6, camino de M1 (capítulo 10).
 
 ## Teoría
 
 ### Parámetros de tipo y restricciones
 
-El capítulo 3 te pidió copiar `func ptr[T any](v T) *T { return &v }`. Entre corchetes van los **parámetros de tipo**, cada uno con su **restricción**. `any`, alias de `interface{}`, la interfaz sin métodos, admite cualquier tipo.
+El capítulo 3 te pidió copiar `ptr`, una función genérica. Entre corchetes van los **parámetros de tipo**, cada uno con su **restricción**. `any`, alias de `interface{}`, la interfaz sin métodos, admite cualquier tipo.
 
-Una restricción es una interfaz que puede contener un **conjunto de tipos**, y entonces solo sirve de restricción, no como tipo de una variable. `~uint32` es «todo tipo cuyo subyacente es `uint32`»: `uint32`, `FileID`, `ExprID`. Sin la tilde, `FileID` no entra, y el compilador la sugiere:
+Una restricción es una interfaz que puede contener un **conjunto de tipos**, y entonces solo sirve de restricción, no como tipo de una variable. Un tipo la cumple si está en su conjunto:
 
-```text
-FileID does not satisfy uint32 (possibly missing ~ for uint32 in uint32)
+```math
+T satisface C   ⇔   T ∈ tipos(C)
+
+tipos(any)         = todos los tipos
+tipos(uint32)      = { uint32 }
+tipos(~uint32)     = { T | subyacente(T) = uint32 }  = { uint32, FileID, ExprID, … }
+tipos(comparable)  = los tipos que admiten == y !=
+tipos(cmp.Ordered) = ~int ∪ … ∪ ~string                los tipos con <
+
+dentro de un genérico con P restringido por C:
+  una operación sobre P compila solo si vale para todo T ∈ tipos(C)
 ```
-
-Un **tipo genérico** lleva parámetros igual que una función: `type IdVec[I ~uint32, T any] struct{ items []T }`. Sus métodos los nombran en el receptor: `func (v *IdVec[I, T]) Push(x T) I`. Se usa instanciado: `IdVec[FileID, string]`.
-
-Un genérico se comprueba una vez, con `I` como incógnita: por eso la restricción decide qué puedes hacer **dentro**. Con `~uint32`, `I(len(v.items))` convierte un `int` en un id y `v.items[i]` indexa con un id, porque todos los tipos del conjunto son enteros. Con `any`, las dos expresiones fallan.
-
-Otras dos restricciones:
-
-- `comparable` admite `==` y `!=`, que `any` no permite.
-- `cmp.Ordered` es la unión `~int | … | ~string`, los tipos con `<`.
 
 :::from Rust
 `[T cmp.Ordered]` se parece a `<T: PartialOrd>`, pero un trait se implementa a mano; un conjunto de tipos se describe por la forma.
 :::
 
+Un **tipo genérico** lleva parámetros igual que una función: `IdVec[I ~uint32, T any]`. Sus métodos los nombran en el receptor, y se usa instanciado: `IdVec[FileID, string]`.
+
+Un genérico se comprueba una vez, con `I` como incógnita: por eso la restricción decide qué puedes hacer **dentro**. Con `~uint32`, convertir un `int` en un id e indexar con un id compilan, porque todos los tipos del conjunto son enteros. Con `any`, las dos operaciones fallan.
+
 ### Inferencia e instanciación explícita
 
-Go deduce los argumentos de tipo de los **argumentos** de la llamada, nunca del resultado. `Max(1, 2.5)`, con `func Max[T cmp.Ordered](a, b T) T`, infiere `float64`.
+Go deduce los argumentos de tipo de los **argumentos** de la llamada, nunca del resultado:
 
-`errors.AsType`, la versión genérica de `errors.As`, es `func AsType[E error](err error) (E, bool)`. `E` solo aparece en el resultado, así que hay que escribirlo, con la forma del *turbofish*:
+```math
+f[P](x₁ τ₁, …, xₙ τₙ) R:   P se deduce de los τᵢ, nunca de R
 
-```go
-_, err := os.Open("/no/such/file.ki")
-pe, ok := errors.AsType[*fs.PathError](err) // true, pe.Op == "open"
+Max[T cmp.Ordered](a, b T) T             Max(1, 2.5)    ⇒  T = float64
+AsType[E error](err error) (E, bool)     E solo está en R  ⇒  hay que escribirlo: AsType[*fs.PathError](err)
 ```
 
-Frente a `errors.As(err, &target)`, no hace falta una variable previa, y un tipo que no es un `error` no compila.
+`errors.AsType` es la versión genérica de `errors.As`, y su `E` se escribe con la forma del *turbofish*. Frente a `errors.As`, no hace falta una variable previa, y un tipo que no es un `error` no compila.
 
 ### Métodos genéricos y lo que Go no tiene
 
-Go 1.27 añade **métodos con parámetros propios** sobre tipos concretos:
-
-```go
-type Set struct{ items []int }
-
-func (s *Set) Map[U any](f func(int) U) []U { … }
-```
-
-`s.Map(f)` infiere `U`, y `s.Map[float64](f)` lo da explícito. Tres límites:
+Go 1.27 añade **métodos con parámetros propios** sobre tipos concretos: un `Map[U any]` sobre un conjunto. `s.Map(f)` infiere `U`, y `s.Map[float64](f)` lo da explícito. Tres límites:
 
 - Exigen `go 1.27` en el `go.mod`.
 - Sin llamar y sin un tipo función de destino, un valor de método necesita los argumentos de tipo: `f := s.Map[int]`, no `f := s.Map`.
@@ -91,30 +78,41 @@ Un trait con `fn map<U>(&self, …)` deja de servir como `dyn`; Go lo prohíbe a
 
 ### Ids tipados
 
-Confundir un índice de expresiones con uno de tipos será un error de compilación.
+Confundir un índice de expresiones con uno de tipos será un error de compilación. Dos tipos definidos son distintos aunque su subyacente coincida, y pasar un argumento es asignar:
 
-Dos tipos definidos son distintos aunque su subyacente coincida, y uno no se asigna al otro, salvo a una interfaz. Pasar un argumento es asignar. Por eso no compila `testdata/badids`, el programa de la sesión 1 que pasa un `otherID` a `Get`:
+```math
+A, B tipos definidos distintos, aunque subyacente(A) = subyacente(B); x : A
 
-```text
-testdata/badids/main.go:14:12: cannot use i (variable of uint32 type otherID) as base.FileID value in argument to v.Get
+x donde se pide B                          ✗   error de compilación
+x donde se pide una interfaz que A cumple  ✓
+una constante sin tipo donde se pide B     ✓   toma el tipo B: el 0 de v.Get(0)
+B(x)                                       ✓   una conversión a propósito
 ```
 
-- **Una constante sin tipo es la excepción** (capítulo 2): el `0` de `v.Get(0)` toma el tipo `FileID`.
-- **`FileID(i)` compila:** los ids tipados protegen de una equivocación, no de una conversión a propósito.
+Por eso no compila `testdata/badids`, el programa de la sesión 1 que pasa un `otherID` a `Get`. Los ids tipados protegen de una equivocación, no de una conversión a propósito.
 
 ### `iter.Seq2` y `range` sobre funciones
 
-`iter.Seq2[K, V]` es un tipo función: `func(yield func(K, V) bool)`. Un iterador llama a `yield` con cada par y para si devuelve `false`. `iter.Seq[V]` es la versión de un valor, como el `slices.Values` del capítulo 3.
+`iter.Seq2[K, V]` es un tipo función: un iterador recibe `yield`, la llama con cada par y para si devuelve `false`. `iter.Seq[V]` es la versión de un valor, como el `slices.Values` del capítulo 3.
 
-En un generador de Python, `yield` suspende; aquí es un parámetro que el iterador llama.
+En un generador de Python, `yield` suspende; aquí es un parámetro que el iterador llama. `range` convierte el cuerpo del bucle en `yield`, sin goroutines:
 
-`IdVec.All` devuelve un `iter.Seq2[I, T]`. `for i, x := range v.All()` convierte el cuerpo del bucle en `yield`, sin goroutines, y un `break` lo hace devolver `false`. `for range v.All()` recorre sin mirar los valores.
+```pseudo
+iter.Seq2[K, V] = función(yield: función(K, V) → bool)
 
-Si el iterador ignora el `false` y sigue, el runtime lo detiene:
+para cada (i, x) en v.All() hacer CUERPO
+  ≡  llama a la función que devuelve v.All() con
+       función yield(i, x)
+         CUERPO                      un break o un return aquí: devuelve falso
+         devuelve cierto
 
-```text
-panic: runtime error: range function continued iteration after function for loop body returned false
+función All(v)                       el iterador de IdVec
+  devuelve función(yield)
+    para cada índice i y elemento x de v.items
+      si no yield(I(i), x) entonces devuelve
 ```
+
+`for range v.All()` recorre sin mirar los valores. Si el iterador ignora el `false` y sigue, el runtime lo detiene con un panic.
 
 :::from Rust
 `Iterator` es de extracción: quien consume llama a `next()`. `iter.Seq2` es de empuje, como `for_each`.
@@ -122,28 +120,48 @@ panic: runtime error: range function continued iteration after function for loop
 
 ### Memoria sin punteros y el recolector
 
-El recolector (capítulo 2) marca lo vivo recorriendo punteros desde las raíces: las variables globales y las pilas de las goroutines. Si el tipo de un objeto no contiene punteros, no hace falta recorrerlo.
+El recolector (capítulo 2) marca lo vivo recorriendo punteros desde las raíces, las variables globales y las pilas de las goroutines:
+
+```math
+vivos = el menor conjunto con las raíces y con todo objeto
+        al que apunta un puntero de un objeto vivo
+
+un objeto cuyo tipo no contiene punteros se marca, pero no se recorre
+```
 
 Lo mide esta tabla, con un árbol binario de 4 000 000 de nodos:
 
 | Forma | Objetos en el heap | Heap | Tiempo de `runtime.GC()`, `GOMAXPROCS=1` |
 |---|---|---|---|
-| `struct{ Left, Right *PNode; Val int64 }`, un `&PNode{}` por nodo | 4 000 118 | 91 MiB | 20–21 ms |
-| `[]INode`, con `struct{ Left, Right uint32; Val int64 }` | 118 | 61 MiB | 35–43 µs |
+| un objeto por nodo: un puntero a cada hijo y un `int64` | 4 000 118 | 91 MiB | 20–21 ms |
+| un slice de nodos: los hijos como ids `uint32` y un `int64` | 118 | 61 MiB | 35–43 µs |
 
-Un `[]INode` es un solo objeto sin punteros, de esos 118: el recolector no entra en él. Es la razón de los ids.
+Un slice de nodos sin punteros es un solo objeto, de esos 118: el recolector no entra en él. Es la razón de los ids.
 
 `GOMAXPROCS` limita los hilos del sistema que ejecutan código Go a la vez, y el recolector reparte el marcado entre ellos.
 
 :::more Cómo se midió la tabla
-Todo se mide tras un `runtime.GC()`. Los nodos se reservan en orden y se enlazan después: el hijo izquierdo del nodo `i` es el `2i+1`, y el derecho, el `2i+2`.
+Los nodos se reservan en orden y se enlazan después: los hijos del nodo `i` son el `2i+1` y el `2i+2`.
 
-El tiempo es el mejor de cinco `runtime.GC()` seguidos, y los objetos salen de `runtime.ReadMemStats` con `GOMAXPROCS=1`.
+Todo se mide tras un `runtime.GC()`. El tiempo es el mejor de cinco `runtime.GC()` seguidos, y los objetos salen de `runtime.ReadMemStats`.
 :::
 
-`Arena` aplica la idea a los bytes: los textos del interner van seguidos en slabs, bloques `[]byte`, con una reserva por slab y no por texto.
+`Arena` aplica la idea a los bytes: los textos del interner van seguidos en slabs, bloques `[]byte`, con una reserva por slab y no por texto. Una petición grande recibe un slab propio, y el actual sigue sirviendo a las pequeñas:
 
-**La arena no usa `unsafe`.** `unsafe` permitiría reinterpretar sus bytes como nodos: `(*Node)(unsafe.Pointer(&slab[0]))`. Pero el recolector seguiría viendo un `[]byte`: lo que apunte un nodo se libera aunque el nodo lo use. Además, habría que alinear cada nodo a mano.
+```pseudo
+función Alloc(n)
+  si n = 0 entonces devuelve nil                  sin crear slab
+  si n > tamaño de slab entonces
+    grande ← un slab nuevo de n bytes; apúntalo en slabs
+    devuelve grande[0 : n : n]                     el actual no cambia
+  si no hay slab actual o le quedan menos de n bytes entonces
+    actual ← un slab nuevo; usados ← 0; apúntalo en slabs
+  b ← actual[usados : usados+n : usados+n]
+  usados ← usados + n
+  devuelve b
+```
+
+**La arena no usa `unsafe`.** `unsafe` permitiría reinterpretar sus bytes como nodos, pero el recolector seguiría viendo un `[]byte`: lo que apunte un nodo se libera aunque el nodo lo use. Además, habría que alinear cada nodo a mano.
 
 Por eso `unsafe` vive solo en `kirt/heap`, en el runtime de Ki (Parte VI).
 
@@ -153,13 +171,41 @@ En `rustc_arena`, el borrow checker impide que una referencia viva más que la a
 
 ### Compiladores: tablas, ids e interning
 
-- **Almacenamiento orientado a datos.** Un árbol entero son unos pocos arrays grandes: cada clase de nodo vive en una tabla (`IdVec[ExprID, Expr]`) y nombra a otro por su id. Una lista de hijos es un `ListRange{First, Count}`, un trozo de un slice compartido: el pool.
+- **Almacenamiento orientado a datos.** Un árbol entero son unos pocos arrays grandes: cada clase de nodo vive en una tabla y nombra a otro por su id. Una lista de hijos es un trozo de un slice compartido, el pool.
 - **Ids frente a punteros.** Un id ocupa 4 bytes, el recolector no lo recorre, y su tipo impide confundir tablas.
 - **Interning.** Cada nombre se guarda una vez: comparar nombres es comparar enteros, y el `0` es «sin nombre».
 
+```math
+v : IdVec[I, T]
+ids(v)    = { I(0), …, I(Len(v) − 1) }
+Push(x)   = I(Len(v)) antes de añadir x = lo que daba Next()
+Get(Push(x)) = x
+ListRange{First, Count}  =  pool[First : First+Count]
+```
+
 ### `hash/maphash`, semillas y el orden de los mapas
 
-El interner busca cada nombre por su hash. `maphash.Bytes(seed, b)` da un hash de 64 bits; `maphash.MakeSeed()`, una semilla aleatoria. Misma semilla y texto, mismo hash; entre dos ejecuciones, no.
+El interner busca cada nombre por su hash. `maphash.Bytes(seed, b)` da un hash de 64 bits; `maphash.MakeSeed()`, una semilla aleatoria. Misma semilla y texto, mismo hash; entre dos ejecuciones, no:
+
+```math
+Bytes(s, b₁) = Bytes(s, b₂)    si b₁ = b₂
+Bytes(s₁, b), Bytes(s₂, b)     sin relación si s₁ ≠ s₂: MakeSeed da otra en cada ejecución
+```
+
+Dos textos distintos pueden compartir hash, así que el hash solo elige una cadena, y la igualdad la decide el contenido:
+
+```pseudo
+función Intern(b)
+  h ← hash(b);  último ← 0
+  s ← index[h]                         el primer símbolo con ese hash, o 0
+  mientras s ≠ 0
+    si texts[s] = b entonces devuelve s
+    último ← s;  s ← next[s]
+  s ← |texts|                          el siguiente número: 1, 2, 3…
+  texts[s] ← una copia de b en la arena (la de "", fuera de ella);  next[s] ← 0
+  si último = 0 entonces index[h] ← s  si no next[último] ← s
+  devuelve s
+```
 
 Los mapas se siembran al azar, y cada `range` empieza en un punto al azar: a diferencia de un `dict`, no conservan el orden de inserción.
 
@@ -169,7 +215,11 @@ Regla del proyecto: ninguna salida depende del orden de un mapa. El interner num
 
 La biblioteca trae un interner, pero el compilador quiere otra cosa: un entero de 4 bytes sin punteros, numerado en orden, que indexe un `IdVec` y salga igual en cada ejecución.
 
-`unique.Make[T comparable](value T) Handle[T]` da un puntero de 8 bytes que el recolector recorre, sin número. Dos handles son iguales si y solo si lo son sus valores, y compararlos es comparar punteros.
+`unique.Make[T comparable](value T) Handle[T]` da un puntero de 8 bytes que el recolector recorre, sin número. Dos handles son iguales si y solo si lo son sus valores, y compararlos es comparar punteros:
+
+```math
+Make(a) = Make(b)   ⇔   a = b
+```
 
 Es seguro entre goroutines, y el recolector borra sus entradas, punteros débiles, cuando no queda ningún handle.
 
@@ -187,6 +237,86 @@ El perfil (`go test -cpuprofile`, leído con `go tool pprof -top -cum`) pone en 
 - **`b.Loop` impide que el compilador borre lo que mides** (capítulo 2, ejercicio 3): dentro de su bucle, los argumentos y resultados de las llamadas siguen vivos.
 - **`testing.AllocsPerRun(runs, f)` mide si algo reserva.** Devuelve la media de reservas de `runs` llamadas a `f`.
 - **`os/exec` (capítulo 1) lanza el compilador desde un test,** para probar que algo no compila. `go test` corre en el directorio del paquete, así que `./testdata/badids` es una ruta válida.
+
+## Preguntas de repaso
+
+:::review
+¿Por qué `IdVec` restringe `I` con `~uint32` y no con `uint32` ni con `any`?
+:::
+
+:::answer
+Con `uint32`, el conjunto tiene un solo tipo y `FileID` no lo cumple. Con `any`, el cuerpo no puede convertir un `int` en `I` ni indexar con `I`. `~uint32` admite todos los ids definidos sobre `uint32` y deja hacer con ellos lo que se hace con un entero.
+:::
+
+:::review
+¿Por qué un iterador tiene que mirar lo que devuelve `yield`, y qué pasa si no lo hace?
+:::
+
+:::answer
+Porque `range` convierte el cuerpo del bucle en `yield`, y un `break` (o un `return`) en el cuerpo se traduce en que `yield` devuelve `false`: el bucle ya terminó. Si el iterador siguiera llamando a `yield`, ejecutaría un cuerpo que ya salió. Go no lo detecta al compilar, sino al ejecutar: la siguiente llamada hace panic.
+:::
+
+:::review
+¿Por qué `errors.AsType[*fs.PathError](err)` necesita los corchetes y `Max(1, 2.5)` no?
+:::
+
+:::answer
+Go infiere los argumentos de tipo de los argumentos de la llamada. En `Max`, `T` aparece en los parámetros; en `AsType`, `E` solo aparece en el resultado, y del resultado Go no infiere nada.
+:::
+
+:::review
+¿Por qué una interfaz no puede declarar un método genérico?
+:::
+
+:::answer
+Porque una interfaz llama a sus métodos por una tabla fija, con una entrada por método. Un método genérico necesitaría una entrada por cada `U` posible, y ese conjunto no se conoce al compilar.
+:::
+
+:::review
+¿Por qué un árbol en un slice con ids hace que `runtime.GC()` pase de milisegundos a microsegundos?
+:::
+
+:::answer
+Porque el recolector recorre punteros. Con un puntero por hijo hay cuatro millones de objetos que marcar y seguir; el slice de nodos es un solo objeto sin punteros, que se marca sin entrar en él.
+:::
+
+:::review
+¿Por qué el interner compara los textos aunque sus hashes coincidan?
+:::
+
+:::answer
+Porque dos textos distintos pueden compartir hash: el hash solo elige la cadena, y la igualdad la decide el contenido.
+:::
+
+:::review
+¿Por qué el compilador usa su propio interner y no `unique.Make`?
+:::
+
+:::answer
+Porque necesita un entero pequeño, sin punteros, numerado en orden y estable entre ejecuciones, que indexe tablas. Un `Handle` es un puntero de 8 bytes que el recolector recorre, sin número, y su seguridad entre goroutines no sirve a un compilador secuencial.
+:::
+
+## Resumen
+
+- Una restricción es un conjunto de tipos, y decide qué puede hacer un genérico por dentro.
+- Go infiere de los argumentos, nunca del resultado: `errors.AsType` lleva corchetes.
+- Go 1.27 admite métodos con parámetros propios, no en interfaces.
+- Mezclar dos ids tipados es un error de compilación.
+- `range` convierte el cuerpo del bucle en `yield`; el iterador debe parar cuando devuelve `false`.
+- El recolector no entra en lo que no tiene punteros: ahí ganan los ids y los slabs.
+- El interner encadena los textos de igual hash y decide por su contenido.
+- `maphash` y los mapas se siembran al azar: ninguna salida depende de ellos.
+- `// Output:` hace de un `Example` un test; `AllocsPerRun` y `-benchmem` miden las reservas.
+
+## Go en el trabajo
+
+**Cuándo usar genéricos.** `IdVec` encaja: el mismo código para todas sus tablas. «When To Use Generics» (blog de Go) los recomienda para funciones sobre slices, mapas y canales, estructuras de datos de propósito general y un método idéntico en todos los tipos. Si solo llamas a un método del valor, usa una interfaz.
+
+**El `IndexVec` de rustc es el mismo patrón.** Usarlo con el índice equivocado «will fail at compile time». Cada newtype necesita un `impl Idx`; en Go basta `type ExprID uint32`.
+
+**Grafos sin punteros.** Según la guía del recolector (go.dev/doc/gc-guide), las estructuras con índices, «while less well-typed, may perform better». Solo compensa si el grafo es complejo y el recolector pasa mucho tiempo marcando.
+
+Los ids tipados recuperan buena parte de lo «less well-typed», pero no el rango: un id fuera de su tabla es un panic al ejecutar.
 
 ## Tests primero
 
@@ -229,9 +359,15 @@ func (a *Arena) Slabs() int
 
 {{file ch04-s1 internal/base/testdata/badids/main.go}}
 
+   El compilador lo rechaza por la regla de los ids de la Teoría:
+
+```text
+testdata/badids/main.go:14:12: cannot use i (variable of uint32 type otherID) as base.FileID value in argument to v.Get
+```
+
 4. **Míralos fallar.** No compilan:
 
-```console
+```console doctest="red"
 $ go test ./internal/base/
 # github.com/aldezex/kilang/internal/base [github.com/aldezex/kilang/internal/base.test]
 internal/base/arena_test.go:7:8: undefined: NewArena
@@ -247,12 +383,50 @@ FAIL
    - `Ptr` devuelve `new(T)`; `NewArena`, `&Arena{}`; `All`, `func(yield func(I, T) bool) {}`. Un `nil` cortaría el binario.
    - De los subtests nuevos, solo pasa el de los ids: le basta la firma `Get(i I)`.
 
+#### Go: restricciones
+
+El `ptr` del capítulo 3:
+
+```go
+func ptr[T any](v T) *T { return &v } // T: a type parameter; any: its constraint
+```
+
+Con `uint32` en lugar de `~uint32`, `FileID` no está en el conjunto, y el compilador sugiere la tilde:
+
+```text
+FileID does not satisfy uint32 (possibly missing ~ for uint32 in uint32)
+```
+
+#### Go: `errors.AsType`
+
+Sobre el error de `os.Open`:
+
+```go
+_, err := os.Open("/no/such/file.ki")
+pe, ok := errors.AsType[*fs.PathError](err) // true, pe.Op == "open"
+```
+
+#### Go: métodos genéricos
+
+El `Map` de la Teoría:
+
+```go
+type Set struct{ items []int }
+
+func (s *Set) Map[U any](f func(int) U) []U { … }
+```
+
 #### `IdVec`
 
 {{file ch04-s1 internal/base/idvec.go}}
 
+- `Push`, `Get` y `Next` cumplen las ecuaciones de la Teoría, y `All` es su iterador.
 - `Ptr` vale solo hasta el siguiente `Push`: la trampa del `&files[i]` del capítulo 2, ahora en el contrato.
 - `All` respeta el `false` de `yield`. Cambia el `if !yield(…) { return }` por un `yield(…)`: tras el `break`, el panic del runtime hace fallar el test. Deshazlo.
+
+```text
+panic: runtime error: range function continued iteration after function for loop body returned false
+```
 
 {{reftest T04.04}}
 
@@ -272,7 +446,7 @@ Si hiciera falta más, `cmd.CombinedOutput()` da stdout y stderr mezclados, y `e
 
 {{diff ch03-s3..ch04-s1 internal/base/source.go}}
 
-- `files` pasa a `IdVec[FileID, file]`: los ficheros van seguidos en un array, sin un puntero por fichero, y `Push` puede moverlos. Por eso ningún método guarda un `*file`: pide `m.files.Ptr(id)`, lo usa y lo suelta.
+- `files` pasa a `IdVec[FileID, file]`: los ficheros van seguidos en un array, sin un puntero por fichero, y `Push` puede moverlos. Por eso ningún método guarda un `*file` (ejercicio 5).
 - `Ptr` y no `Get`, porque `lineStarts` escribe `f.lines` la primera vez, y en una copia esa tabla se perdería.
 - `line_table.go`, `load.go` y una línea de `line_table_test.go` cambian igual: `m.files[id]` pasa a `m.files.Ptr(id)`.
 
@@ -280,9 +454,15 @@ Si hiciera falta más, `cmd.CombinedOutput()` da stdout y stderr mezclados, y `e
 
 {{file ch04-s1 internal/base/arena.go}}
 
-Una petición mayor que el slab recibe uno propio, y el actual sigue sirviendo a las pequeñas.
+`Alloc` es el pseudocódigo de la Teoría. `a.cur[a.used : a.used+n : a.used+n]` es la expresión de corte completa del capítulo 2: un `append` de quien recibe los bytes no pisa la petición siguiente.
 
-`a.cur[a.used : a.used+n : a.used+n]` es la expresión de corte completa del capítulo 2: un `append` de quien recibe los bytes no pisa la petición siguiente.
+La conversión que la Teoría descarta:
+
+```go
+// What Arena never does: read its bytes as a node. The collector still sees
+// a []byte, so whatever the node points to can be freed under it.
+n := (*Node)(unsafe.Pointer(&slab[0]))
+```
 
 {{reftest T04.11}}
 
@@ -326,7 +506,7 @@ func (in *Interner) Len() int
 {{file ch04-s2 internal/base/interner.go}}
 
 - **El mapa.** `make(map[uint64]Symbol)` crea un mapa vacío, como el literal. Una clave ausente da el valor cero: aquí, `NoSymbol`. Un slice `nil` admite `append`, pero un mapa `nil`, su valor cero, se puede leer y no escribir.
-- **La cadena.** `index` lleva cada hash a su **primer** símbolo, y `next[sym]` encadena los demás. La igualdad la decide `bytes.Equal`, nunca el hash solo.
+- **La cadena.** `find` e `Intern` son el pseudocódigo de la Teoría; la igualdad la decide `bytes.Equal`, nunca el hash solo.
 - **El hash** es un closure que lee `in.seed`; como captura `in`, `NewInterner` lo asigna después de crearlo.
 
 Cambia `bytes.Equal(in.texts[s], b)` por `bytes.HasPrefix(b, in.texts[s])`. El test de colisiones falla: con el hash constante, todo texto encuentra el símbolo de `""`, que interna primero. Deshazlo y compara:
@@ -343,7 +523,7 @@ Al terminar: tus tests en verde, commit y etiqueta `ch04-s2`; compárate con `re
 
 ## Ejecútalo
 
-Desde la raíz de tu repo:
+Desde la raíz de tu repo. En los benchmarks, tus números variarán, pero no el orden de magnitud ni los `0 allocs/op`:
 
 ```console
 $ go test -count=1 ./internal/base/
@@ -353,6 +533,9 @@ $ go test -count=1 -v -run 'ExampleInterner' ./internal/base/
 --- PASS: ExampleInterner (0.00s)
 PASS
 ok  	github.com/aldezex/kilang/internal/base	0.002s
+```
+
+```console doctest="varies: tiempos de un benchmark"
 $ go test ./internal/base -run '^$' -bench 'Intern|UniqueMake' -benchmem
 goos: linux
 goarch: amd64
@@ -622,81 +805,18 @@ La función libre necesita los tres parámetros, `func Map[I ~uint32, T, U any](
 - y ninguna interfaz puede pedir un método `Map[U]`, así que no ganas polimorfismo, solo una llamada más cómoda.
 :::
 
-## Preguntas de repaso
-
-:::review
-¿Por qué `IdVec` restringe `I` con `~uint32` y no con `uint32` ni con `any`?
+:::exercise
+**5. `Ptr` y `SourceManager`.** ¿Por qué `Ptr` vale solo hasta el siguiente `Push`, y qué hacen con eso los métodos de `SourceManager`?
 :::
 
-:::answer
-Con `uint32`, el conjunto tiene un solo tipo y `FileID` no lo cumple. Con `any`, el cuerpo no puede convertir un `int` en `I` ni indexar con `I`. `~uint32` admite todos los ids definidos sobre `uint32` y deja hacer con ellos lo que se hace con un entero.
+:::solution
+Porque `Push` hace un `append`, que puede mover los elementos a un array nuevo, y el puntero seguiría en el viejo: las escrituras se perderían sin error. Los métodos piden el puntero, lo usan y lo sueltan dentro de la misma llamada, sin guardarlo: `m.files.Ptr(id)` cada vez.
 :::
 
-:::review
-¿Por qué `All` tiene que mirar lo que devuelve `yield`, y qué pasa si no lo hace?
+:::exercise
+**6. Un hash en un campo.** ¿Por qué `hash` es un campo de `Interner` y no una llamada directa a `maphash.Bytes`?
 :::
 
-:::answer
-Porque `range` convierte el cuerpo del bucle en `yield`, y un `break` (o un `return`) en el cuerpo se traduce en que `yield` devuelve `false`: el bucle ya terminó. Si `All` siguiera llamando a `yield`, ejecutaría un cuerpo que ya salió. Go no lo detecta al compilar, sino al ejecutar: la siguiente llamada hace panic.
+:::solution
+Para que un test fuerce colisiones con un hash constante. Con un hash real de 64 bits casi nunca ocurren, y la cadena `next` quedaría sin probar.
 :::
-
-:::review
-¿Por qué `errors.AsType[*fs.PathError](err)` necesita los corchetes y `Max(1, 2.5)` no?
-:::
-
-:::answer
-Go infiere los argumentos de tipo de los argumentos de la llamada. En `Max`, `T` aparece en los parámetros; en `AsType`, `E` solo aparece en el resultado, y del resultado Go no infiere nada.
-:::
-
-:::review
-¿Por qué guardar 4 000 000 de nodos en un `[]INode` con ids hace que `runtime.GC()`, con `GOMAXPROCS=1`, pase de decenas de milisegundos a decenas de microsegundos?
-:::
-
-:::answer
-Porque el recolector recorre punteros. Con un puntero por hijo hay cuatro millones de objetos que marcar y seguir; el `[]INode` es un solo objeto sin punteros, que se marca sin entrar en él.
-:::
-
-:::review
-¿Por qué el interner compara con `bytes.Equal` aunque los hashes coincidan, y por qué `hash` es un campo?
-:::
-
-:::answer
-Porque dos textos distintos pueden compartir hash: el hash solo elige la cadena, y la igualdad la decide el contenido. Es un campo para que un test fuerce colisiones; con un hash real de 64 bits casi nunca ocurren, y la cadena `next` quedaría sin probar.
-:::
-
-:::review
-¿Por qué el compilador usa su propio interner y no `unique.Make`, si este es más simple y seguro entre goroutines?
-:::
-
-:::answer
-Porque necesita un entero pequeño, sin punteros, numerado en orden y estable entre ejecuciones, que indexe tablas. Un `Handle` es un puntero de 8 bytes que el recolector recorre, sin número, y su seguridad entre goroutines no sirve a un compilador secuencial.
-:::
-
-:::review
-¿Por qué `Ptr` vale solo hasta el siguiente `Push`, y qué hacen con eso los métodos de `SourceManager`?
-:::
-
-:::answer
-Porque `Push` hace un `append`, que puede mover los elementos a un array nuevo, y el puntero seguiría en el viejo: las escrituras se perderían sin error. Los métodos piden el puntero, lo usan y lo sueltan dentro de la misma llamada, sin guardarlo.
-:::
-
-## Resumen
-
-- Una restricción decide qué puede hacer un genérico por dentro: `~uint32`, `comparable`, `cmp.Ordered`.
-- Go infiere de los argumentos, nunca del resultado: `errors.AsType` lleva corchetes.
-- Go 1.27 admite métodos con parámetros propios, no en interfaces.
-- Mezclar dos ids tipados es un error de compilación.
-- `range` convierte el cuerpo del bucle en `yield`; el iterador debe parar cuando devuelve `false`.
-- El recolector no entra en lo que no tiene punteros: ahí ganan los ids y los slabs.
-- `maphash` y los mapas se siembran al azar: ninguna salida depende de ellos.
-- `// Output:` hace de un `Example` un test; `AllocsPerRun` y `-benchmem` miden las reservas.
-
-## Go en el trabajo
-
-**Cuándo usar genéricos.** `IdVec` encaja: el mismo código para todas sus tablas. «When To Use Generics» (blog de Go) los recomienda para funciones sobre slices, mapas y canales, estructuras de datos de propósito general y un método idéntico en todos los tipos. Si solo llamas a un método del valor, usa una interfaz.
-
-**El `IndexVec` de rustc es el mismo patrón.** Usarlo con el índice equivocado «will fail at compile time». Cada newtype necesita un `impl Idx`; en Go basta `type ExprID uint32`.
-
-**Grafos sin punteros.** Según la guía del recolector (go.dev/doc/gc-guide), las estructuras con índices, «while less well-typed, may perform better». Solo compensa si el grafo es complejo y el recolector pasa mucho tiempo marcando.
-
-Los ids tipados recuperan buena parte de lo «less well-typed», pero no el rango: un id fuera de su tabla es un panic al ejecutar.
