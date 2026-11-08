@@ -125,8 +125,8 @@ func TestLint(t *testing.T) {
 			{"function used as a value", func(l *lintProg) core.ExprID {
 				return l.FunRef(span(0, 1), 0)
 			}},
-			// A Match is complete with the arms true and false, in either
-			// order, or with a wildcard arm, whatever else it has.
+			// Any arms at all are valid, whatever they cover (see
+			// match_coverage_is_not_checked).
 			{"true and false", func(l *lintProg) core.ExprID { return lintMatch(l, core.PatTrue, core.PatFalse) }},
 			{"false and true", func(l *lintProg) core.ExprID { return lintMatch(l, core.PatFalse, core.PatTrue) }},
 			{"wildcard alone", func(l *lintProg) core.ExprID { return lintMatch(l, core.PatWildcard) }},
@@ -179,15 +179,15 @@ func TestLint(t *testing.T) {
 				return l.Prim(span(0, 1), core.PrimAddInt, []core.ExprID{l.LitInt(span(0, 1), 1), l.VarRef(span(0, 1), u)}), u
 			}},
 			{"a scrutinee", func(l *lintProg, u, x core.VarID, g core.FunID) (core.ExprID, core.VarID) {
-				arms := []core.Arm{{Pat: core.PatTrue, Body: l.LitInt(span(0, 1), 1)}, {Pat: core.PatFalse, Body: l.LitInt(span(0, 1), 2)}}
+				arms := []core.Arm{armOf(l, core.PatTrue, l.LitInt(span(0, 1), 1)), armOf(l, core.PatFalse, l.LitInt(span(0, 1), 2))}
 				return l.Match(span(0, 1), l.VarRef(span(0, 1), u), arms), u
 			}},
 			{"the true arm", func(l *lintProg, u, x core.VarID, g core.FunID) (core.ExprID, core.VarID) {
-				arms := []core.Arm{{Pat: core.PatTrue, Body: l.VarRef(span(0, 1), u)}, {Pat: core.PatFalse, Body: l.LitInt(span(0, 1), 2)}}
+				arms := []core.Arm{armOf(l, core.PatTrue, l.VarRef(span(0, 1), u)), armOf(l, core.PatFalse, l.LitInt(span(0, 1), 2))}
 				return l.Match(span(0, 1), l.LitBool(span(0, 1), true), arms), u
 			}},
 			{"the false arm", func(l *lintProg, u, x core.VarID, g core.FunID) (core.ExprID, core.VarID) {
-				arms := []core.Arm{{Pat: core.PatTrue, Body: l.LitInt(span(0, 1), 1)}, {Pat: core.PatFalse, Body: l.VarRef(span(0, 1), u)}}
+				arms := []core.Arm{armOf(l, core.PatTrue, l.LitInt(span(0, 1), 1)), armOf(l, core.PatFalse, l.VarRef(span(0, 1), u))}
 				return l.Match(span(0, 1), l.LitBool(span(0, 1), true), arms), u
 			}},
 			{"the init of a Let", func(l *lintProg, u, x core.VarID, g core.FunID) (core.ExprID, core.VarID) {
@@ -215,7 +215,7 @@ func TestLint(t *testing.T) {
 			// An arm is not in the scope of the other one.
 			{"a Let variable, in the next arm", func(l *lintProg, u, x core.VarID, g core.FunID) (core.ExprID, core.VarID) {
 				first := l.Let(span(0, 1), x, l.LitInt(span(0, 1), 1), l.VarRef(span(0, 1), x))
-				arms := []core.Arm{{Pat: core.PatTrue, Body: first}, {Pat: core.PatFalse, Body: l.VarRef(span(0, 1), x)}}
+				arms := []core.Arm{armOf(l, core.PatTrue, first), armOf(l, core.PatFalse, l.VarRef(span(0, 1), x))}
 				return l.Match(span(0, 1), l.LitBool(span(0, 1), true), arms), x
 			}},
 		} {
@@ -379,6 +379,175 @@ func TestLint(t *testing.T) {
 		}
 	})
 
+	t.Run("patterns_bind_in_their_arm", func(t *testing.T) {
+		// The variables that the pattern of an arm binds are in scope in its guard
+		// and its body, and nowhere else: not in the scrutinee, not in the other
+		// arms, not after the Match. Each row is the body of a function that has the
+		// variable x, which some patterns bind, and the one that nothing binds is
+		// left out: the violations are all `unbound variable` of x, or none.
+		for _, row := range []struct {
+			name  string
+			build func(l *lintProg, x core.VarID) core.ExprID
+			want  int // how many reads of x are unbound
+		}{
+			{"the guard reads it", func(l *lintProg, x core.VarID) core.ExprID {
+				return lintArms(l, lintScrut(l), lintArm{pat: lintBind(l, x), guard: l.VarRef(span(0, 1), x), hasGuard: true, body: l.LitInt(span(0, 1), 1)})
+			}, 0},
+			{"the body reads it", func(l *lintProg, x core.VarID) core.ExprID {
+				return lintArms(l, lintScrut(l), lintArm{pat: lintBind(l, x), body: l.VarRef(span(0, 1), x)})
+			}, 0},
+			{"a variable deep in a pattern", func(l *lintProg, x core.VarID) core.ExprID {
+				deep := lintCon(l, "Pair", lintWild(l), lintCon(l, "Pair", lintWild(l), lintBind(l, x)))
+				return lintArms(l, lintScrut(l), lintArm{pat: deep, body: l.VarRef(span(0, 1), x)})
+			}, 0},
+			{"each alternative of an or-pattern binds it", func(l *lintProg, x core.VarID) core.ExprID {
+				or := lintOr(l, lintCon(l, "Pair", lintBind(l, x), lintWild(l)), lintCon(l, "Pair", lintWild(l), lintBind(l, x)))
+				return lintArms(l, lintScrut(l), lintArm{pat: or, guard: l.VarRef(span(0, 1), x), hasGuard: true, body: l.VarRef(span(0, 1), x)})
+			}, 0},
+			{"the scrutinee is outside the arms", func(l *lintProg, x core.VarID) core.ExprID {
+				return l.Match(span(0, 1), l.VarRef(span(0, 1), x), []core.Arm{{Pat: lintBind(l, x), Body: l.LitInt(span(0, 1), 1)}})
+			}, 1},
+			{"the next arm is outside the arm before it", func(l *lintProg, x core.VarID) core.ExprID {
+				return lintArms(l, lintScrut(l),
+					lintArm{pat: lintBind(l, x), body: l.LitInt(span(0, 1), 1)},
+					lintArm{pat: lintWild(l), body: l.VarRef(span(0, 1), x)})
+			}, 1},
+			{"the guard of the next arm is outside it too", func(l *lintProg, x core.VarID) core.ExprID {
+				return lintArms(l, lintScrut(l),
+					lintArm{pat: lintBind(l, x), body: l.LitInt(span(0, 1), 1)},
+					lintArm{pat: lintWild(l), guard: l.VarRef(span(0, 1), x), hasGuard: true, body: l.LitInt(span(0, 1), 2)})
+			}, 1},
+			{"the arm before it is outside the arm that binds", func(l *lintProg, x core.VarID) core.ExprID {
+				return lintArms(l, lintScrut(l),
+					lintArm{pat: lintWild(l), body: l.VarRef(span(0, 1), x)},
+					lintArm{pat: lintBind(l, x), body: l.LitInt(span(0, 1), 1)})
+			}, 1},
+			{"the variable leaves with the arm", func(l *lintProg, x core.VarID) core.ExprID {
+				m := lintArms(l, lintScrut(l), lintArm{pat: lintBind(l, x), body: l.VarRef(span(0, 1), x)})
+				return l.Prim(span(0, 1), core.PrimAddInt, []core.ExprID{m, l.VarRef(span(0, 1), x)})
+			}, 1},
+			// Two alternatives bind x twice: it leaves the scope when both are done,
+			// not when one is.
+			{"a variable that two alternatives bind leaves with the arm", func(l *lintProg, x core.VarID) core.ExprID {
+				or := lintOr(l, lintBind(l, x), lintBind(l, x))
+				m := lintArms(l, lintScrut(l), lintArm{pat: or, body: l.VarRef(span(0, 1), x)})
+				return l.Prim(span(0, 1), core.PrimAddInt, []core.ExprID{m, l.VarRef(span(0, 1), x)})
+			}, 1},
+			// The Let still binds x when the arm that bound it again is over.
+			{"a Let around the Match keeps its variable", func(l *lintProg, x core.VarID) core.ExprID {
+				m := lintArms(l, lintScrut(l), lintArm{pat: lintBind(l, x), body: l.LitInt(span(0, 1), 1)})
+				body := l.Prim(span(0, 1), core.PrimAddInt, []core.ExprID{m, l.VarRef(span(0, 1), x)})
+				return l.Let(span(0, 1), x, l.LitInt(span(0, 1), 0), body)
+			}, 0},
+		} {
+			l := newLintProg()
+			x := l.variable(0)
+			f := l.fn(1, nil, row.build(l, x))
+			var want []string
+			for range row.want {
+				want = append(want, lintFun(f)+": unbound variable "+lintVar(x))
+			}
+			lintCheck(t, row.name, l.P, l.in, want...)
+		}
+	})
+
+	t.Run("rejects_bad_patterns", func(t *testing.T) {
+		// A PatBind whose variable has no slot in the frame, and a PatCon with
+		// another number of patterns than its constructor has fields, wherever they
+		// are in the pattern. A tuple has no name, so it is told by its arity; a
+		// PatBind that an or-pattern repeats in each alternative is a violation for
+		// each one.
+		for _, row := range []struct {
+			name  string
+			build func(l *lintProg, fit, outside core.VarID) core.PatID
+			want  []string // the violations; $v is the variable outside the frame
+		}{
+			{"a variable in the last slot of the frame", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintBind(l, fit)
+			}, nil},
+			{"a variable one past the frame", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintBind(l, outside)
+			}, []string{"variable $v has slot 1, outside a frame of 1 slot(s)"}},
+			{"a variable deep in a pattern", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintWild(l), lintCon(l, "Pair", lintWild(l), lintBind(l, outside)))
+			}, []string{"variable $v has slot 1, outside a frame of 1 slot(s)"}},
+			{"the second alternative of an or-pattern", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintOr(l, lintBind(l, fit), lintBind(l, outside))
+			}, []string{"variable $v has slot 1, outside a frame of 1 slot(s)"}},
+			{"both alternatives of an or-pattern", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintOr(l, lintBind(l, outside), lintBind(l, outside))
+			}, []string{"variable $v has slot 1, outside a frame of 1 slot(s)", "variable $v has slot 1, outside a frame of 1 slot(s)"}},
+			{"two patterns for two fields", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintWild(l), lintWild(l))
+			}, nil},
+			{"no patterns for no fields", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "None")
+			}, nil},
+			{"one pattern too few", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintWild(l))
+			}, []string{"pattern of constructor `Pair` with 1 argument(s), but it takes 2"}},
+			{"one pattern too many", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintWild(l), lintWild(l), lintWild(l))
+			}, []string{"pattern of constructor `Pair` with 3 argument(s), but it takes 2"}},
+			{"a pattern for no field", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "None", lintWild(l))
+			}, []string{"pattern of constructor `None` with 1 argument(s), but it takes 0"}},
+			{"no patterns for two fields", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair")
+			}, []string{"pattern of constructor `Pair` with 0 argument(s), but it takes 2"}},
+			{"a tuple with the arity of its constructor", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "", lintWild(l), lintWild(l))
+			}, nil},
+			{"a tuple with one pattern too many", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "", lintWild(l), lintWild(l), lintWild(l))
+			}, []string{"pattern of tuple constructor with 3 argument(s), but it takes 2"}},
+			{"inside an or-pattern", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintOr(l, lintCon(l, "None"), lintCon(l, "Pair", lintWild(l)))
+			}, []string{"pattern of constructor `Pair` with 1 argument(s), but it takes 2"}},
+			{"an outer pattern before the one inside it", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintCon(l, "Pair", lintWild(l)), lintCon(l, "None", lintWild(l)))
+			}, []string{"pattern of constructor `Pair` with 1 argument(s), but it takes 2", "pattern of constructor `None` with 1 argument(s), but it takes 0"}},
+			{"an outer pattern with the wrong arity and its inner ones", func(l *lintProg, fit, outside core.VarID) core.PatID {
+				return lintCon(l, "Pair", lintBind(l, outside))
+			}, []string{"pattern of constructor `Pair` with 1 argument(s), but it takes 2", "variable $v has slot 1, outside a frame of 1 slot(s)"}},
+		} {
+			l := newLintProg()
+			fit, outside := l.variable(0), l.variable(1)
+			f := l.fn(1, nil, lintArms(l, lintScrut(l), lintArm{pat: row.build(l, fit, outside), body: l.LitInt(span(0, 1), 1)}))
+			var want []string
+			for _, w := range row.want {
+				want = append(want, lintFun(f)+": "+strings.ReplaceAll(w, "$v", lintVar(outside)))
+			}
+			lintCheck(t, row.name, l.P, l.in, want...)
+		}
+
+		// The violations come in the order of the source: the scrutinee, then each
+		// arm's pattern, its guard and its body, and then the next arm.
+		l := newLintProg()
+		bad, a, b, c := l.variable(1), l.variable(0), l.variable(0), l.variable(0)
+		lintCon(l, "Pair", lintWild(l), lintWild(l)) // make sure the constructors exist
+		body := lintArms(l, l.VarRef(span(0, 1), a),
+			lintArm{pat: lintBind(l, bad), guard: l.VarRef(span(0, 1), b), hasGuard: true, body: l.VarRef(span(0, 1), c)},
+			lintArm{pat: lintCon(l, "Pair", lintWild(l)), body: l.LitInt(span(0, 1), 1)})
+		f := l.fn(1, nil, body)
+		lintCheck(t, "the order of the source", l.P, l.in,
+			lintFun(f)+": unbound variable "+lintVar(a),
+			lintFun(f)+": variable "+lintVar(bad)+" has slot 1, outside a frame of 1 slot(s)",
+			lintFun(f)+": unbound variable "+lintVar(b),
+			lintFun(f)+": unbound variable "+lintVar(c),
+			lintFun(f)+": pattern of constructor `Pair` with 1 argument(s), but it takes 2")
+
+		// A kind of pattern that Lint has no case for, which only a Program made by
+		// hand can hold, is a bug of whoever made it: each switch ends in
+		// panic("unreachable").
+		l = newLintProg()
+		pat := l.Pat(core.Pat{Kind: core.PatKind(77), Span: span(0, 1)})
+		l.fn(1, nil, lintArms(l, lintScrut(l), lintArm{pat: pat, body: l.LitInt(span(0, 1), 1)}))
+		if got := elabRaised(func() { core.Lint(l.P, l.in) }); got != "unreachable" {
+			t.Errorf("Lint of a pattern of kind 77 panicked with %#v, want the string \"unreachable\"", got)
+		}
+	})
+
 	t.Run("rejects_slot_out_of_frame", func(t *testing.T) {
 		const slotsOf = ", outside a frame of "
 		for _, row := range []struct {
@@ -426,8 +595,12 @@ func TestLint(t *testing.T) {
 		lintCheck(t, "an extern parameter one past the frame", l.P, l.in, "fun f0: variable `v0` has slot 1, outside a frame of 1 slot(s)")
 	})
 
-	t.Run("rejects_match_without_false_arm", func(t *testing.T) {
-		const want = "fun f0: match must have an arm for true and one for false, or a wildcard arm"
+	t.Run("match_coverage_is_not_checked", func(t *testing.T) {
+		// Whether the arms of a Match cover every value is for the pass `patterns`
+		// of the checker, so Core that has a Match with only the arm `true`, with
+		// no arms at all or with a repeated arm is valid, and Lint says nothing of
+		// it. (It used to ask for both literals or a wildcard.) The machine panics
+		// if such a Match gets a value that no arm fits.
 		for _, row := range []struct {
 			name string
 			pats []core.PatKind
@@ -440,16 +613,15 @@ func TestLint(t *testing.T) {
 		} {
 			l := newLintProg()
 			l.fn(1, nil, lintMatch(l, row.pats...))
-			lintCheck(t, row.name, l.P, l.in, want)
+			lintCheck(t, row.name, l.P, l.in)
 		}
 
-		// A Match inside the arm of another one is checked as well, and each
-		// bad one is one violation.
+		// A Match inside the arm of another one is no different.
 		l := newLintProg()
 		inner := lintMatch(l, core.PatTrue)
-		outer := l.Match(span(0, 1), l.LitBool(span(0, 1), true), []core.Arm{{Pat: core.PatTrue, Body: inner}})
+		outer := l.Match(span(0, 1), l.LitBool(span(0, 1), true), []core.Arm{armOf(l, core.PatTrue, inner)})
 		l.fn(1, nil, outer)
-		lintCheck(t, "two bad matches, one inside the other", l.P, l.in, want, want)
+		lintCheck(t, "a match inside a match", l.P, l.in)
 	})
 
 	t.Run("rejects_bad_function_shape", func(t *testing.T) {
@@ -491,13 +663,16 @@ func TestLint(t *testing.T) {
 		// fun f0 breaks every rule once. The violations come function by
 		// function, the shape of the function first, then its parameters, then
 		// its body in pre-order: a node's own violation before those of its
-		// children, and a Let's slot before the violations of its init.
+		// children, and a Let's slot before the violations of its init; those of an
+		// arm's pattern come after the scrutinee's and before the arm's body.
 		p := l.variable(3)  // v0: slot 3 in a frame of 1
 		x := l.variable(5)  // v1: slot 5 in a frame of 1
 		u1 := l.variable(0) // v2: never bound
 		u2 := l.variable(0) // v3: never bound
+		w := l.variable(7)  // v4: slot 7 in a frame of 1, bound by the pattern of the arm
 		init := l.Prim(span(0, 1), core.PrimNegInt, []core.ExprID{l.LitInt(span(0, 1), 1), l.LitInt(span(0, 1), 2)})
-		match := l.Match(span(0, 1), l.VarRef(span(0, 1), u1), []core.Arm{{Pat: core.PatTrue, Body: l.VarRef(span(0, 1), u2)}})
+		pat := l.Pat(core.Pat{Kind: core.PatBind, Span: span(0, 1), Var: w})
+		match := l.Match(span(0, 1), l.VarRef(span(0, 1), u1), []core.Arm{{Pat: pat, Body: l.VarRef(span(0, 1), u2)}})
 		body := l.Let(span(0, 1), x, init, match)
 		l.push(core.Fun{Params: []core.VarID{p}, Body: body, HasBody: true, ExternName: "ki_x", FrameSize: 1, Span: span(0, 1)})
 		// fun f1 has one violation, which comes after all those of fun f0.
@@ -507,8 +682,8 @@ func TestLint(t *testing.T) {
 			"fun f0: variable `v0` has slot 3, outside a frame of 1 slot(s)",
 			"fun f0: variable `v1` has slot 5, outside a frame of 1 slot(s)",
 			"fun f0: primitive neg_int with 2 argument(s), but it takes 1",
-			"fun f0: match must have an arm for true and one for false, or a wildcard arm",
 			"fun f0: unbound variable `v2`",
+			"fun f0: variable `v4` has slot 7, outside a frame of 1 slot(s)",
 			"fun f0: unbound variable `v3`",
 			"fun f1: unbound variable `v2`",
 		)
@@ -669,9 +844,79 @@ func lintDeepCon(depth, innermost int) (*core.Program, *base.Interner, core.Expr
 func lintMatch(l *lintProg, pats ...core.PatKind) core.ExprID {
 	arms := make([]core.Arm, len(pats))
 	for i, pat := range pats {
-		arms[i] = core.Arm{Pat: pat, Body: l.LitInt(span(0, 1), int64(i))}
+		arms[i] = armOf(l, pat, l.LitInt(span(0, 1), int64(i)))
 	}
 	return l.Match(span(0, 1), l.LitBool(span(0, 1), true), arms)
+}
+
+// lintArm is an arm for lintArms: a pattern, an optional guard and a body.
+type lintArm struct {
+	pat      core.PatID
+	guard    core.ExprID
+	hasGuard bool
+	body     core.ExprID
+}
+
+// lintScrut is a scrutinee that has nothing to report: the literal `true`.
+func lintScrut(l *lintProg) core.ExprID { return l.LitBool(span(0, 1), true) }
+
+// lintArms makes a Match on scrut with the arms arms.
+func lintArms(l *lintProg, scrut core.ExprID, arms ...lintArm) core.ExprID {
+	out := make([]core.Arm, len(arms))
+	for i, a := range arms {
+		out[i] = core.Arm{Pat: a.pat, Guard: a.guard, HasGuard: a.hasGuard, Body: a.body}
+	}
+	return l.Match(span(0, 1), scrut, out)
+}
+
+// lintWild makes the pattern `_`, and lintBind the pattern that binds v.
+func lintWild(l *lintProg) core.PatID {
+	return l.Pat(core.Pat{Kind: core.PatWildcard, Span: span(0, 1)})
+}
+
+func lintBind(l *lintProg, v core.VarID) core.PatID {
+	return l.Pat(core.Pat{Kind: core.PatBind, Span: span(0, 1), Var: v})
+}
+
+// lintCon makes a pattern of the constructor called name, with the patterns subs
+// for its fields. The constructors are made when they are first asked for, with
+// the arity of their name: `None` has no fields, `Pair` two, and the empty name
+// is the tuple constructor of two.
+func lintCon(l *lintProg, name string, subs ...core.PatID) core.PatID {
+	c := core.Ctor{Name: l.in.InternString(name), Arity: 2}
+	switch name {
+	case "None":
+		c.Arity = 0
+	case "":
+		c.Name, c.Tuple = base.NoSymbol, true
+	}
+	id := core.CtorID(0)
+	found := false
+	for i, have := range l.P.Ctors.All() {
+		if have.Name == c.Name && have.Tuple == c.Tuple {
+			id, found = i, true
+		}
+	}
+	if !found {
+		id = l.P.Ctors.Push(c)
+	}
+	return l.Pat(core.Pat{Kind: core.PatCon, Span: span(0, 1), Ctor: id, Args: base.AppendRange(&l.P.PatPool, subs)})
+}
+
+// lintOr makes the or-pattern of alts.
+func lintOr(l *lintProg, alts ...core.PatID) core.PatID {
+	return l.Pat(core.Pat{Kind: core.PatOr, Span: span(0, 1), Args: base.AppendRange(&l.P.PatPool, alts)})
+}
+
+// patMaker is what makes patterns: a Builder, or a lintProg, which holds one.
+type patMaker interface {
+	Pat(core.Pat) core.PatID
+}
+
+// armOf makes an arm with a pattern of the given kind, that has no fields, and
+// the body body.
+func armOf(b patMaker, kind core.PatKind, body core.ExprID) core.Arm {
+	return core.Arm{Pat: b.Pat(core.Pat{Kind: kind, Span: span(0, 1)}), Body: body}
 }
 
 // lintFirstDiff returns the index of the first byte where a and b differ, or
@@ -728,7 +973,7 @@ func TestSubexprs(t *testing.T) {
 		cond := b.LitBool(span(10, 11), true)
 		thenArm := b.LitInt(span(12, 13), 7)
 		elseArm := b.LitInt(span(14, 15), 8)
-		match := b.Match(span(10, 15), cond, []core.Arm{{Pat: core.PatTrue, Body: thenArm}, {Pat: core.PatFalse, Body: elseArm}})
+		match := b.Match(span(10, 15), cond, []core.Arm{armOf(b, core.PatTrue, thenArm), armOf(b, core.PatFalse, elseArm)})
 		f := b.FunRef(span(20, 21), 0)
 		last := b.VarRef(span(22, 23), x)
 		call := b.Call(span(20, 23), f, []core.ExprID{match, last})
@@ -746,6 +991,26 @@ func TestSubexprs(t *testing.T) {
 		// same ids the second time.
 		if got, want := slices.Collect(p.Subexprs(let)), []core.ExprID{let, sum, one, two, ref}; !slices.Equal(got, want) {
 			t.Errorf("a second walk of the Let visited %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a_match_visits_its_guards", func(t *testing.T) {
+		// A Match visits the scrutinee and then, for each arm in order, its guard if
+		// it has one and then its body. The patterns are not expressions, so they are
+		// not visited.
+		b, p := newBuilder()
+		scrut := b.LitBool(span(0, 1), true)
+		g1, b1 := b.LitBool(span(2, 3), true), b.LitInt(span(4, 5), 1)
+		b2 := b.LitInt(span(6, 7), 2)
+		g3, b3 := b.LitBool(span(8, 9), false), b.LitInt(span(10, 11), 3)
+		wild := b.Pat(core.Pat{Kind: core.PatWildcard, Span: span(0, 1)})
+		match := b.Match(span(0, 11), scrut, []core.Arm{
+			{Pat: wild, Guard: g1, HasGuard: true, Body: b1},
+			{Pat: wild, Body: b2},
+			{Pat: wild, Guard: g3, HasGuard: true, Body: b3},
+		})
+		if got, want := slices.Collect(p.Subexprs(match)), []core.ExprID{match, scrut, g1, b1, b2, g3, b3}; !slices.Equal(got, want) {
+			t.Errorf("Subexprs of a match with guards visited %v, want %v", got, want)
 		}
 	})
 

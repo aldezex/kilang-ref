@@ -82,3 +82,10 @@ func (b *Builder) Let(sp base.Span, v VarID, init, body ExprID) ExprID {
 func (b *Builder) Match(sp base.Span, scrutinee ExprID, arms []Arm) ExprID {
 	return b.add(Expr{Kind: Match, Span: sp, Scrutinee: scrutinee, Arms: base.AppendRange(&b.P.ArmPool, arms)})
 }
+
+// Pat makes the pattern p and returns its id. Its Args, if it has any, must
+// already be in PatPool: make them with base.AppendRange(&b.P.PatPool, ids), as
+// Match does for arms. Like the other methods it does not check what it is given.
+func (b *Builder) Pat(p Pat) PatID {
+	return b.P.Pats.Push(p)
+}

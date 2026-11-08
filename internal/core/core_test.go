@@ -201,9 +201,15 @@ func TestBuilder(t *testing.T) {
 		cond := b.LitBool(span(0, 4), true)
 		two := b.LitInt(span(7, 8), 2)
 		three := b.LitInt(span(9, 10), 3)
+		// The patterns are nodes of their own and the arms hold their ids. A filler
+		// comes first, so that none of those ids is the 0 of a field never written.
+		b.Pat(core.Pat{Kind: core.PatWildcard, Span: span(0, 0)})
+		patTrue := b.Pat(core.Pat{Kind: core.PatTrue, Span: span(0, 4)})
+		patFalse := b.Pat(core.Pat{Kind: core.PatFalse, Span: span(0, 5)})
+		patWild := b.Pat(core.Pat{Kind: core.PatWildcard, Span: span(0, 1)})
 
-		ifElse := b.Match(span(0, 20), cond, []core.Arm{{Pat: core.PatTrue, Body: one}, {Pat: core.PatFalse, Body: two}})
-		wild := b.Match(span(21, 30), cond, []core.Arm{{Pat: core.PatWildcard, Body: three}})
+		ifElse := b.Match(span(0, 20), cond, []core.Arm{{Pat: patTrue, Body: one}, {Pat: patFalse, Body: two}})
+		wild := b.Match(span(21, 30), cond, []core.Arm{{Pat: patWild, Body: three}})
 
 		for _, row := range []struct {
 			name string
@@ -217,7 +223,7 @@ func TestBuilder(t *testing.T) {
 				t.Errorf("%s: %+v, want %+v", row.name, got, row.want)
 			}
 		}
-		wantPool := []core.Arm{{Pat: core.PatTrue, Body: one}, {Pat: core.PatFalse, Body: two}, {Pat: core.PatWildcard, Body: three}}
+		wantPool := []core.Arm{{Pat: patTrue, Body: one}, {Pat: patFalse, Body: two}, {Pat: patWild, Body: three}}
 		if !slices.Equal(p.ArmPool, wantPool) {
 			t.Errorf("ArmPool is %v, want %v", p.ArmPool, wantPool)
 		}

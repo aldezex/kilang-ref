@@ -5,9 +5,11 @@
 // with the value when it is ready). All three are data in the Machine, and
 // running it is a loop over them (Machine.run), not a recursion over the tree.
 //
-// It evaluates all of Core as Part I and chapter 11 have it: literals,
-// variables, `let`, the primitives, `match`, calls of the program's functions
-// and the constructors of the declared types. A program can end in two ways other than returning from `main`: a
+// It evaluates all of Core as Part I, chapter 11 and chapter 12 have it:
+// literals, variables, `let`, the primitives, `match`, calls of the program's
+// functions and the constructors of the declared types. A `match` tries its arms
+// from the first to the last, and takes the first whose pattern fits and whose
+// guard, if it has one, is true. A program can end in two ways other than returning from `main`: a
 // panic (an overflow, a division by zero, or a Float that does not fit in an
 // Int), with Halt{Code: 101}, and a stack that has grown past its limit, with
 // Halt{Code: 103}. A call that is the last thing its function does
@@ -31,7 +33,7 @@ import (
 // frame is one frame of the continuation: what the machine must do with the
 // next value it computes. It is a sealed interface like Value, and applyFrame
 // has the type switch over its kinds: letFrame, primFrame, argFrame, conFrame,
-// projFrame, matchFrame and retFrame.
+// projFrame, matchFrame, guardFrame and retFrame.
 type frame interface{ frame() }
 
 // letFrame waits for the value of the Init of a Let. When it arrives, the value
@@ -89,6 +91,49 @@ func (projFrame) frame() {}
 type matchFrame struct{ match core.ExprID }
 
 func (matchFrame) frame() {}
+
+// guardFrame waits for the value of the guard of an arm of the Match expression
+// match, once the pattern of the arm has fit the scrutinee. arm is the index of
+// the arm, scrutinee is the value being matched, and choices are the
+// alternatives of or-patterns that the pattern has not tried yet, innermost
+// last (see choice). held is how many slots the frame counts as: the scrutinee
+// and one for each choice, which keep values alive like an argFrame does. When
+// the guard is true the arm's body becomes the control; when it is false the
+// match goes on with the next alternative of the same arm, if a choice is left,
+// and with the next arm after that.
+type guardFrame struct {
+	match     core.ExprID
+	arm       int
+	scrutinee Value
+	choices   []choice
+	held      int
+}
+
+func (guardFrame) frame() {}
+
+// patWork is a pattern that is still to be matched against a value, in the
+// stack of a matching that has more than one: a linked list, so that a choice
+// can keep the stack as it was when it was made and later go back to it, which a
+// slice that keeps growing and shrinking could not. The matching does not
+// recurse over the pattern; its depth is the length of this list.
+type patWork struct {
+	pat  core.PatID
+	val  Value
+	next *patWork
+}
+
+// choice is an alternative of an or-pattern that a matching has not tried: the
+// or-pattern or, the index next of the alternative to try, the value it
+// matches, and rest, the patterns that were left to match after the or-pattern
+// when the choice was made. A matching that fails, or whose guard is false,
+// takes the last choice and goes on from it, which is how `A | B` fits where B
+// does after A has failed halfway through a larger pattern.
+type choice struct {
+	or   core.PatID
+	next int
+	val  Value
+	rest *patWork
+}
 
 // retFrame is where a function returns to. A call that is not in tail position
 // pushes one, and it stays on the stack until the function returns; a call in
@@ -409,10 +454,12 @@ func (m *Machine) step(id core.ExprID) {
 // argument is evaluated, or the value that the constructor builds is returned,
 // with the values as its fields. For a projFrame, v is the value of the target, a
 // ConV that the type checker has made sure has the field, and the field is the
-// value returned. For a matchFrame, v is the scrutinee, and the arm that fits
-// becomes the control, again with nothing pushed, so a call in an arm is still
-// in tail position. For a retFrame, the function that made the call is
-// returning v.
+// value returned. For a matchFrame, v is the scrutinee, and the arm that wins
+// becomes the control (see matchFrom), again with nothing pushed, so a call in an
+// arm is still in tail position. For a guardFrame, v is the value of a guard, a
+// BoolV like the condition of an `if`: if it is true the arm's body becomes the
+// control, and if it is false the match goes on. For a retFrame, the function that
+// made the call is returning v.
 func (m *Machine) applyFrame(f frame, v Value) {
 	switch f := f.(type) {
 	case letFrame:
@@ -462,10 +509,17 @@ func (m *Machine) applyFrame(f frame, v Value) {
 	case projFrame:
 		m.ret(v.(ConV).Fields[m.prog.Exprs.Get(f.proj).Index])
 	case matchFrame:
-		x := m.prog.Exprs.Get(f.match)
-		// The type checker has made the scrutinee a Bool, like the operands of a
+		m.matchFrom(f.match, v, 0, nil, false)
+	case guardFrame:
+		m.slots -= f.held
+		arm := m.prog.ArmsOf(m.prog.Exprs.Get(f.match).Arms)[f.arm]
+		// The type checker has made the guard a Bool, like the operands of a
 		// primitive (see applyPrim).
-		m.eval(selectArm(m.prog.ArmsOf(x.Arms), v.(BoolV).V))
+		if v.(BoolV).V {
+			m.eval(arm.Body)
+			return
+		}
+		m.matchFrom(f.match, f.scrutinee, f.arm, f.choices, true)
 	case retFrame:
 		// The function that returns has the last environment, and it is the only
 		// one above that of its caller: each frame of this kind has one of its own.
@@ -479,35 +533,130 @@ func (m *Machine) applyFrame(f frame, v Value) {
 	}
 }
 
-// selectArm returns the body of the arm of a Match that fits b: the first arm
-// whose pattern is that value, or, when there is none, the first wildcard arm.
-// A Core that Lint accepted has an arm for each value or a wildcard, so one
-// always fits; if none does, selectArm panics instead of going on with no arm.
-func selectArm(arms []core.Arm, b bool) core.ExprID {
-	var wildcard core.ExprID
-	haveWildcard := false
-	for _, arm := range arms {
-		switch arm.Pat {
-		case core.PatTrue:
-			if b {
-				return arm.Body
+// matchFrom finds the arm of the Match expression match that wins for the value
+// v, looking from the arm number arm on, and makes it the control: the arm's body,
+// or, if it has a guard that has not been evaluated, the guard under a guardFrame.
+// The first arm whose pattern fits wins, wherever it is: an arm before it that
+// fits but has a false guard does not count, and neither does one after it. An
+// arm `p | q if g` is the two rows `p if g` and `q if g`: when resume is true, arm
+// is an arm whose pattern fit and whose guard was false, and choices are the
+// alternatives it left untried, which are the next rows of that arm and are tried
+// before the next arm. A pattern that no arm fits is a bug of the checker, which
+// the pass `patterns` exists to rule out, so it is a panic of Go, and not a Ki
+// panic, which a program could cause.
+func (m *Machine) matchFrom(match core.ExprID, v Value, arm int, choices []choice, resume bool) {
+	arms := m.prog.ArmsOf(m.prog.Exprs.Get(match).Arms)
+	for ; arm < len(arms); arm, choices, resume = arm+1, choices[:0], false {
+		a := arms[arm]
+		var ok bool
+		if resume {
+			var cur patWork
+			var rest *patWork
+			if cur, rest, choices, ok = retry(m.prog, choices); ok {
+				ok, choices = m.fit(cur, rest, choices)
 			}
-		case core.PatFalse:
-			if !b {
-				return arm.Body
-			}
+		} else {
+			ok, choices = m.fit(patWork{pat: a.Pat, val: v}, nil, choices)
+		}
+		if !ok {
+			continue
+		}
+		if !a.HasGuard {
+			m.eval(a.Body)
+			return
+		}
+		held := 1 + len(choices)
+		m.slots += held
+		m.push(guardFrame{match: match, arm: arm, scrutinee: v, choices: choices, held: held})
+		m.eval(a.Guard)
+		return
+	}
+	panic("match fell through")
+}
+
+// fit matches the patterns of the stack that starts with cur and goes on with rest
+// against their values, in the environment of the function that runs, and reports
+// whether all of them fit. A variable that a pattern binds is written in the slot
+// of its Var as soon as it is met, so a pattern that fails halfway through leaves
+// the values that it bound: nothing reads them, because a Var belongs to one arm
+// and the arm's guard and body run only when it fits. An or-pattern tries its
+// first alternative and records the others in choices; when a pattern fails, the
+// last choice is taken and the matching goes on from it, and when there is none
+// the answer is false. It returns choices as it ends: the alternatives that are
+// still untried, with the last one on top. It keeps its own stack, so a pattern of
+// any width or depth adds no Go frames.
+func (m *Machine) fit(cur patWork, rest *patWork, choices []choice) (bool, []choice) {
+	env := m.env()
+	for {
+		p := m.prog.Pats.Get(cur.pat)
+		fits := true
+		switch p.Kind {
 		case core.PatWildcard:
-			if !haveWildcard {
-				wildcard, haveWildcard = arm.Body, true
+		case core.PatBind:
+			env[m.prog.Vars.Get(p.Var).Slot] = cur.val
+		case core.PatInt:
+			fits = cur.val.(IntV).V == p.Int
+		case core.PatTrue:
+			fits = cur.val.(BoolV).V
+		case core.PatFalse:
+			fits = !cur.val.(BoolV).V
+		case core.PatCon:
+			c := cur.val.(ConV)
+			if fits = c.Ctor == p.Ctor; fits {
+				subs := m.prog.PatList(p.Args)
+				if len(subs) > 0 {
+					// The first sub-pattern is next; the others wait, the last one
+					// at the bottom.
+					for i := len(subs) - 1; i > 0; i-- {
+						rest = &patWork{pat: subs[i], val: c.Fields[i], next: rest}
+					}
+					cur = patWork{pat: subs[0], val: c.Fields[0]}
+					continue
+				}
+			}
+		case core.PatOr:
+			alts := m.prog.PatList(p.Args)
+			if fits = len(alts) > 0; fits {
+				if len(alts) > 1 {
+					choices = append(choices, choice{or: cur.pat, next: 1, val: cur.val, rest: rest})
+				}
+				cur = patWork{pat: alts[0], val: cur.val}
+				continue
 			}
 		default:
 			panic("unreachable")
 		}
+		if fits {
+			// This pattern is done: the next one is the top of the stack, if any.
+			if rest == nil {
+				return true, choices
+			}
+			cur, rest = patWork{pat: rest.pat, val: rest.val}, rest.next
+			continue
+		}
+		var ok bool
+		if cur, rest, choices, ok = retry(m.prog, choices); !ok {
+			return false, choices
+		}
 	}
-	if !haveWildcard {
-		panic("interp: no arm of the match fits the value")
+}
+
+// retry takes the last choice of choices and returns the stack that continues
+// from it: its alternative as the pattern to match, and the patterns that the
+// choice left for after the or-pattern. It also returns choices without that
+// alternative, and without the choice if it was the last. It reports false, and
+// returns choices unchanged, when there is none.
+func retry(p *core.Program, choices []choice) (cur patWork, rest *patWork, left []choice, ok bool) {
+	if len(choices) == 0 {
+		return patWork{}, nil, choices, false
 	}
-	return wildcard
+	top := &choices[len(choices)-1]
+	alts := p.PatList(p.Pats.Get(top.or).Args)
+	cur, rest = patWork{pat: alts[top.next], val: top.val}, top.rest
+	if top.next++; top.next == len(alts) {
+		choices = choices[:len(choices)-1]
+	}
+	return cur, rest, choices, true
 }
 
 // newEnv returns the environment of a call of fun with the arguments args: a

@@ -30,15 +30,30 @@ import (
 //     blocks inside a function are in its frame too, and nothing reuses a slot.
 //   - A block is a chain of Let, one for each statement, and its value is the
 //     tail, or `()` if it has none. A statement that is only an expression, `e`,
-//     is `let _ = e` with a Var named `_` of its own. A `let` cannot bind that
-//     name: the lexer reads `_` as a token of its own and not as an identifier
-//     (TestLexer/keywords_and_identifiers), and the parser rejects `let _`
-//     (TestParseStmt/found_text_is_the_source_text).
+//     is `let _ = e` with a Var named `_` of its own. A `let` of a plain name
+//     cannot bind that name: the lexer reads `_` as a token of its own and not as
+//     an identifier (TestLexer/keywords_and_identifiers). The `let _ = e` that
+//     the program writes is a pattern `let`, whose wildcard binds nothing: it
+//     is a Match of one arm (TestPatternCore/let_with_a_pattern_is_a_match_of_one_arm).
 //   - `if` is a Match on the condition with the arms `true` and `false`, in that
-//     order; without `else`, the arm `false` is `()`. `a && b` is
+//     order, whose patterns are a PatTrue and a PatFalse of their own, with the
+//     span of the `if`; without `else`, the arm `false` is `()`. `a && b` is
 //     `match a { true => b; false => false }` and `a || b` is
 //     `match a { true => true; false => b }`, so b is read only when a does not
 //     settle the result.
+//   - A `match` is a Match with the arms in the order they are written, and an
+//     arm keeps its guard. A pattern is a Pat: `_` is a PatWildcard, a variable a
+//     PatBind, an Int literal a PatInt, `true` and `false` a PatTrue and a
+//     PatFalse, a constructor a PatCon of its Ctor (with a PatWildcard for each
+//     field that a record pattern leaves out, `..` or not given, and the fields
+//     in the order the record declares them), a tuple a PatCon of the tuple
+//     constructor of its arity, and `p | q` a PatOr. The variables of a pattern
+//     take the next slots as the program names them, before the arm's guard and
+//     body; an or-pattern binds a name once, in the first alternative that has
+//     it, and the others reuse that Var. A `let` with a pattern, `let (a, b) = e`,
+//     is a Match of a single arm whose body is the rest of the block: the
+//     checker has made sure the pattern fits every value (E0702), so no other
+//     arm is needed.
 //   - An operator is a PrimCall. Its primitive depends on the type of the left
 //     operand (the operand of `-`), once resolved: Float gives the Float
 //     primitive, Bool (only for `==` and `!=`) the Bool one and Int the Int one,
@@ -87,9 +102,13 @@ import (
 // expression of its statement; the nodes that the elaboration adds (the `()` of
 // a missing `else` or of a block with no tail, the `true` or `false` of `&&` and
 // `||`) have the span of the `if`, the block or the operator expression they
-// complete; a Fun has the span of its name; and everything in the Fun of a
-// constructor (its parameters, their reads and the Con) has the span of the
-// constructor's name, the only place it has.
+// complete, and so do the PatTrue and PatFalse of the arms of an `if`; a Match
+// that a `let` with a pattern makes has the span of the statement; the PatBind of
+// a pun in a record pattern has the span of the name, and the PatWildcard of a
+// field that a record pattern leaves out the span of the whole pattern; a Fun has
+// the span of its name; and everything in the Fun of a constructor (its
+// parameters, their reads and the Con) has the span of the constructor's name, the
+// only place it has.
 //
 // The statements of a block are walked with a loop, from the first to elaborate
 // the initializers and from the last to the first to build the Let, so a block of
@@ -113,6 +132,7 @@ func Elaborate(mods []*syntax.Module, res *sema.ResolvedProgram, typed *sema.Typ
 		records:    make(map[sema.TypeDefID]CtorID),
 		tuples:     make(map[int]CtorID),
 		varOf:      make([]VarID, res.Locals.Len()),
+		made:       make([]bool, res.Locals.Len()),
 	}
 	e.b = Builder{P: e.p}
 	// The constructors first, so that every Con the functions build has its Ctor.
@@ -157,8 +177,12 @@ type elaborator struct {
 	p *Program
 	b Builder
 	// varOf is indexed by LocalID: the Var that each variable of the program
-	// became, set when the variable is bound.
+	// became, set when the variable is bound. A LocalID can be bound more than
+	// once only by the alternatives of an or-pattern, which share it, and made[l]
+	// says whether varOf[l] is set (VarID 0 is a real Var, so the zero value of
+	// varOf cannot tell).
 	varOf []VarID
+	made  []bool
 
 	// The function being elaborated: the tree and the tables of its module, and
 	// the number of slots it has used so far.
@@ -235,7 +259,18 @@ func (e *elaborator) bind(l sema.LocalID) VarID {
 	loc := e.res.Locals.Get(l)
 	v := e.newVar(loc.Name, loc.Span)
 	e.varOf[l] = v
+	e.made[l] = true
 	return v
+}
+
+// bindPattern is bind for a variable that a pattern binds: the alternatives of an
+// or-pattern bind the same variable, and only the first makes its Var, which the
+// others reuse.
+func (e *elaborator) bindPattern(l sema.LocalID) VarID {
+	if e.made[l] {
+		return e.varOf[l]
+	}
+	return e.bind(l)
 }
 
 // expr elaborates the expression id of the current module.
@@ -304,7 +339,7 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 		} else {
 			otherwise = e.b.LitUnit(x.Span)
 		}
-		return e.b.Match(x.Span, cond, []Arm{{Pat: PatTrue, Body: then}, {Pat: PatFalse, Body: otherwise}})
+		return e.b.Match(x.Span, cond, e.boolArms(x.Span, then, otherwise))
 	case syntax.ExprBlock:
 		return e.block(x)
 	case syntax.ExprTuple:
@@ -325,12 +360,128 @@ func (e *elaborator) expr(id syntax.ExprID) ExprID {
 	case syntax.ExprRecord:
 		return e.record(id, x)
 	case syntax.ExprMatch:
-		panic("core: a match is not elaborated until ch12-s4")
+		return e.match(x)
 	case syntax.ExprError:
 		panic("core: cannot elaborate an expression that could not be read")
 	default:
 		panic("unreachable")
 	}
+}
+
+// match elaborates the `match` x to a Match with its arms in the order they are
+// written. The scrutinee comes first, then, for each arm, its pattern (which
+// binds the variables), its guard and its body, so the slots follow the order of
+// the source. The arms are a loop, so a `match` of any number of arms adds no Go
+// frames; what recurses is the pattern of an arm, once per level of nesting, which
+// the parser bounds (MaxPatternDepth).
+func (e *elaborator) match(x syntax.Expr) ExprID {
+	scrutinee := e.expr(x.Scrutinee)
+	written := e.m.Arms(x.Arms)
+	arms := make([]Arm, 0, len(written))
+	for _, a := range written {
+		arm := Arm{Pat: e.pat(a.Pat)}
+		if a.HasGuard {
+			arm.Guard, arm.HasGuard = e.expr(a.Guard), true
+		}
+		arm.Body = e.expr(a.Body)
+		arms = append(arms, arm)
+	}
+	return e.b.Match(x.Span, scrutinee, arms)
+}
+
+// pat elaborates the pattern id of the current module to a Pat (see the list in
+// Elaborate), binding the variables it names as it meets them, left to right. The
+// patterns that hold patterns walk them with a loop and call pat for each, so what
+// the depth of the Go stack follows is the nesting of the pattern, and not its
+// width: a tuple pattern of a hundred thousand elements is as deep as one of two.
+// A tree built by hand is not bounded.
+func (e *elaborator) pat(id syntax.PatID) PatID {
+	p := e.m.Pats.Get(id)
+	switch p.Kind {
+	case syntax.PatWildcard:
+		return e.b.Pat(Pat{Kind: PatWildcard, Span: p.Span})
+	case syntax.PatBind:
+		return e.b.Pat(Pat{Kind: PatBind, Span: p.Span, Var: e.bindPattern(e.rm.PatLocal[id])})
+	case syntax.PatLit:
+		switch p.Lit {
+		case syntax.LitInt:
+			return e.b.Pat(Pat{Kind: PatInt, Span: p.Span, Int: p.Int})
+		case syntax.LitBool:
+			kind := PatFalse
+			if p.Bool {
+				kind = PatTrue
+			}
+			return e.b.Pat(Pat{Kind: kind, Span: p.Span})
+		default:
+			panic("core: cannot elaborate a pattern that is a literal of a type that has no Core yet")
+		}
+	case syntax.PatTuple:
+		args := e.pats(e.m.PatList(p.Args))
+		return e.b.Pat(Pat{Kind: PatCon, Span: p.Span, Ctor: e.tupleCtor(len(args)), Args: base.AppendRange(&e.p.PatPool, args)})
+	case syntax.PatCtor:
+		if p.Record {
+			return e.recordPat(id, p)
+		}
+		c, ok := e.typed.Decls.CtorOf(e.rm.PatRes[id].Def)
+		if !ok {
+			panic("core: cannot elaborate a constructor pattern whose name is not a constructor")
+		}
+		args := e.pats(e.m.PatList(p.Args))
+		return e.b.Pat(Pat{Kind: PatCon, Span: p.Span, Ctor: CtorID(c), Args: base.AppendRange(&e.p.PatPool, args)})
+	case syntax.PatOr:
+		args := e.pats(e.m.PatList(p.Args))
+		return e.b.Pat(Pat{Kind: PatOr, Span: p.Span, Args: base.AppendRange(&e.p.PatPool, args)})
+	case syntax.PatList:
+		panic("core: cannot elaborate a list pattern")
+	case syntax.PatError:
+		panic("core: cannot elaborate a pattern that could not be read")
+	default:
+		panic("unreachable")
+	}
+}
+
+// pats elaborates the patterns ids, in order.
+func (e *elaborator) pats(ids []syntax.PatID) []PatID {
+	out := make([]PatID, len(ids))
+	for i, id := range ids {
+		out[i] = e.pat(id)
+	}
+	return out
+}
+
+// recordPat elaborates the record pattern p, whose id is id, to a PatCon of the
+// constructor of its record with a pattern for each field in the order the record
+// declares them: the fields are met in the order they are written, so that their
+// variables take the slots in that order, and a field that the pattern does not
+// name is a PatWildcard, which is what `..` allows. A pun, `Point { x }`, is a
+// PatBind of the variable that Resolve made for it. The checker has made sure that
+// each field is named at most once and that every field is named unless `..` says
+// the rest do not matter.
+func (e *elaborator) recordPat(id syntax.PatID, p syntax.Pat) PatID {
+	td := e.recordType(e.tm.PatTypes[id], "a record pattern on a value")
+	ctor := e.records[td]
+	args := make([]PatID, e.p.Ctors.Get(ctor).Arity)
+	// PatID 0 is a real pattern, so a slice says which fields the pattern names.
+	named := make([]bool, len(args))
+	for k, f := range e.m.FieldPats(p.Fields) {
+		i, ok := e.typed.Decls.FieldIndex(td, f.Name)
+		if !ok {
+			panic("core: cannot elaborate a field that the record does not have")
+		}
+		named[i] = true
+		if f.HasPat {
+			args[i] = e.pat(f.Pat)
+		} else {
+			l := e.rm.FieldPatLocal[int(p.Fields.First)+k]
+			args[i] = e.b.Pat(Pat{Kind: PatBind, Span: f.Span, Var: e.bindPattern(l)})
+		}
+	}
+	for i := range args {
+		if !named[i] {
+			args[i] = e.b.Pat(Pat{Kind: PatWildcard, Span: p.Span})
+		}
+	}
+	return e.b.Pat(Pat{Kind: PatCon, Span: p.Span, Ctor: ctor, Args: base.AppendRange(&e.p.PatPool, args)})
 }
 
 // tupleCtor returns the constructor of the tuples of n elements, making it the
@@ -348,10 +499,16 @@ func (e *elaborator) tupleCtor(n int) CtorID {
 // recordOf returns the record that the type of the expression id of the current
 // module is. The checker has made sure that it is one.
 func (e *elaborator) recordOf(id syntax.ExprID) sema.TypeDefID {
+	return e.recordType(e.tm.ExprTypes[id], "the field of a value")
+}
+
+// recordType returns the record that the type ty is, and panics, saying that it
+// cannot elaborate what, if it is not one.
+func (e *elaborator) recordType(ty sema.TypeID, what string) sema.TypeDefID {
 	types := e.typed.Types
-	n := types.Node(types.Resolve(e.tm.ExprTypes[id]))
+	n := types.Node(types.Resolve(ty))
 	if n.Kind != sema.TypeData || e.typed.Decls.Defs.Get(n.Def).Form != syntax.TypeFormRecord {
-		panic("core: cannot elaborate the field of a value that is not a record: `" + types.Show(e.tm.ExprTypes[id]) + "`")
+		panic("core: cannot elaborate " + what + " that is not a record: `" + types.Show(ty) + "`")
 	}
 	return n.Def
 }
@@ -467,7 +624,17 @@ func (e *elaborator) shortCircuit(x syntax.Expr, settledBy bool) ExprID {
 	if settledBy {
 		onTrue, onFalse = lit, rhs
 	}
-	return e.b.Match(x.Span, lhs, []Arm{{Pat: PatTrue, Body: onTrue}, {Pat: PatFalse, Body: onFalse}})
+	return e.b.Match(x.Span, lhs, e.boolArms(x.Span, onTrue, onFalse))
+}
+
+// boolArms makes the two arms of an `if` or of `&&` and `||`: `true => onTrue`
+// and then `false => onFalse`, each with a pattern node of its own that has the
+// span sp.
+func (e *elaborator) boolArms(sp base.Span, onTrue, onFalse ExprID) []Arm {
+	return []Arm{
+		{Pat: e.b.Pat(Pat{Kind: PatTrue, Span: sp}), Body: onTrue},
+		{Pat: e.b.Pat(Pat{Kind: PatFalse, Span: sp}), Body: onFalse},
+	}
 }
 
 // opType is the type that an operator works on, as far as the choice of its
@@ -541,10 +708,14 @@ func (e *elaborator) binaryPrim(x syntax.Expr) Prim {
 // from the last statement to the first, so that the body of the Let of
 // statement k is the Let of statement k+1 and the last one holds the tail.
 func (e *elaborator) block(x syntax.Expr) ExprID {
+	// A statement whose pattern is not a plain name has isPat set and the pattern
+	// in pat, and v means nothing.
 	type binding struct {
-		sp   base.Span
-		v    VarID
-		init ExprID
+		sp    base.Span
+		v     VarID
+		init  ExprID
+		pat   PatID
+		isPat bool
 	}
 	stmts := e.m.StmtList(x.Stmts)
 	binds := make([]binding, 0, len(stmts))
@@ -553,13 +724,17 @@ func (e *elaborator) block(x syntax.Expr) ExprID {
 		switch s.Kind {
 		case syntax.StmtLet:
 			if s.HasPat {
-				panic("core: a `let` with a pattern is not elaborated until ch12-s4")
+				// The names of the pattern come before the initializer's blocks, as
+				// the name of a plain `let` does.
+				pat := e.pat(s.Pat)
+				binds = append(binds, binding{sp: s.Span, init: e.expr(s.Expr), pat: pat, isPat: true})
+				continue
 			}
 			v := e.bind(e.rm.LetLocal[id])
-			binds = append(binds, binding{s.Span, v, e.expr(s.Expr)})
+			binds = append(binds, binding{sp: s.Span, v: v, init: e.expr(s.Expr)})
 		case syntax.StmtExpr:
 			v := e.newVar(e.underscore, s.Span)
-			binds = append(binds, binding{s.Span, v, e.expr(s.Expr)})
+			binds = append(binds, binding{sp: s.Span, v: v, init: e.expr(s.Expr)})
 		case syntax.StmtError:
 			panic("core: cannot elaborate a statement that could not be read")
 		default:
@@ -573,7 +748,11 @@ func (e *elaborator) block(x syntax.Expr) ExprID {
 		body = e.b.LitUnit(x.Span)
 	}
 	for i := len(binds) - 1; i >= 0; i-- {
-		body = e.b.Let(binds[i].sp, binds[i].v, binds[i].init, body)
+		if b := binds[i]; b.isPat {
+			body = e.b.Match(b.sp, b.init, []Arm{{Pat: b.pat, Body: body}})
+		} else {
+			body = e.b.Let(b.sp, b.v, b.init, body)
+		}
 	}
 	return body
 }

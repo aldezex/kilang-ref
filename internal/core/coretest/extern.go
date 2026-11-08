@@ -27,3 +27,20 @@ func ExternProgram(name string) *core.Program {
 	p.Main, p.HasMain = main, true
 	return p
 }
+
+// UncoveredMatchProgram returns a Program whose `main` is `match false { true =>
+// 1 }`, a match that the value false fits no arm of, and sets the Program's Main.
+// The checker's pass `patterns` rejects a source that writes one (E0701), so only
+// a Program built by hand has it, and it is how a test reaches the machine's
+// answer to a match that falls through. The Program is valid Core: core.Lint does
+// not look at whether the arms of a match cover its values, which TestLint
+// checks.
+func UncoveredMatchProgram() *core.Program {
+	p := &core.Program{}
+	b := core.Builder{P: p}
+	sp := base.Span{File: 1}
+	arm := core.Arm{Pat: b.Pat(core.Pat{Kind: core.PatTrue, Span: sp}), Body: b.LitInt(sp, 1)}
+	main := p.Funs.Push(core.Fun{HasBody: true, Body: b.Match(sp, b.LitBool(sp, false), []core.Arm{arm})})
+	p.Main, p.HasMain = main, true
+	return p
+}

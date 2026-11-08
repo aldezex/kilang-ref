@@ -507,7 +507,7 @@ Fuera de v0: hash maps, regex, JSON, HTTP (el capítulo 61 escribe un servidor H
 
 Core es la única referencia semántica.
 
-**Qué es** **[decisión del diseño]**: un cálculo lambda n-ario, estricto, con binders únicos y sin azúcar. No tiene tipos: se borran tras la elaboración. Lo comprueba Core Lint después de cada pase.
+**Qué es** **[decisión del diseño]**: un cálculo lambda n-ario, estricto, con binders únicos y sin azúcar. La única excepción a «binders únicos» es el or-patrón: todas sus alternativas ligan el mismo binder para cada nombre. No tiene tipos: se borran tras la elaboración. Lo comprueba Core Lint después de cada pase.
 
 **Por qué no tiene tipos.** Los diccionarios de traits con tipos de orden superior tienen campos polimórficos (`Functor.map<A, B>`). Tiparlos exige System Fω, como en GHC Core, y eso es una carga enorme para un primer compilador.
 
@@ -519,7 +519,7 @@ e ::= a | let x = e; e                                   -- strict, non-recursiv
     | letfn f(x̄) = e and …; e                            -- local recursion (removed in S3)
     | join j(x̄) = e; e | joinrec j(x̄) = e; e | jump j(ē)   -- from if/loops/return/match sharing
     | e(ē)                                               -- exact-arity call; a tail call in tail position
-    | match e { p => e | … }                             -- S0–S1: nested patterns
+    | match e { p [if g] => e | … }                      -- S0–S1: nested patterns, guards on the arms
     | case a { K(x̄) => e | lit => e | _ => e }           -- S2+: flat tag switch
     | prim p(ē) | K(ē) | e.i | fn(x̄) => e
     | perform L.op(ē) | handle e with H | resume(e, e)
@@ -1760,6 +1760,7 @@ Lo que corrige cada comprobación, en el orden del documento. **T** es la compro
 
 - **Apartado 12.4:** `print<T: Show>` nace en el capítulo 14 sin `uses {IO}`; la fila llega con las filas de efectos.
 - **Apartado 12.5:** el hito del capítulo 15 se demuestra con `Option` (`mapOption`), porque `map` sobre listas llega en el 16.
+- **Apartado 6.1:** los brazos de `match` llevan una guarda opcional (`p if g => e`) y un or-patrón liga un solo binder por nombre en todas sus alternativas, la única excepción a «binders únicos» (ch12-s4).
 - **Decisiones de orden que el plan fija** (sin cambiar el spec): `String` con literales sin interpolación existe desde el 14, porque `Show` la devuelve; los constructores son funciones de primera clase; las constantes de nivel superior nacen en el 16 (`pi`) con orden de declaración y el grafo llega en el 18; el lexer admite enteros hasta `2^64 − 1` desde el 16 y el comprobador decide el rango por el tipo esperado (E0105 cambia de texto, E0417 nace); E0206, E0407 y E0408 siguen reservados para `await`.
 
 **Enmiendas del 2026-10-28** (cinco decisiones tomadas con Álvaro durante el capítulo 7; `.superpowers/sdd/2026-10-28-decisions-pending-amendment.md`; G58–G62). Los números de capítulo que cita el resto de este apéndice son los del 2026-10-24: el antiguo 63 es hoy el 66.

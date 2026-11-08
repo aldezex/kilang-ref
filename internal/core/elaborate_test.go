@@ -44,12 +44,13 @@ func elabVar(c *testsupport.Compiled, v core.VarID) string {
 // elabShape writes the expression id on one line, with the fields that decide
 // what it does and no spans: a literal as its value, a variable as name@slot, a
 // function as @name, a call as callee(args), a primitive as name(args), a
-// constructor as Name(args), or Name alone when it has no arguments (a tuple has
-// no name: it is (args)), a field read as target.index, a Let as
-// `let v = init; body` and a Match as `match s { pattern => body; … }`. A test
-// compares the whole line, so a node of the wrong kind, a swapped pair of
-// children or a slot out of place shows as a different text. It recurses over
-// the tree, which is fine for the small ones the tests build.
+// constructor as Name(args), or Name alone when it has no arguments (a tuple
+// has no name: it is (args)), a field read as target.index, a Let as
+// `let v = init; body` and a Match as `match s { pattern => body; … }`, with
+// `pattern if guard => body` for an arm that has a guard (see elabPat for the
+// patterns). A test compares the whole line, so a node of the wrong kind, a
+// swapped pair of children or a slot out of place shows as a different text.
+// It recurses over the tree, which is fine for the small ones the tests build.
 func elabShape(c *testsupport.Compiled, id core.ExprID) string {
 	p := c.Core
 	e := p.Exprs.Get(id)
@@ -90,20 +91,57 @@ func elabShape(c *testsupport.Compiled, id core.ExprID) string {
 	case core.Match:
 		var arms []string
 		for _, a := range p.ArmsOf(e.Arms) {
-			pat := "PatKind(" + strconv.Itoa(int(a.Pat)) + ")"
-			switch a.Pat {
-			case core.PatTrue:
-				pat = "true"
-			case core.PatFalse:
-				pat = "false"
-			case core.PatWildcard:
-				pat = "_"
+			head := elabPat(c, a.Pat)
+			if a.HasGuard {
+				head += " if " + elabShape(c, a.Guard)
 			}
-			arms = append(arms, pat+" => "+elabShape(c, a.Body))
+			arms = append(arms, head+" => "+elabShape(c, a.Body))
 		}
 		return "match " + elabShape(c, e.Scrutinee) + " { " + strings.Join(arms, "; ") + " }"
 	}
 	return fmt.Sprintf("ExprKind(%d)", e.Kind)
+}
+
+// elabPat writes the pattern id on one line, as elabShape writes an expression:
+// `true`, `false`, `_`, an Int as its digits, a variable as name@slot, a
+// constructor as Name(patterns), or Name alone when it has no fields (a tuple has
+// no name: it is (patterns)), and an or-pattern with ` | ` between its
+// alternatives, an alternative that is an or-pattern in parentheses.
+func elabPat(c *testsupport.Compiled, id core.PatID) string {
+	p := c.Core
+	pat := p.Pats.Get(id)
+	join := func(sep string) string {
+		var parts []string
+		for _, sub := range p.PatList(pat.Args) {
+			part := elabPat(c, sub)
+			if p.Pats.Get(sub).Kind == core.PatOr && pat.Kind == core.PatOr {
+				part = "(" + part + ")"
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, sep)
+	}
+	switch pat.Kind {
+	case core.PatTrue:
+		return "true"
+	case core.PatFalse:
+		return "false"
+	case core.PatWildcard:
+		return "_"
+	case core.PatInt:
+		return strconv.FormatInt(pat.Int, 10)
+	case core.PatBind:
+		return elabVar(c, pat.Var)
+	case core.PatCon:
+		name := c.Session.Interner.String(p.Ctors.Get(pat.Ctor).Name)
+		if pat.Args.Count == 0 {
+			return name
+		}
+		return name + "(" + join(", ") + ")"
+	case core.PatOr:
+		return join(" | ")
+	}
+	return fmt.Sprintf("PatKind(%d)", pat.Kind)
 }
 
 // elabWant fails the test unless the function called name has a body whose

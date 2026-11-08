@@ -10,7 +10,8 @@ import (
 // appendChildren appends to buf the expressions directly under e, in the order
 // a walk visits them, and returns the result: the callee of a Call and then its
 // arguments, the arguments of a PrimCall or a Con, the init of a Let and then its
-// body, and the scrutinee of a Match and then the body of each arm in order.
+// body, and the scrutinee of a Match and then, for each arm in order, its guard
+// (if it has one) and its body. A pattern is not an expression, so it is not here.
 func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 	switch e.Kind {
 	case LitInt, LitFloat, LitBool, LitUnit, VarRef, FunRef:
@@ -27,6 +28,9 @@ func (p *Program) appendChildren(buf []ExprID, e *Expr) []ExprID {
 	case Match:
 		buf = append(buf, e.Scrutinee)
 		for _, arm := range p.ArmsOf(e.Arms) {
+			if arm.HasGuard {
+				buf = append(buf, arm.Guard)
+			}
 			buf = append(buf, arm.Body)
 		}
 		return buf
@@ -71,30 +75,39 @@ func (p *Program) Subexprs(root ExprID) iter.Seq[ExprID] {
 // Var), which it does not check in Part I, and returns one string for each
 // violation. An empty result means valid. The violations come in the order of
 // the functions of p and, in each, the shape of the function first, then its
-// parameters, then its body in pre-order (a node before its children). Each
-// string reads "fun NAME: WHAT", with the name of the function as in the
-// source, and the functions and variables that WHAT mentions are named the same
-// way, with a variable or a called function between backquotes: the message of
-// the report of an ICE of the pass lint is this text, and a person reading it
-// has the file and no ids. in only spells the names; Lint adds nothing to it. A
-// name is not an identity (a variable that shadows another has the same name,
-// and so does a function of the prelude and one of the file), but the function
-// and the name are where to look. It checks that:
+// parameters, then its body in pre-order (a node before its children; an arm's
+// pattern comes after the scrutinee and the arms before it, and before its own
+// guard and body). Each string reads "fun NAME: WHAT", with the name of the
+// function as in the source, and the functions and variables that WHAT mentions
+// are named the same way, with a variable or a called function between
+// backquotes: the message of the report of an ICE of the pass lint is this
+// text, and a person reading it has the file and no ids. in only spells the
+// names; Lint adds nothing to it. A name is not an identity (a variable that
+// shadows another has the same name, and so does a function of the prelude and
+// one of the file), but the function and the name are where to look. It checks
+// that:
 //
-//   - every VarRef is in scope: its variable is a parameter of the function or
-//     the variable of a Let whose body holds the VarRef (the init of a Let is
-//     outside the scope of its own variable);
+//   - every VarRef is in scope: its variable is a parameter of the function, the
+//     variable of a Let whose body holds the VarRef (the init of a Let is outside
+//     the scope of its own variable) or a variable that the pattern of an arm
+//     binds, when the VarRef is in the guard or the body of that arm (the
+//     scrutinee, and the other arms, are outside its scope);
 //   - a call of a FunRef has as many arguments as that function has
 //     parameters, and a PrimCall as many as Prim.Arity says (a call through a
 //     variable is not checked: Lint does not know what the variable holds);
 //   - a Con has as many arguments as its constructor has fields (Ctor.Arity); a
 //     Proj has nothing of its own to check, because Core does not know how many
 //     fields the value of its target has;
-//   - a Match has the arms true and false, or a wildcard arm;
+//   - a PatCon has as many patterns as its constructor has fields (Ctor.Arity),
+//     as a Con has as many arguments. Of a Match itself there is nothing to
+//     check: whether its arms cover every value is for the pass `patterns` of the
+//     checker, so a Match with only the arm `true` is valid Core, and the machine
+//     panics if the value it gets is `false`;
 //   - a function either has a body and no extern name, or an extern name and no
 //     body, and it walks the body of a function only if it has one;
-//   - the slot of every parameter and every Let variable is less than the
-//     FrameSize of its function.
+//   - the slot of every parameter, every Let variable and every PatBind variable
+//     is less than the FrameSize of its function (a PatBind that an or-pattern
+//     repeats in each alternative is one violation for each alternative).
 //
 // Lint assumes that the expressions, functions and constructors it follows
 // exist, and the variable of every Let, parameter and VarRef (it needs the
@@ -122,20 +135,26 @@ type linter struct {
 	out []string
 	// cur is the function being checked, for the text of its violations.
 	cur FunID
-	// scope counts, for each variable, how many of the parameters and Lets
-	// that bind it hold the expression being visited: a variable is in scope
-	// when its count is not zero. In a Program that keeps its promise of unique
-	// binders the count is 0 or 1.
+	// scope counts, for each variable, how many of the parameters, Lets and
+	// PatBinds that bind it hold the expression being visited: a variable is in
+	// scope when its count is not zero. In a Program that keeps its promise of
+	// unique binders the count is 0 or 1, except under an or-pattern, whose
+	// alternatives bind the same variables: there it is the number of PatBinds
+	// of the variable.
 	scope map[VarID]int
+	// pats is the stack of eachPat, kept to be reused.
+	pats []PatID
 }
 
 // lintAction says what a lintStep asks the walk to do.
 type lintAction uint8
 
 const (
-	lintVisit  lintAction = iota // check the expression and go on to its children
-	lintBind                     // the init of a Let is done: its variable comes into scope
-	lintUnbind                   // the body of a Let is done: its variable leaves the scope
+	lintVisit    lintAction = iota // check the expression and go on to its children
+	lintBind                       // the init of a Let is done: its variable comes into scope
+	lintUnbind                     // the body of a Let is done: its variable leaves the scope
+	lintEnterArm                   // an arm starts: check its pattern, and its variables come into scope
+	lintLeaveArm                   // an arm is done: the variables of its pattern leave the scope
 )
 
 // lintStep is an entry of the stack of the walk: an expression to visit, or a
@@ -144,6 +163,7 @@ type lintStep struct {
 	action lintAction
 	expr   ExprID // for lintVisit
 	v      VarID  // for lintBind and lintUnbind
+	pat    PatID  // for lintEnterArm and lintLeaveArm
 }
 
 // report adds a violation in the function being checked. The name of the
@@ -192,9 +212,9 @@ func (l *linter) unbind(v VarID) {
 }
 
 // walk checks the expression root and everything under it, with a stack of
-// steps in place of recursion. A Let does not push its children as they are:
-// the order of what it pushes is what makes the scope right, as the comments
-// below say.
+// steps in place of recursion. A Let and a Match do not push their children as
+// they are: the order of what they push is what makes the scope right, as the
+// comments below say.
 func (l *linter) walk(root ExprID, frame uint32) {
 	stack := []lintStep{{action: lintVisit, expr: root}}
 	var kids []ExprID
@@ -206,6 +226,19 @@ func (l *linter) walk(root ExprID, frame uint32) {
 			l.scope[st.v]++
 		case lintUnbind:
 			l.unbind(st.v)
+		case lintEnterArm:
+			l.eachPat(st.pat, func(p Pat) {
+				l.pattern(p, frame)
+				if p.Kind == PatBind {
+					l.scope[p.Var]++
+				}
+			})
+		case lintLeaveArm:
+			l.eachPat(st.pat, func(p Pat) {
+				if p.Kind == PatBind {
+					l.unbind(p.Var)
+				}
+			})
 		case lintVisit:
 			e := l.p.Exprs.Get(st.expr)
 			l.check(&e, frame)
@@ -220,6 +253,22 @@ func (l *linter) walk(root ExprID, frame uint32) {
 					lintStep{action: lintVisit, expr: e.Init})
 				continue
 			}
+			if e.Kind == Match {
+				// The scrutinee comes out first, outside the scope of every arm. Then
+				// each arm in order: its pattern is checked and binds its variables, the
+				// guard and the body see them, and they leave.
+				arms := l.p.ArmsOf(e.Arms)
+				for i := len(arms) - 1; i >= 0; i-- {
+					arm := arms[i]
+					stack = append(stack, lintStep{action: lintLeaveArm, pat: arm.Pat}, lintStep{action: lintVisit, expr: arm.Body})
+					if arm.HasGuard {
+						stack = append(stack, lintStep{action: lintVisit, expr: arm.Guard})
+					}
+					stack = append(stack, lintStep{action: lintEnterArm, pat: arm.Pat})
+				}
+				stack = append(stack, lintStep{action: lintVisit, expr: e.Scrutinee})
+				continue
+			}
 			kids = l.p.appendChildren(kids[:0], &e)
 			for i := len(kids) - 1; i >= 0; i-- {
 				stack = append(stack, lintStep{action: lintVisit, expr: kids[i]})
@@ -227,6 +276,53 @@ func (l *linter) walk(root ExprID, frame uint32) {
 		default:
 			panic("unreachable")
 		}
+	}
+}
+
+// eachPat calls f on the pattern root and every pattern under it, in pre-order,
+// with a stack of its own: the sub-patterns of a PatCon and the alternatives of a
+// PatOr go on it, so a pattern of any width or depth adds no frames of Go.
+func (l *linter) eachPat(root PatID, f func(Pat)) {
+	l.pats = append(l.pats[:0], root)
+	for len(l.pats) > 0 {
+		id := l.pats[len(l.pats)-1]
+		l.pats = l.pats[:len(l.pats)-1]
+		p := l.p.Pats.Get(id)
+		f(p)
+		if p.Kind == PatCon || p.Kind == PatOr {
+			subs := l.p.PatList(p.Args)
+			// The first goes on last, so that it is the next one out.
+			for i := len(subs) - 1; i >= 0; i-- {
+				l.pats = append(l.pats, subs[i])
+			}
+		}
+	}
+}
+
+// ctorLabel spells the constructor c for a violation: its name between
+// backquotes, or, for a tuple, which has none, "tuple constructor".
+func (l *linter) ctorLabel(c Ctor) string {
+	if c.Tuple {
+		return "tuple constructor"
+	}
+	return "constructor `" + l.in.String(c.Name) + "`"
+}
+
+// pattern reports what is wrong with the pattern p itself, not with the
+// patterns under it: a PatBind whose variable has no slot in the frame, and a
+// PatCon with the wrong number of patterns.
+func (l *linter) pattern(p Pat, frame uint32) {
+	switch p.Kind {
+	case PatTrue, PatFalse, PatWildcard, PatInt, PatOr:
+	case PatBind:
+		l.slot(p.Var, frame)
+	case PatCon:
+		ctor := l.p.Ctors.Get(p.Ctor)
+		if got := len(l.p.PatList(p.Args)); got != int(ctor.Arity) {
+			l.report("pattern of %s with %d argument(s), but it takes %d", l.ctorLabel(ctor), got, ctor.Arity)
+		}
+	default:
+		panic("unreachable")
 	}
 }
 
@@ -254,12 +350,7 @@ func (l *linter) check(e *Expr, frame uint32) {
 	case Con:
 		ctor := l.p.Ctors.Get(e.Ctor)
 		if got := len(l.p.Args(e.Args)); got != int(ctor.Arity) {
-			// A tuple has no name: it is told by its arity.
-			name := "constructor `" + l.in.String(ctor.Name) + "`"
-			if ctor.Tuple {
-				name = "tuple constructor"
-			}
-			l.report("%s with %d argument(s), but it takes %d", name, got, ctor.Arity)
+			l.report("%s with %d argument(s), but it takes %d", l.ctorLabel(ctor), got, ctor.Arity)
 		}
 	case Proj:
 		// Core has no types, so nothing says how many fields the value of the
@@ -267,22 +358,8 @@ func (l *linter) check(e *Expr, frame uint32) {
 	case Let:
 		l.slot(e.Var, frame)
 	case Match:
-		var hasTrue, hasFalse, hasWildcard bool
-		for _, arm := range l.p.ArmsOf(e.Arms) {
-			switch arm.Pat {
-			case PatTrue:
-				hasTrue = true
-			case PatFalse:
-				hasFalse = true
-			case PatWildcard:
-				hasWildcard = true
-			default:
-				panic("unreachable")
-			}
-		}
-		if !(hasTrue && hasFalse) && !hasWildcard {
-			l.report("match must have an arm for true and one for false, or a wildcard arm")
-		}
+		// Nothing of its own to check: its arms are checked as the walk reaches them
+		// (see pattern), and whether they cover every value is not Lint's to say.
 	default:
 		panic("unreachable")
 	}

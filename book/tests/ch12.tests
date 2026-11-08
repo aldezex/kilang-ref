@@ -456,16 +456,216 @@ ref:     TestWarnings/check_writes_a_warning_and_exits_0
 
 [T12.58] driver.run_does_not_write_a_warning               level: core
 kind:    unit (go test)      file: internal/driver/warning_test.go
-case:    `ki run` escribe diagnósticos solo de un programa que no puede ejecutar, así que una advertencia no sale en su stderr; como un `match` aún no se elabora, el programa acaba en un ICE antes de ejecutarse y lo que se comprueba es que la advertencia no está en stderr y que el informe dice que dejó un diagnóstico sin mostrar
+case:    `ki run` escribe diagnósticos solo de un programa que no puede ejecutar, así que una advertencia no sale en su stderr: el programa se ejecuta, escribe lo suyo y su stderr queda vacío
 input:   el programa de la advertencia, con `ki run`
-expect:  salida 70, stdout vacío, ni `warning[`, ni `W0701`, ni `unreachable pattern` en stderr, y el informe del ICE acaba con «1 diagnostic was reported before this error and is not shown»
+expect:  salida 0, stdout exactamente `7` y su salto de línea, y stderr vacío
 why:     la primera línea de stderr de un programa que falla debe ser la del fallo (spec 6.3), no una advertencia.
 ref:     TestWarnings/run_does_not_write_a_warning
 
 [T12.59] driver.emit_leaves_warnings_out                   level: core
 kind:    unit (go test)      file: internal/driver/warning_test.go
-case:    el volcado de `ki emit` se cierra con los errores y con ninguna advertencia: una advertencia sola deja stderr vacío y el código 0, y con un error se escribe el error y no la advertencia; un `match` aún no llega al final de `ki emit core`, así que lo primero se pregunta al cierre que comparten todos los objetivos, con una `Session` que tiene las dos, y lo segundo también a `ki emit core` sobre un programa con una advertencia y un error, que acaba antes de hacer Core
-input:   una `Session` con una advertencia W0701 en el sink, y después con un E0301 además; y el programa de la advertencia con `print(zz)` en lugar de `print(7)`, con `ki emit core --diagnostics=short`
-expect:  con la advertencia, código 0, el volcado en stdout y nada en stderr; con las dos, código 1, el volcado y solo `a.ki:1:4: error[E0301]: unknown name `y`` en stderr; con `ki emit core` sobre el programa con error, código 1, nada en stdout y solo el E0301 «unknown name `zz`» en stderr
+case:    el volcado de `ki emit` se cierra con los errores y con ninguna advertencia: una advertencia sola deja stderr vacío y el código 0, y con un error se escribe el error y no la advertencia; las dos cosas se preguntan a `ki emit core`, sobre el programa de la advertencia y sobre ese programa con un error, y el cierre que comparten todos los objetivos también, con una `Session` que tiene las dos
+input:   el programa de la advertencia con `ki emit core`; el mismo con `print(zz)` en lugar de `print(7)`, con `--diagnostics=short`; y una `Session` con una advertencia W0701 en el sink, y después con un E0301 además
+expect:  con `ki emit core`, código 0, el volcado de las dos funciones en stdout y stderr vacío; con el error, código 1, nada en stdout y solo el E0301 «unknown name `zz`» en stderr; con la `Session` y la advertencia, código 0, el volcado y nada en stderr; con las dos, código 1, el volcado y solo `a.ki:1:4: error[E0301]: unknown name `y`` en stderr
 why:     quien lee el volcado con una herramienta no pidió una advertencia detrás, y no es un error que atender.
 ref:     TestWarnings/emit_leaves_warnings_out
+
+[T12.60] core.builder_creates_pats_and_guarded_arms         level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    `Builder.Pat` guarda el patrón tal cual y devuelve ids consecutivos; los sub-patrones de un constructor y las alternativas de un or-patrón viven en `PatPool`, cada rango a continuación del anterior y con la capacidad recortada; y un brazo guarda su guarda
+input:   cinco patrones (`_`, el entero -7, una variable, un constructor con dos sub-patrones y un or-patrón con tres alternativas) y un `Match` con dos brazos, el primero con guarda
+expect:  ids de 0 a 4; el patrón entero y el de variable son exactamente los construidos; el rango del or-patrón es `{2, 3}`; `PatList` del constructor da `[0, 1]` con `cap` igual a `len` y la del or-patrón `[2, 3, 1]`; los patrones no dejan nada en `Exprs`, `ExprPool` ni `ArmPool`; y `ArmPool` tiene los dos brazos exactos, con `Guard` y `HasGuard` solo en el primero
+why:     un rango mal colocado daría a un patrón los sub-patrones de otro, y una guarda perdida dejaría ganar al brazo sin condición.
+ref:     TestPatternCore/builder_creates_pats_and_guarded_arms
+
+[T12.61] core.if_and_logic_arms_are_pat_nodes               level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    `if`, `&&` y `||` siguen elaborándose a un `Match` con los brazos `true` y `false`, en ese orden; cada brazo apunta a un nodo de patrón propio, con el span de la expresión entera, y no tiene guarda
+input:   `if c { 1 } else { 2 }`, `if c { print(1) }` (sin `else`), `a && b` y `a || b`
+expect:  en las cuatro, el cuerpo es un `Match` de dos brazos, con dos ids de patrón distintos y sin guarda, de clases `PatTrue` y `PatFalse` por ese orden y sin sub-patrones, y el span de cada patrón es el texto de la expresión completa
+why:     el libro enseña el `Match` de un `if` tal cual; si cambiara de forma, los volcados de la Parte I dejarían de ser verdad.
+ref:     TestPatternCore/if_and_logic_arms_are_pat_nodes
+
+[T12.62] core.patterns_elaborate_to_pats                    level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    cada patrón de un `match` se elabora al nodo de Core que le toca: constructores con sus campos, literales `Int` (uno negativo) y `Bool`, `_`, variables, tuplas, records con los campos en el orden del record y `_` en los que no se nombran, or-patrones y guardas; las variables toman casilla en el orden en que el programa las escribe, y un nombre que ligan dos alternativas es una sola `Var` con una sola casilla
+input:   nueve funciones: los tres brazos de `Shape`; `Yes(0)`, `Yes(-1)`, `Yes(k)` y `No`; `true`, `false` con guarda y `_`; una tupla; dos records (`Pt { z, x: a, .. }` y `Pt { x, y, z }`); `Yes(1 | 2)`; `(Yes(x), _) | (_, Yes(x)) if x > n`; `(Yes(a), Yes(b)) | (Yes(b), Yes(a))`; y un `match` con bloques en el escrutinio, la guarda y los cuerpos
+expect:  la forma exacta de cada cuerpo, por ejemplo `match s@0 { Circle(r@1) => …; Rect(w@2, h@3) => …; Unit => 0.0 }`, `Pt(a@2, _, z@1)` para `Pt { z, x: a, .. }`, `Yes(x@2)` en las dos alternativas, `(Yes(b@2), Yes(a@1))` para la segunda con los nombres cambiados, y las casillas 2 a 7 en el orden del fuente cuando hay bloques; y la función del or-patrón tiene un marco de 3 casillas y las dos alternativas ligan la misma `Var`
+why:     una variable en otra casilla, o una alternativa con su propia `Var`, haría que la guarda leyera algo que la alternativa que casó no ligó.
+ref:     TestPatternCore/patterns_elaborate_to_pats
+
+[T12.63] core.pattern_spans_cover_their_syntax              level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    cada nodo de patrón tiene el span del patrón de donde sale; un pun tiene el de su nombre y el `_` de un campo que un patrón de record no nombra tiene el del patrón entero; y cada `Match` tiene el de su `match`, o el de su `let` con patrón
+input:   diez brazos de cinco `Match`: `(u, _)`, `Rect(w, _) | Circle(w)`, `_`, `Yes(-1 | 2)`, `No`, `_`, `true`, `false`, `Pt { x, y: 0, .. }` y `_`
+expect:  el texto bajo el span de cada nodo, en preorden: `(u, _)`, `u`, `_`; `Rect(w, _) | Circle(w)` y sus cinco nodos; `Yes(-1 | 2)`, `-1 | 2`, `-1`, `2`; `true` y `false`; y `Pt { x, y: 0, .. }`, `x`, `0` y otra vez `Pt { x, y: 0, .. }` para el campo `z`, que no se nombra; y el texto de cada `Match`: `let (u, _) = p` y los cuatro `match … { … }` completos
+why:     Core guarda el span de cada nodo para señalar el fuente; el de otro nodo apuntaría a una línea ajena.
+ref:     TestPatternCore/pattern_spans_cover_their_syntax
+
+[T12.64] core.let_with_a_pattern_is_a_match_of_one_arm      level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    un `let` con patrón se elabora a un `Match` de un solo brazo sobre el inicializador, cuyo cuerpo es el resto del bloque y cuyo span es el de la sentencia; los nombres del patrón toman casilla antes que los de los bloques del inicializador
+input:   cinco funciones: `let (a, b) = t` seguido de otro `let`; `let _ = t`; `let (a, _)`, un `let` simple y `let (d, e) = (c, a)`; `let Pt { x, .. } = t`; y `let (a, b) = { let u = 1; t }`; y el span de `let (a, b) = t`
+expect:  las formas exactas, como `match t@0 { (a@1, b@2) => let s@3 = add_int(a@1, b@2); s@3 }` o `match let u@3 = 1; t@0 { (a@1, b@2) => … }` (la `u` va después de `a` y `b`), con el segundo `let` con patrón dentro del cuerpo del primero; el `Match` de `let (a, b) = t` tiene el span de esas palabras, un solo brazo y ninguna guarda
+why:     el cuerpo del brazo es el resto del bloque: si quedara fuera, las variables del patrón no existirían donde se usan.
+ref:     TestPatternCore/let_with_a_pattern_is_a_match_of_one_arm
+
+[T12.65] core.patterns_that_have_no_core_panic              level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    `Elaborate` no adivina un patrón que el front end rechazó y dejó como nodo: hace un `panic` cuyo texto dice cuál es
+input:   un patrón que no se pudo leer (`+ => 1`), una lista (`[a]`), el nombre de un tipo en lugar de un constructor (`Pt(a)`) y un patrón de record sobre un `Int`
+expect:  los textos exactos `core: cannot elaborate a pattern that could not be read`, `core: cannot elaborate a list pattern`, `core: cannot elaborate a constructor pattern whose name is not a constructor` y ``core: cannot elaborate a record pattern on a value that is not a record: `Int` ``
+why:     traducir un patrón sin sentido ejecutaría otro programa en silencio; un ICE que nombra el patrón deja la causa a la vista.
+ref:     TestPatternCore/patterns_that_have_no_core_panic
+
+[T12.66] core.print_of_patterns                             level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    `Print` escribe cada patrón como lo escribe el programa, hasta donde Core lo conserva: un record es un constructor posicional con `_` en los campos que no se nombran, un or-patrón dentro de otro va entre paréntesis, la guarda va entre el patrón y la flecha y una variable que ligan dos alternativas tiene un solo nombre
+input:   una función con `let (a, _)`, un `match` de `Shape` con guarda, un or-patrón y `_`, otro de un record con `Pt { x: 0, .. }` y un pun con guarda, y otro con `Yes(0 | -1)`, `Yes(1) | (No | Yes(2))` y `Yes(m)`; otra con `(Yes(x), _) | (_, Yes(x)) if x > 0`, otra con una guarda de dos líneas, y otra con `Yes(x)` en dos `match` seguidos, que lee el segundo `x` en su cuerpo
+expect:  el texto exacto de las cuatro funciones, con la sangría de siempre: `Pt(0, _, _) => k`, `Pt(_, y, z) if eq_int(y, z) => z`, `Yes(1) | (No | Yes(2)) => 8`, `(Yes(x), _) | (_, Yes(x)) if gt_int(x, 0) => x`, y `k if let g = k;` con `gt_int(g, 0) => k` en la línea siguiente, dos espacios más adentro que el brazo; y `Yes(x_1) => add_int(x_1, r)` para el segundo `x`
+why:     un paréntesis de menos haría que `A | (B | C)` se imprimiera como el otro árbol, `A | B | C`.
+ref:     TestPatternCore/print_of_patterns
+
+[T12.67] core.big_matches_and_patterns_without_recursion    level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    un `match` de 100 000 brazos, un patrón tupla de 100 000 elementos y un or-patrón de 100 000 alternativas se elaboran, pasan Lint y se imprimen con la pila de Go limitada a 1 MiB
+input:   un `match x` con los brazos `0 => 0` a `99999 => 99999` y `_ => 0`; un `match` de una tupla de 100 000 unos con un patrón de 100 000 `_`; y `0 | 1 | … | 99999 => 1` con `_ => 0`
+expect:  100 001, 1 y 2 brazos; Lint sin violaciones; y la función impresa de cada uno contiene sus trozos de principio y de final (`0 => 0`, `99999 => 99999` y `_ => 0`, `(_, _, _` …, `99998 | 99999 => 1`)
+why:     con la pila en 1 MiB, una recursión sobre los brazos, o que baje un nivel por hermano, mataría el proceso con `stack overflow`.
+ref:     TestPatternCore/big_matches_and_patterns_without_recursion
+
+[T12.68] core.deep_patterns_no_recursion                    level: core
+kind:    unit (go test)      file: internal/core/pattern_test.go
+case:    un patrón anidado 100 000 niveles, que ningún fuente puede escribir (E0204) pero un `Program` hecho a mano sí, pasa Lint y se imprime con la pila de Go limitada a 1 MiB
+input:   un `Program` con un `PatCon` dentro de otro 100 000 veces y otro con un or-patrón dentro de la primera alternativa de otro 100 000 veces
+expect:  Lint sin violaciones; el texto impreso tiene en una línea `W(` 100 000 veces, la variable y 100 000 `)`, y en otra los or-patrones anidados con un par de paréntesis por cada uno menos el más externo
+why:     el límite del parser protege solo lo que el parser produce; Lint e impresión llevan su propia pila y aguantan más.
+ref:     TestPatternCore/deep_patterns_no_recursion
+
+[T12.69] lint.patterns_bind_in_their_arm                    level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    las variables que liga el patrón de un brazo están en ámbito en su guarda y su cuerpo, y en ningún otro sitio: ni en el escrutinio, ni en los demás brazos (los de antes y los de después), ni tras el `Match`
+input:   once funciones de mano con un `Match` sobre `true`: la variable leída en la guarda, en el cuerpo, dentro de un patrón anidado y en las dos alternativas de un or-patrón; leída en el escrutinio, en el brazo de al lado, en su guarda, en el brazo anterior y tras el `Match`, también cuando dos alternativas la ligan; y un `Let` de la misma variable alrededor del `Match`
+expect:  ninguna violación cuando la leen la guarda o el cuerpo del brazo que la liga, o el `Let` que la liga alrededor; y exactamente un `unbound variable` de esa variable en cada una de las otras seis
+why:     un ámbito que dejara pasar la variable a otro brazo o a lo que sigue haría que el intérprete leyera una casilla que nadie ligó.
+ref:     TestLint/patterns_bind_in_their_arm
+
+[T12.70] lint.rejects_bad_patterns                          level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    Lint señala un `PatBind` cuya variable no tiene casilla en el marco y un `PatCon` con otro número de patrones que campos tiene su constructor, esté donde esté en el patrón; un `PatBind` repetido en las alternativas de un or-patrón es una violación por alternativa; las violaciones salen en el orden del fuente; y una clase de patrón desconocida es un `panic` con el texto `unreachable`
+input:   dieciséis patrones de un brazo (con la variable en la última casilla del marco y una casilla más allá, y constructores con la aridad justa, de menos y de más, y una tupla); un brazo con violaciones en el escrutinio, el patrón, la guarda, el cuerpo y el patrón del brazo siguiente; y un patrón de clase 77
+expect:  ninguna violación con la casilla del último hueco, la aridad justa y la tupla justa; en los demás, exactamente las violaciones del texto `variable `vN` has slot 1, outside a frame of 1 slot(s)` y `pattern of constructor `Pair` with 1 argument(s), but it takes 2` (o `tuple constructor`), en el orden del fuente; y el `panic` con `unreachable` para la clase 77
+why:     un `PatBind` fuera del marco sería un `index out of range` en plena ejecución, y una aridad mala, un campo que no existe.
+ref:     TestLint/rejects_bad_patterns
+
+[T12.71] lint.match_coverage_is_not_checked                 level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    Lint ya no exige que un `Match` cubra todos los valores: uno con solo `true`, con solo `false`, sin brazos o con un brazo repetido es Core válido, también dentro del brazo de otro
+input:   un `Match` sobre `true` con solo `true`, con solo `false`, sin brazos, con `true` y `true` y con `false` y `false`; y un `Match` con solo `true` dentro del brazo `true` de otro
+expect:  ninguna violación en ninguno de los seis
+why:     la cobertura de patrones anidados es del pase `patterns`; si Lint la repitiera con una regla más pobre, rechazaría programas correctos.
+ref:     TestLint/match_coverage_is_not_checked
+
+[T12.72] subexprs.a_match_visits_its_guards                 level: core
+kind:    unit (go test)      file: internal/core/lint_test.go
+case:    `Subexprs` visita de un `Match` el escrutinio y, de cada brazo en orden, su guarda si la tiene y su cuerpo; los patrones no son expresiones y no salen
+input:   un `Match` con tres brazos: el primero con guarda y cuerpo, el segundo solo con cuerpo y el tercero con guarda y cuerpo
+expect:  el `Match`, el escrutinio, la primera guarda, su cuerpo, el cuerpo del segundo, la tercera guarda y su cuerpo, por ese orden
+why:     una guarda que `Subexprs` no visitara quedaría fuera de todo lo que recorra el cuerpo de una función.
+ref:     TestSubexprs/a_match_visits_its_guards
+
+[T12.73] interp.arms_take_values_apart                      level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    la máquina liga las variables de un patrón a las partes que casan y elige el brazo que toca: constructores con y sin campos, anidados, literales `Int` (uno negativo) y `Bool`, tuplas, records escritos en otro orden y con `..`, y `let` con patrón
+input:   veinte llamadas a funciones sin argumentos: las tres áreas de `Shape`, cuatro formas de `Nest` (`Node(Node(Leaf, a), b)`, `Node(Leaf, a)`, `Node(_, _)`, `Leaf`), `0`, `-1` y otro `Int`, `true` y `false`, tres tuplas, dos records y tres `let` con patrón
+expect:  los valores exactos: `4.0`, `6.0` y `0.0`; 42, 7, 99 y 0; 10, 20 y 5; 1 y 2; 1, 2 y 8; 9 (`Pt { z, x: 0, .. }`) y 123 (`Pt { x, y, z }`); y 12, 2 y 123 para los `let`
+why:     una variable ligada a otro campo, o un brazo equivocado, da otro número sin avisar: los valores lo delatan.
+ref:     TestMatchRun/arms_take_values_apart
+
+[T12.74] interp.guards_fall_through_to_the_next_arm         level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    un brazo cuyo patrón casa pero cuya guarda es falsa no gana: sigue el brazo siguiente; la guarda ve las variables del patrón, las guardas se evalúan en orden y solo hasta la primera verdadera, y el cuerpo del brazo que gana va después de ellas
+input:   `rank`, con los brazos `a if a > 10`, `b if b > 5` y `c`, llamada con 11, 7 y 3 y con 10 y 5 en los bordes; `Yes(x) if x > 0`, `Yes(_)` y `No` con `Yes(4)`, `Yes(0)` y `No`; y cinco programas con un `match` de guardas que escriben su número (`show(1, false)`, `show(2, true)`…) y devuelven lo que se les pide; el cuarto con un or-patrón en el primer campo de una tupla y el quinto con uno en cada uno de dos campos, los dos con una guarda siempre falsa
+expect:  1, 2 y 3 para las tres, y 23 para los bordes (`rank(10)` da 2 y `rank(5)` da 3, porque `>` no incluye el borde); 4, -1 y -2 para `Yes`; y en stdout, un número por línea, `1`, `2` y `30` si ninguna guarda es verdadera, `1` y `10` si lo es la primera, `1`, `2` y `20` si lo es la segunda, `0`, `1` y `30` con el or-patrón, que prueba cada alternativa una sola vez, y `12`, `15`, `42`, `45` y `30` con uno en cada campo
+why:     una guarda falsa que ganara igual, o que evaluara las de los brazos siguientes, cambia el resultado y las líneas escritas.
+ref:     TestMatchRun/guards_fall_through_to_the_next_arm
+
+[T12.75] interp.or_patterns_try_each_alternative            level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    un or-patrón casa donde casa una de sus alternativas, la primera que casa, y una guarda falsa hace que el match pruebe la alternativa siguiente del mismo brazo antes de pasar al brazo siguiente; con varios or-patrones en un brazo las filas son las combinaciones de sus alternativas en el orden en que se escriben, y el último or-patrón cambia primero
+input:   `(Yes(x), _) | (_, Yes(x)) if x > 0` sobre `(Yes(2), Yes(3))`, `(Yes(0), Yes(1))`, `(No, Yes(4))`, `(Yes(0), Yes(0))`, `(Yes(0), No)` y `(No, No)`; `1 | 2 | 3` y `4 | -5` sobre 1, 2, 3, -5 y 9; `(Yes(1 | 2), 3 | 4)`; `(((Yes(x), _) | (_, Yes(x))), 5) if x > 0` con un resto que casa y otro que no; `(Yes(a), Yes(b)) | (Yes(b), Yes(a)) if a > b`; `((Yes(a), _) | (_, Yes(a)), (Yes(b), _) | (_, Yes(b))) if a + b > 5` sobre `((Yes(1), Yes(4)), (Yes(2), Yes(5)))`; y el mismo con un or-patrón en cada uno de tres campos y la guarda `b + c >= 2`, sobre `((Yes(0), Yes(1)), (Yes(0), Yes(2)), (Yes(0), Yes(3)))`
+expect:  2, 1, 4, 100, 100 y 100 para el primero (el segundo es el brazo con `x = 1`); 1, 1, 1, 2 y 3 para los literales; 1, 2, 2 y 3 para los anidados; 1, 100 y 2 con el resto; 21, 21 y 0 con las variables en otro orden; 15 con un or-patrón en cada campo (`a = 1` con `b = 2` suma 3 y falla, y `a = 1` con `b = 5` suma 6 y gana); y 3 con tres (primero `c = 0` falla, y gana `c = 3`; si los campos tras el primero se probaran al revés saldría 20)
+why:     la guarda falsa debe probar la siguiente alternativa antes de pasar de brazo (Rust): `(Some(0), Some(1))` da el brazo con `x = 1`.
+ref:     TestMatchRun/or_patterns_try_each_alternative
+
+[T12.76] interp.a_match_does_not_grow_the_stack             level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    el cuerpo del brazo que gana corre sin nada del `match` en la pila, con guarda o sin ella, así que una llamada ahí sigue en posición de cola: un bucle de 100 000 vueltas pasa por los mismos marcos y entornos que uno de 10
+input:   `count(n, acc)`, un `match` con `0`, `k if k > 0 => count(k - 1, acc + k)` y `_`, y `down(n, acc)`, con `0` y `_ => down(n - 1, acc + 1)`, que recurre desde un brazo sin guarda; cada uno llamado con 10 y con 100 000
+expect:  55 y 5 000 050 000 para `count`, 10 y 100 000 para `down`; el mismo `MaxDepth` y el mismo `MaxEnvs` en las dos llamadas de cada uno, y al menos mil veces más pasos en la segunda
+why:     con el marco de la guarda aún en la pila, un bucle con `match` y llamada de cola haría crecer la pila en cada vuelta.
+ref:     TestMatchRun/a_match_does_not_grow_the_stack
+
+[T12.77] interp.a_guard_is_one_frame_and_a_few_steps        level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    una guarda cuesta un marco y los pasos contados a mano: el `Match`, el escrutinio, el `matchFrame`, la guarda (`x > 5`: la primitiva, `x`, un marco, `5`, otro marco), el `guardFrame` y el cuerpo, diez pasos con dos marcos a la vez como máximo, sea verdadera o falsa
+input:   `match 7 { x if x > 5 => x; _ => 0 }` y `match 3 { x if x > 5 => x; _ => 0 }`
+expect:  7 y 0, y en las dos `Stats` es exactamente `{Steps: 10, MaxDepth: 2, MaxEnvs: 1}`
+why:     los pasos y la profundidad de la pila son contratos del oráculo: una guarda no puede costar más marcos ni más pasos que los contados.
+ref:     TestMatchRun/a_guard_is_one_frame_and_a_few_steps
+
+[T12.78] interp.a_match_that_falls_through_after_a_guard_panics level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    un `match` cuyo único brazo casa pero tiene la guarda falsa, sin otro brazo ni alternativa, hace un `panic` de Go con el mismo texto que un patrón que no casa
+input:   un `Program` hecho a mano con `match 0 { _ if false => 1 }`
+expect:  `Call` hace un `panic` y el valor que se recupera es exactamente la cadena `match fell through`
+why:     fallar por la guarda del último brazo es otra ruta al mismo fallo: seguir sin brazo devolvería un valor cualquiera.
+ref:     TestMatchRun/a_match_that_falls_through_after_a_guard_panics
+
+[T12.79] interp.or_patterns_of_one_alternative_and_none     level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    un or-patrón hecho a mano con una sola alternativa casa lo que casa esa alternativa, y una guarda falsa pasa al brazo siguiente sin buscar otra; uno sin alternativas no casa nada
+input:   un `Program` con `match 1 { P => 10; _ => 20 }` donde `P` es `Or[1]`, `Or[2]`, `Or[1]` con la guarda `false` y `Or[]`
+expect:  10, 20, 20 y 20, con `Call` devolviendo `true` y ningún `panic` de Go
+why:     el parser no los hace, pero un `Program` a mano sí: la máquina no debe leer una segunda alternativa que no existe.
+ref:     TestMatchRun/or_patterns_of_one_alternative_and_none
+
+[T12.80] interp.big_patterns_without_recursion              level: core
+kind:    unit (go test)      file: internal/interp/match_test.go
+case:    un patrón tupla de 100 000 elementos, un or-patrón de 100 000 alternativas (casa la última) y un constructor anidado 100 000 niveles en el patrón y en el valor se casan con la pila de Go limitada a 1 MiB
+input:   una tupla de 100 000 unos contra 100 000 `_`; `0 | 1 | … | 99999` sobre 99999 y sobre 100000 con un `_` detrás; y un `Program` hecho a mano con `W(W(…(42)))` y el patrón `W(W(…(x)))`, los dos de 100 000 niveles
+expect:  1 para la tupla; 1 y 2 para el or-patrón; y 42 para el patrón profundo, con `Call` devolviendo `true`
+why:     la pila de Go limitada delata una recursión del matcher sobre el patrón o el valor; el matcher lleva su propia pila.
+ref:     TestMatchRun/big_patterns_without_recursion
+
+[T12.81] interp.a_guard_frame_is_charged_to_the_slots       level: core
+kind:    unit (go test)      file: internal/interp/match_internal_test.go
+case:    mientras corre la guarda, el `guardFrame` cuenta como casillas el escrutinio y una por cada or-patrón que tiene alternativas sin probar, y las devuelve al acabar
+input:   `match 0 { _ | _ | _ if f() => 1; _ => 2 }` con `f()` falsa, que llama a una función de un entorno de una casilla, con un límite de 2 casillas y con uno de 3
+expect:  con 2 la pila se desborda (`Halt{Code: 103}`); con 3 `Call` devuelve 2 y no queda ninguna casilla cargada
+why:     el marco de una guarda retiene valores como un `argFrame`; sin contarlos, `KI_STACK_MB` no acotaría lo que una recursión de guardas guarda vivo.
+ref:     TestMatchFrames/a_guard_frame_is_charged_to_the_slots
+
+[T12.82] driver.match_fall_through_is_an_ice                level: core
+kind:    unit (go test)      file: internal/driver/run_test.go
+case:    un `match` que ningún valor puede recorrer entero es Core válido, porque Lint no mira la cobertura, y su caída es el ICE del pase `run` con el texto `match fell through`, no un panic de Ki
+input:   un `Program` hecho a mano con `match false { true => 1 }` (`coretest.UncoveredMatchProgram`)
+expect:  Lint no encuentra nada, y `execute` hace un panic con un `*ICE` del pase `run` y el valor `match fell through`
+why:     un `match` que no cubre es un fallo del compilador, no del programa: sale como ICE (70) y no como un panic de Ki (101).
+ref:     TestRun/match_fall_through_is_an_ice
+
+[T12.83] check.match_run                                    level: core
+kind:    run                 file: tests/golden/ch12/match_run.ki
+case:    `ki run` ejecuta de punta a punta un `match` de tres brazos, uno con guarda y or-patrón, y un `let` con patrón
+input:   un programa con `Shape` y `Opt`, `area` con tres brazos, `first_positive` con `(Yes(x), _) | (_, Yes(x)) if x > 0` y un `main` que imprime seis números
+expect:  sale con 0 y stdout exactamente `12`, `15`, `0`, `1`, `-1` y `78`, cada uno en su línea
+why:     es el binario de verdad: los patrones, la guarda y el or-patrón funcionan tras todos los pases, de `lex` a `run`.
+ref:     tests/golden/ch12/match_run.ki
+
+[T12.84] core.match_dump                                    level: core
+kind:    golden              file: tests/golden/ch12/match_core.ki
+case:    `ki emit core` imprime un `let` con patrón como un `match` de un brazo y los patrones como Core los conserva
+input:   un programa con `Opt` y dos funciones: una con `let (a, _)` y un `match` con `Yes(0 | -1)`, `Yes(k) if k > n` y `_`, y otra con un or-patrón y una guarda
+expect:  sale con 0 y stdout exactamente el volcado de `Opt` y de sus dos constructores, las dos funciones y `main`, con `(a, _) => match a { … }` y `(Yes(x), _) | (_, Yes(x)) if gt_int(x, 0) => x`
+why:     es cómo se ven los patrones en Core con el binario: lo que el libro enseña a leer en `emit core`.
+ref:     tests/golden/ch12/match_core.ki

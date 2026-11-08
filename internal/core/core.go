@@ -8,12 +8,13 @@
 // and the tests, make them. Part I needs only the part of Core that the language
 // of Part I elaborates to: literals, variables, calls, primitive operations,
 // `let` and a `match` on Bool; Part II adds the constructors, which build the
-// values of the types that a program declares.
+// values of the types that a program declares, and the patterns, which take
+// them apart.
 //
 // Like the syntax tree, a Program stores its nodes in IdVecs and refers to
 // them by id, never by pointer. The children of a node that form a list are a
-// base.ListRange over one of the Program's two pools (read them with Args and
-// ArmsOf).
+// base.ListRange over one of the Program's pools (read them with Args, ArmsOf
+// and PatList).
 package core
 
 import (
@@ -44,10 +45,12 @@ const (
 	RepVal Rep = iota
 )
 
-// Var is a variable: a parameter of a function or the name a `let` binds. Core
-// is meant to bind each Var in one place only (spec 6.1); neither Builder nor
-// Program checks it, and Lint does not check it in Part I (it is exercise 1 of
-// chapter 9).
+// Var is a variable: a parameter of a function, the name a `let` binds or the
+// name a pattern binds. Core is meant to bind each Var in one place only (spec
+// 6.1); neither Builder nor Program checks it, and Lint does not check it in Part
+// I (it is exercise 1 of chapter 9). The one exception is an or-pattern: each of
+// its alternatives binds the same Vars, so that the guard and the body of the arm
+// read them whichever alternative fitted.
 type Var struct {
 	Name base.Symbol
 	Rep  Rep
@@ -152,21 +155,67 @@ const (
 	Proj     // Target, Index: `e.i`, the field number Index of the value of Target
 )
 
-// PatKind is the kind of pattern of one arm of a Match.
+// PatID names a pattern in Program.Pats.
+type PatID uint32
+
+// PatKind says what a Pat is, and so which of its fields mean something.
 type PatKind uint8
 
-// The patterns an arm can have: the value true, the value false, or any value.
+// The kinds of pattern. The first three have no field of their own: the value
+// true, the value false, or any value. The kinds of Part II come after
+// PatWildcard, so that the first three keep their values; each line is written
+// `X + 1 + iota` for the same reason as in the block of the primitives. The
+// patterns on strings, characters and unsigned integers join them in the chapters
+// that add those types.
 const (
 	PatTrue PatKind = iota
 	PatFalse
 	PatWildcard
 )
 
-// Arm is one arm of a Match: the pattern and the expression that is the value of
-// the Match when the pattern fits.
+const (
+	PatInt  PatKind = PatWildcard + 1 + iota // Int: an Int literal, `0` or `-1`
+	PatBind                                  // Var: any value, which the pattern binds to Var
+	PatCon                                   // Ctor, Args: a value that Ctor built, whose fields fit the patterns in Args
+	PatOr                                    // Args: the first of the alternatives that fits
+)
+
+// Pat is a pattern. Its Kind says which of the other fields mean something (see
+// the constants); the rest are zero. A pattern is a tree like an expression, and
+// like one it is stored in Program.Pats and named by its id.
+//
+// A PatCon fits a value that the constructor Ctor built when each of its fields
+// fits the pattern in the same place of Args, so Args has as many patterns as
+// the constructor has fields (Lint checks it). A tuple is a PatCon of the tuple
+// constructor of its arity, and a record a PatCon of the constructor of the
+// record, with a PatWildcard for each field that the source leaves out. A PatOr
+// fits a value that one of its alternatives fits, tried in order (the parser only
+// makes one of two or more). Every alternative of a PatOr binds the same Vars: the
+// elaboration gives a name one Var wherever the alternatives bind it, so the guard
+// and the body read it without asking which alternative fitted; neither Lint nor
+// the machine checks that they do.
+//
+// Args holds the sub-patterns of a PatCon and the alternatives of a PatOr: a
+// range over Program.PatPool, read with Program.PatList.
+type Pat struct {
+	Kind PatKind
+	Span base.Span
+
+	Int  int64
+	Var  VarID
+	Ctor CtorID
+	Args base.ListRange
+}
+
+// Arm is one arm of a Match: the pattern, an optional guard and the expression
+// that is the value of the Match when the arm is the one that wins. The guard
+// means something only when HasGuard is true. The arm of an `if` or of `&&` and
+// `||` has PatTrue or PatFalse nodes of its own for its pattern.
 type Arm struct {
-	Pat  PatKind
-	Body ExprID
+	Pat      PatID
+	Guard    ExprID
+	HasGuard bool
+	Body     ExprID
 }
 
 // Expr is an expression. Its Kind says which of the other fields mean
@@ -201,9 +250,12 @@ type Expr struct {
 	Init, Body ExprID
 
 	// A Match compares the value of Scrutinee with the pattern of each of its
-	// Arms: the first arm whose pattern is the value wins, wherever it is, and
-	// if there is none, the first wildcard arm does. Arms is a range over
-	// Program.ArmPool, read with Program.ArmsOf.
+	// Arms, from the first to the last: the first arm whose pattern fits the value
+	// and whose guard, if it has one, is true wins, and its Body is the value of
+	// the Match. An arm with an or-pattern and a guard is one row for each of its
+	// alternatives, in order, so a false guard goes on with the next alternative
+	// before it goes on with the next arm. Arms is a range over Program.ArmPool,
+	// read with Program.ArmsOf.
 	Scrutinee ExprID
 	Arms      base.ListRange
 }
@@ -263,6 +315,10 @@ type Program struct {
 	Vars     base.IdVec[VarID, Var]
 	ExprPool []ExprID
 	ArmPool  []Arm
+	// Pats holds every pattern, and PatPool is the pool that the Args of the
+	// patterns point into.
+	Pats    base.IdVec[PatID, Pat]
+	PatPool []PatID
 	// Main is the function `main`. It means something only when HasMain is true.
 	Main    FunID
 	HasMain bool
@@ -275,3 +331,7 @@ func (p *Program) Args(r base.ListRange) []ExprID { return base.Slice(p.ExprPool
 // ArmsOf returns the arms that r selects in ArmPool, like Args does for
 // expressions.
 func (p *Program) ArmsOf(r base.ListRange) []Arm { return base.Slice(p.ArmPool, r) }
+
+// PatList returns the patterns that r selects in PatPool, like Args does for
+// expressions.
+func (p *Program) PatList(r base.ListRange) []PatID { return base.Slice(p.PatPool, r) }

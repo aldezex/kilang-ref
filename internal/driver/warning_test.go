@@ -44,34 +44,26 @@ func TestWarnings(t *testing.T) {
 	t.Run("run_does_not_write_a_warning", func(t *testing.T) {
 		// `ki run` writes diagnostics only for a program that it cannot run, so that
 		// what the program writes, and the first line of the stderr of a panic, are all
-		// that a run says. A match is not elaborated until the session that follows,
-		// so `ki run` of this program ends in an ICE before it runs anything: what it
-		// shows is that the warning is not on stderr, and the ICE report says that it
-		// left a diagnostic out. When a `match` runs, this is the place to ask for an
-		// empty stderr.
+		// that a run says: this program runs, prints 7, and its stderr is empty.
 		path := writeKi(t, warningSrc)
-		code, stdout, stderr := runCLI(t, "run", path)
-		if code != 70 || stdout != "" {
-			t.Errorf("ki run: got %d and stdout %q, want 70 (a match is not elaborated yet) and nothing on stdout", code, stdout)
-		}
-		for _, word := range []string{"warning[", "W0701", "unreachable pattern"} {
-			if strings.Contains(stderr, word) {
-				t.Errorf("ki run writes %q to stderr: %q", word, stderr)
-			}
-		}
-		if want := "note: 1 diagnostic was reported before this error and is not shown\n"; !strings.HasSuffix(stderr, want) {
-			t.Errorf("the ICE report of ki run ends with %q, want it to end with %q: the warning was in the sink and was not written", stderr[max(0, len(stderr)-80):], want)
+		if code, stdout, stderr := runCLI(t, "run", path); code != 0 || stdout != "7\n" || stderr != "" {
+			t.Errorf("ki run: got %d, stdout %q, stderr %q, want 0, \"7\\n\" and an empty stderr", code, stdout, stderr)
 		}
 	})
 
 	t.Run("emit_leaves_warnings_out", func(t *testing.T) {
 		// The dump of `ki emit` is followed by the errors, and by no warning: a
 		// warning alone leaves stderr empty and the exit code 0, and with an error
-		// the error is written and the warning is not. A match does not reach the end of
-		// `ki emit core` yet, so a warning alone is asked of the ending that all the
-		// targets share, with a Session whose sink has both; the error of a program that
-		// also has a warning is asked of `ki emit core`, which stops before any Core is
-		// made: it writes the error, and not the warning, and no dump.
+		// the error is written and the warning is not, and there is no dump (Core is
+		// made for a program without errors). Both are asked of `ki emit core`, on the
+		// program of the warning and on the same program with an error added. The
+		// ending that all the targets share is asked as well, with a Session whose
+		// sink has both, because the other targets cannot have a warning.
+		path := writeKi(t, warningSrc)
+		dump := "fn g(n) =\n  match n {\n    _ => 1\n    2 => 2\n  }\nfn main() =\n  print(7)\n"
+		if code, stdout, stderr := runCLI(t, "emit", "core", path); code != 0 || stdout != dump || stderr != "" {
+			t.Errorf("ki emit core of the warning program: got %d, stdout %q, stderr %q, want 0, the dump %q and an empty stderr", code, stdout, stderr, dump)
+		}
 		both := writeKi(t, strings.Replace(warningSrc, "print(7)", "print(zz)", 1))
 		wantErr := both + ":7:19: error[E0301]: unknown name `zz`\n"
 		if code, stdout, stderr := runCLI(t, "emit", "core", "--diagnostics=short", both); code != 1 || stdout != "" || stderr != wantErr {

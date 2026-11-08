@@ -1,0 +1,40 @@
+// test: T12.84
+// run: emit core
+// expect-stdout:
+// | fn Opt() =
+// |   ()
+// | fn No() =
+// |   No
+// | fn Yes(a0) =
+// |   Yes(a0)
+// | fn f(p, n) =
+// |   match p {
+// |     (a, _) => match a {
+// |       Yes(0 | -1) => 1
+// |       Yes(k) if gt_int(k, n) => k
+// |       _ => n
+// |     }
+// |   }
+// | fn g(p) =
+// |   match p {
+// |     (Yes(x), _) | (_, Yes(x)) if gt_int(x, 0) => x
+// |     _ => 0
+// |   }
+// | fn main() =
+// |   ()
+type Opt { No, Yes(Int) }
+fn f(p: (Opt, Opt), n: Int) -> Int {
+  let (a, _) = p
+  match a {
+    Yes(0 | -1) => 1
+    Yes(k) if k > n => k
+    _ => n
+  }
+}
+fn g(p: (Opt, Opt)) -> Int {
+  match p {
+    (Yes(x), _) | (_, Yes(x)) if x > 0 => x
+    _ => 0
+  }
+}
+fn main() {}

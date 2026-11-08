@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aldezex/kilang/internal/base"
+	"github.com/aldezex/kilang/internal/core"
 	"github.com/aldezex/kilang/internal/core/coretest"
 	"github.com/aldezex/kilang/internal/diag"
 )
@@ -264,6 +266,22 @@ func TestRun(t *testing.T) {
 		s.Stdout = &stdout
 		if code := s.execute(coretest.ExternProgram("ki_print_int")); code != 0 || stdout.String() != "9\n" {
 			t.Errorf("execute of the control program: got %d and stdout %q, want 0 and \"9\\n\"", code, stdout.String())
+		}
+	})
+
+	t.Run("match_fall_through_is_an_ice", func(t *testing.T) {
+		// `match false { true => 1 }` is valid Core, because Lint leaves the coverage
+		// of a match to the pass `patterns`, and only a Program made by hand has one
+		// that the checker did not reject. The machine panics in Go with "match fell
+		// through", which execute turns into the ICE of the pass "run", exit code 70
+		// for Main, and not into a Ki panic, which would be 101.
+		p := coretest.UncoveredMatchProgram()
+		if violations := core.Lint(p, base.NewInterner()); len(violations) != 0 {
+			t.Fatalf("Lint of the program with an uncovered match returned %q, want nothing", violations)
+		}
+		r := raised(func() { newSession("").execute(p) })
+		if ice, ok := r.(*ICE); !ok || ice.Pass != "run" || ice.Value != "match fell through" {
+			t.Errorf("execute of a match that falls through panicked with %#v, want the *ICE of pass \"run\" and value \"match fell through\"", r)
 		}
 	})
 }

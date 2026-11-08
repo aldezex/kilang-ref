@@ -173,16 +173,16 @@ fn n(c) =
 			t.Errorf("Print of matches and blocks inside expressions:\n%s\nwant:\n%s", got, want)
 		}
 
-		// A match in the arm of another one, with a wildcard arm, which no
-		// source makes.
+		// A match in the arm of another one, with a wildcard arm, made by hand.
 		in := base.NewInterner()
 		b, p := newBuilder()
+		pat := func(k core.PatKind) core.PatID { return b.Pat(core.Pat{Kind: k, Span: span(0, 1)}) }
 		deep := b.Match(span(0, 1), b.LitBool(span(0, 1), true), []core.Arm{
-			{Pat: core.PatTrue, Body: b.Match(span(0, 1), b.LitBool(span(0, 1), false), []core.Arm{
-				{Pat: core.PatTrue, Body: b.LitInt(span(0, 1), 1)},
-				{Pat: core.PatWildcard, Body: b.LitInt(span(0, 1), 2)},
+			{Pat: pat(core.PatTrue), Body: b.Match(span(0, 1), b.LitBool(span(0, 1), false), []core.Arm{
+				{Pat: pat(core.PatTrue), Body: b.LitInt(span(0, 1), 1)},
+				{Pat: pat(core.PatWildcard), Body: b.LitInt(span(0, 1), 2)},
 			})},
-			{Pat: core.PatFalse, Body: b.LitInt(span(0, 1), 3)},
+			{Pat: pat(core.PatFalse), Body: b.LitInt(span(0, 1), 3)},
 		})
 		p.Funs.Push(core.Fun{Name: in.InternString("nest"), Body: deep, HasBody: true, UserModule: true})
 		wantNest := `fn nest() =

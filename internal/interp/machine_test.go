@@ -956,11 +956,11 @@ fn main() {
 	})
 
 	t.Run("match_arms", func(t *testing.T) {
-		// Programs made by hand, because the elaboration only makes a Match with
-		// the arms true and false, in that order. Each row is one function whose
-		// body is `match scrutinee { arms }`, and every arm answers a different
-		// number. A literal arm wins over a wildcard that comes first, and the
-		// wildcard is for the value that no other arm fits.
+		// Programs made by hand, so that each row is one function and its arms are
+		// the ones the row names (a source can write them too). Each row is one
+		// function whose body is `match scrutinee { arms }`, and every arm answers
+		// a different number. The first arm that fits wins, wherever it is: a
+		// wildcard fits every value, so a literal arm after it never runs.
 		const (
 			t1, f2, w9 = 1, 2, 9
 		)
@@ -984,7 +984,7 @@ fn main() {
 			{"wildcard_after_false_leaves_false", false, []arm{{core.PatFalse, f2}, {core.PatWildcard, w9}}, f2},
 			{"wildcard_alone_for_true", true, []arm{{core.PatWildcard, w9}}, w9},
 			{"wildcard_alone_for_false", false, []arm{{core.PatWildcard, w9}}, w9},
-			{"literal_wins_over_earlier_wildcard", true, []arm{{core.PatWildcard, w9}, {core.PatTrue, t1}}, t1},
+			{"earlier_wildcard_wins_over_a_later_literal", true, []arm{{core.PatWildcard, w9}, {core.PatTrue, t1}}, w9},
 			{"first_of_two_wildcards", false, []arm{{core.PatWildcard, w9}, {core.PatWildcard, 8}}, w9},
 			{"first_of_two_equal_arms", true, []arm{{core.PatTrue, t1}, {core.PatTrue, 7}}, t1},
 		}
@@ -995,7 +995,7 @@ fn main() {
 		for i, row := range rows {
 			arms := make([]core.Arm, len(row.arms))
 			for j, a := range row.arms {
-				arms[j] = core.Arm{Pat: a.pat, Body: b.LitInt(sp, a.body)}
+				arms[j] = core.Arm{Pat: b.Pat(core.Pat{Kind: a.pat, Span: sp}), Body: b.LitInt(sp, a.body)}
 			}
 			body := b.Match(sp, b.LitBool(sp, row.scr), arms)
 			funs[i] = p.Funs.Push(core.Fun{Body: body, HasBody: true})
@@ -1011,18 +1011,19 @@ fn main() {
 	})
 
 	t.Run("match_without_a_fitting_arm_panics", func(t *testing.T) {
-		// Lint rejects a Match that has neither both literals nor a wildcard, so
-		// no program that passed Lint gets here; the machine says so instead of
-		// going on with no arm. Made by hand: only the arm true, and the value false.
+		// The pass `patterns` rules out a Match that some value fits no arm of, so
+		// no program that the checker accepted gets here, and Lint does not look
+		// for it: the machine says so instead of going on with no arm. Made by
+		// hand: only the arm true, and the value false.
 		p := &core.Program{}
 		b := core.Builder{P: p}
 		sp := base.Span{File: 1}
-		arms := []core.Arm{{Pat: core.PatTrue, Body: b.LitInt(sp, 1)}}
+		arms := []core.Arm{{Pat: b.Pat(core.Pat{Kind: core.PatTrue, Span: sp}), Body: b.LitInt(sp, 1)}}
 		f := p.Funs.Push(core.Fun{Body: b.Match(sp, b.LitBool(sp, false), arms), HasBody: true})
 		got := panicText(func() {
 			interp.New(p, new(base.SourceManager), new(bytes.Buffer), new(bytes.Buffer)).Call(f, nil)
 		})
-		if want := "interp: no arm of the match fits the value"; got != want {
+		if want := "match fell through"; got != want {
 			t.Errorf("Call panicked with %#v, want the string %q", got, want)
 		}
 	})
@@ -1035,7 +1036,7 @@ fn main() {
 		sp := base.Span{File: 1}
 		badExpr := p.Funs.Push(core.Fun{Body: p.Exprs.Push(core.Expr{Kind: core.ExprKind(200), Span: sp}), HasBody: true})
 		badPat := p.Funs.Push(core.Fun{HasBody: true, Body: b.Match(sp, b.LitBool(sp, true),
-			[]core.Arm{{Pat: core.PatKind(77), Body: b.LitInt(sp, 1)}})})
+			[]core.Arm{{Pat: b.Pat(core.Pat{Kind: core.PatKind(77), Span: sp}), Body: b.LitInt(sp, 1)}})})
 		rows := []struct {
 			name string
 			fun  core.FunID

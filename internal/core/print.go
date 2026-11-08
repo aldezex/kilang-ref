@@ -18,7 +18,16 @@ import (
 //   - a Let is `let x = INIT;` and its body in the next line, so a chain of
 //     them reads from top to bottom;
 //   - a Match is `match S {`, one line for each arm two spaces further in
-//     (`true => …`, `false => …`, `_ => …`) and a `}`;
+//     (`PATTERN => …`, or `PATTERN if GUARD => …` for an arm with a guard) and a
+//     `}`. A pattern is written as the program writes it, as far as Core keeps
+//     it: `true`, `false`, `_`, an Int as its digits (`-1`), a variable as its
+//     name, a constructor with its name and the patterns of its fields
+//     (`Circle(r)`, `None`), a tuple as its patterns in parentheses (`(a, 0)`) and
+//     an or-pattern with `|` between its alternatives (`1 | 2`), an alternative
+//     that is an or-pattern itself in parentheses. A record pattern is written
+//     as a positional constructor, `Point(x, _)`, because Core has lost the names
+//     of the fields, as it did in the Con of a record literal; a field that the
+//     source did not name is `_`;
 //   - a call or a primitive is `callee(a, b)` or `add_int(a, b)`, all in one
 //     line unless an operand takes several; a constructor is written the same
 //     way, with its name and its arguments (`Circle(1.0)`, and `Point(1.0, 2.0)`
@@ -48,9 +57,10 @@ import (
 // a call or the scrutinee of a match has no delimiter, so it reads like a Let
 // whose body is the call or the match.
 //
-// Print walks with a stack of its own and never calls itself: a Let chain or
-// nested arguments of any depth add no frames of Go. Like Lint, it assumes that
-// the body of each function is a tree (see Subexprs) and does not check it.
+// Print walks with a stack of its own and never calls itself: a Let chain,
+// nested arguments, a Match of any number of arms and a pattern of any width or
+// depth add no frames of Go. Like Lint, it assumes that the body of each
+// function is a tree (see Subexprs) and does not check it.
 func Print(p *Program, in *base.Interner) string {
 	pr := &printer{p: p, in: in}
 	for _, f := range p.Funs.All() {
@@ -66,6 +76,7 @@ type printTaskKind uint8
 
 const (
 	taskExpr    printTaskKind = iota // write an expression
+	taskPat                          // write a pattern
 	taskText                         // write text as it is
 	taskNewline                      // start a new line, indented
 )
@@ -76,8 +87,9 @@ type printTask struct {
 	// For taskExpr: the expression, the indentation of the line where it starts
 	// and whether it is in a chain (the body of a function, or of a Let that is
 	// in one), where the body of a Let goes on at the same indentation; outside
-	// a chain it goes two spaces further in.
+	// a chain it goes two spaces further in. For taskPat, the pattern.
 	expr  ExprID
+	pat   PatID
 	ind   int
 	chain bool
 	// For taskText, the text; for taskNewline, ind is the indentation.
@@ -170,6 +182,8 @@ func (pr *printer) run(first printTask) {
 			pr.newline(t.ind)
 		case taskExpr:
 			pr.node(t)
+		case taskPat:
+			pr.patNode(t.pat)
 		default:
 			panic("unreachable")
 		}
@@ -191,6 +205,10 @@ func (pr *printer) addText(s string) {
 
 func (pr *printer) addExpr(id ExprID, ind int, chain bool) {
 	pr.seq = append(pr.seq, printTask{kind: taskExpr, expr: id, ind: ind, chain: chain})
+}
+
+func (pr *printer) addPat(id PatID) {
+	pr.seq = append(pr.seq, printTask{kind: taskPat, pat: id})
 }
 
 func (pr *printer) addNewline(ind int) {
@@ -259,16 +277,12 @@ func (pr *printer) node(t printTask) {
 		pr.addText(" {")
 		for _, arm := range pr.p.ArmsOf(e.Arms) {
 			pr.addNewline(t.ind + 1)
-			switch arm.Pat {
-			case PatTrue:
-				pr.addText("true => ")
-			case PatFalse:
-				pr.addText("false => ")
-			case PatWildcard:
-				pr.addText("_ => ")
-			default:
-				panic("unreachable")
+			pr.addPat(arm.Pat)
+			if arm.HasGuard {
+				pr.addText(" if ")
+				pr.addExpr(arm.Guard, t.ind+1, false)
 			}
+			pr.addText(" => ")
 			pr.addExpr(arm.Body, t.ind+1, false)
 		}
 		pr.addNewline(t.ind)
@@ -290,4 +304,59 @@ func (pr *printer) args(r base.ListRange, ind int) {
 		pr.addExpr(a, ind, false)
 	}
 	pr.addText(")")
+}
+
+// patNode writes the start of the pattern id that needs no later task, and
+// pushes the tasks for the rest, as node does for an expression. The names of
+// the variables are chosen as the text reaches them, which is why a pattern is
+// written before the guard and the body of its arm.
+func (pr *printer) patNode(id PatID) {
+	p := pr.p.Pats.Get(id)
+	switch p.Kind {
+	case PatTrue:
+		pr.out.WriteString("true")
+	case PatFalse:
+		pr.out.WriteString("false")
+	case PatWildcard:
+		pr.out.WriteString("_")
+	case PatInt:
+		pr.out.WriteString(strconv.FormatInt(p.Int, 10))
+	case PatBind:
+		pr.out.WriteString(pr.name(p.Var))
+	case PatCon:
+		// Like the Con that builds the same value: the name, unless it is a tuple,
+		// which has none, and the patterns of the fields in parentheses, unless
+		// there are none.
+		if ctor := pr.p.Ctors.Get(p.Ctor); !ctor.Tuple {
+			pr.out.WriteString(pr.in.String(ctor.Name))
+		}
+		if p.Args.Count > 0 {
+			pr.addText("(")
+			for i, sub := range pr.p.PatList(p.Args) {
+				if i > 0 {
+					pr.addText(", ")
+				}
+				pr.addPat(sub)
+			}
+			pr.addText(")")
+		}
+	case PatOr:
+		for i, alt := range pr.p.PatList(p.Args) {
+			if i > 0 {
+				pr.addText(" | ")
+			}
+			// An alternative that is an or-pattern is in parentheses: `A | (B | C)`
+			// would read as `A | B | C` without them, which Ki parses as one node.
+			if pr.p.Pats.Get(alt).Kind == PatOr {
+				pr.addText("(")
+				pr.addPat(alt)
+				pr.addText(")")
+			} else {
+				pr.addPat(alt)
+			}
+		}
+	default:
+		panic("unreachable")
+	}
+	pr.push()
 }

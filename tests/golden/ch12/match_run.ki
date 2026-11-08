@@ -1,0 +1,37 @@
+// test: T12.83
+// run: run
+// expect-stdout:
+// | 12
+// | 15
+// | 0
+// | 1
+// | -1
+// | 78
+type Shape {
+  Circle(Int)
+  Rect(Int, Int)
+  Unit
+}
+type Opt { No, Yes(Int) }
+fn area(s: Shape) -> Int {
+  match s {
+    Circle(r) => r * r * 3
+    Rect(w, h) => w * h
+    Unit => 0
+  }
+}
+fn first_positive(p: (Opt, Opt)) -> Int {
+  match p {
+    (Yes(x), _) | (_, Yes(x)) if x > 0 => x
+    _ => 0 - 1
+  }
+}
+fn main() {
+  print(area(Circle(2)))
+  print(area(Rect(3, 5)))
+  print(area(Unit))
+  print(first_positive((Yes(0), Yes(1))))
+  print(first_positive((Yes(0), No)))
+  let (a, b) = (7, 8)
+  print(a * 10 + b)
+}
