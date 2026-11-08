@@ -1,0 +1,46 @@
+// test: T12.95
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0401]: mismatched types
+// |   --> tests/errors/ch12/sorted_by_position_render.ki:35:18
+// |    |
+// | 35 |   perimeter(s) + true
+// |    |                  ^^^^ expected `Float`, found `Bool`
+// |    |                - `+` expects `Float` operands
+// |
+// | warning[W0701]: unreachable pattern
+// |   --> tests/errors/ch12/sorted_by_position_render.ki:41:5
+// |    |
+// | 41 |     Rect(w, _) => w
+// |    |     ^^^^^^^^^^ covered by the arms above
+// |    = help: remove this arm
+// |    |
+// | 41 -     Rect(w, _) => w
+// | 41 +
+// |
+// | error[E0401]: mismatched types
+// |   --> tests/errors/ch12/sorted_by_position_render.ki:45:24
+// |    |
+// | 37 | fn perimeter(s: Shape) -> Float {
+// |    |              -------- the parameter is declared here
+// |    ...
+// | 45 |   printFloat(perimeter(2.0))
+// |    |                        ^^^ expected `Shape`, found `Float`
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn double(s: Shape) -> Float {
+  perimeter(s) + true
+}
+fn perimeter(s: Shape) -> Float {
+  match s {
+    Circle(r) => 2.0 * 3.141592653589793 * r
+    Rect(w, h) => 2.0 * (w + h)
+    Rect(w, _) => w
+  }
+}
+fn main() {
+  printFloat(perimeter(2.0))
+}

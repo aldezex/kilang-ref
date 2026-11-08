@@ -98,7 +98,7 @@ func TestCascadeEdits(t *testing.T) {
 func TestCascadePads(t *testing.T) {
 	src := "one\ntwo\nthree\n"
 	t.Run("functions_at_the_end", func(t *testing.T) {
-		got, isPad := cascadePadded(src, 1, 2, false)
+		got, isPad := cascadePadded(src, 1, 2, padFunctions)
 		if !strings.HasPrefix(got, src+"\nfn bookxPad0(") || !strings.Contains(got, "fn bookxPad1(") || strings.Contains(got, "fn bookxPad2(") {
 			t.Errorf("text:\n%s", got)
 		}
@@ -109,17 +109,56 @@ func TestCascadePads(t *testing.T) {
 		}
 	})
 	t.Run("statements_after_the_edit", func(t *testing.T) {
-		got, isPad := cascadePadded(src, 1, 1, true)
+		got, isPad := cascadePadded(src, 1, 1, padStatements)
 		lines := strings.Split(got, "\n")
-		if lines[0] != "one" || lines[1] != "  let bookxLet0 = 0" || lines[2] != "two" {
+		if lines[0] != "one" || lines[1] != "  print(0) // bookxCall0" || lines[2] != "  let bookxLet0 = 0" || lines[3] != "two" {
 			t.Errorf("text:\n%s", got)
 		}
-		if isPad(1) || !isPad(2) || isPad(3) || isPad(4) {
-			t.Errorf("isPad of the statement is wrong, in:\n%s", got)
+		if isPad(1) || !isPad(2) || !isPad(3) || isPad(4) || isPad(5) {
+			t.Errorf("isPad of the statements is wrong, in:\n%s", got)
+		}
+	})
+	t.Run("calls_come_before_the_lets", func(t *testing.T) {
+		// Each call and each `let` is a statement that ends the arms of a `match` that
+		// lost its `}`; the order is fixed, the calls first and then the `let`s, so that
+		// every edit gets the same text after it.
+		got, _ := cascadePadded(src, 1, 3, padStatements)
+		lines := strings.Split(got, "\n")
+		want := []string{"one", "  print(0) // bookxCall0", "  print(1) // bookxCall1", "  print(2) // bookxCall2", "  let bookxLet0 = 0", "  let bookxLet1 = 1", "  let bookxLet2 = 2", "two"}
+		if !slices.Equal(lines[:len(want)], want) {
+			t.Errorf("text:\n%s", got)
+		}
+	})
+	t.Run("copies_of_the_arm_after_the_edit", func(t *testing.T) {
+		const arms = "m {\n  A => 1\n  B => 2\n}\n"
+		got, isPad := cascadePadded(arms, 1, 2, padArms)
+		lines := strings.Split(got, "\n")
+		want := []string{"m {", "  A => 1", "  A => 1", "  A => 1", "  B => 2", "}"}
+		if !slices.Equal(lines[:len(want)], want) {
+			t.Errorf("text:\n%s", got)
+		}
+		for line, pad := range map[int]bool{1: false, 2: false, 3: true, 4: true, 5: false, 6: false} {
+			if isPad(line) != pad {
+				t.Errorf("isPad(%d) = %v, want %v, in:\n%s", line, !pad, pad, got)
+			}
+		}
+		// The line after the edit is the one that is copied, if it is an arm: after
+		// line 2 it is `B => 2`, after line 3 it is the `}`, and after the last line
+		// there is none, so only the first of these three adds copies.
+		for line, want := range map[int][2]int{2: {1, 3}, 3: {1, 1}, 4: {1, 1}} {
+			text, _ := cascadePadded(arms, line, 2, padArms)
+			if a, b := strings.Count(text, "  A => 1"), strings.Count(text, "  B => 2"); a != want[0] || b != want[1] {
+				t.Errorf("an edit at line %d: %d copies of A and %d of B, want %d and %d:\n%s", line, a, b, want[0], want[1], text)
+			}
+		}
+		for _, line := range []int{3, 4} {
+			if text, _ := cascadePadded(arms, line, 2, padArms); !strings.HasPrefix(text, arms+"\nfn bookxPad0(") {
+				t.Errorf("an edit at line %d, where no arm follows, changed the program:\n%s", line, text)
+			}
 		}
 	})
 	t.Run("a_program_with_no_final_newline", func(t *testing.T) {
-		got, _ := cascadePadded("one", 1, 1, false)
+		got, _ := cascadePadded("one", 1, 1, padFunctions)
 		if !strings.HasPrefix(got, "one\n\nfn bookxPad0(") {
 			t.Errorf("text:\n%s", got)
 		}
@@ -145,7 +184,14 @@ not json
 //	a line with OOPS    gives one error at that line
 //	a line with STRAY   gives one error at that line and another at line 1
 //	a line with FAR     gives one error at line 1 and none at that line
-//	after a line with OPEN, each line with bookxPad or bookxLet gives one error
+//	after a line with OPEN, each line with bookxPad, bookxCall or bookxLet gives one error
+//	after a line with CALLS, each call that was added (a line with bookxCall) gives
+//	                    one error at that line, and a `let` that was added none
+//	a line with SECOND  gives one error at the second added call, and none anywhere
+//	                    else
+//	a line with ARMLINE gives one error at each line with a =>
+//	a line with ARMS    gives, for each line with a => in the program, one error at
+//	                    line 1
 //	a line with NEXT    gives one error at the next line
 //	a line with BRACE   gives E0202 for a `{` at that line, and each later line that
 //	                    starts with fn, pub or # an E0201 that says what it found
@@ -179,6 +225,14 @@ function diagat(n, c) { printf "{\"severity\":\"error\",\"code\":\"E1\",\"messag
 /ATEND/ { diag(NR); atend = 1 }
 /NEARGROW/ { nextline = NR + 1; grows = 1 }
 /FNPADS/ { fnpads = 1 }
+/CALLS/ { calls = 1 }
+calls && /bookxCall/ { diag(NR) }
+/SECOND/ { second = 1 }
+second && /bookxCall1/ { diag(NR) }
+/ARMLINE/ { armline = 1 }
+armline && /=>/ { diag(NR) }
+/ARMS/ { arms = 1 }
+arms && /=>/ { diag(1) }
 fnpads && /fn bookxPad/ { diag(NR) }
 /ONCE a/ { onepad = 1 }
 function item(n, what, word) { printf "{\"severity\":\"error\",\"code\":\"E0201\",\"message\":\"expected %s, found \140%s\140\",\"line\":%d,\"col\":1}\n", what, word, n; bad = 1 }
@@ -198,12 +252,12 @@ wide && /let b = / { diag(NR) }
 /ONEPAD/ { onepad = 1 }
 onepad && /fn bookxPad0\(/ { diag(NR) }
 /GROWS/ { grows = 1 }
-grows && /bookx(Pad|Let)/ { diag(1) }
+grows && /bookx(Pad|Call|Let)/ { diag(1) }
 /OPEN/ { open = 1 }
 /OOPS/ { diag(NR) }
 /STRAY/ { diag(NR); diag(1) }
 /FAR/ { diag(1) }
-open && /bookx(Pad|Let)/ { diag(NR) }
+open && /bookx(Pad|Call|Let)/ { diag(NR) }
 END { if (pastend) diag(NR + 1); if (atend) diag(NR); exit bad }
 ' "$f" >&2
 `
@@ -229,7 +283,7 @@ func cascadeRun(t *testing.T, program string, vocabulary ...string) (int, string
 func TestCascadeRun(t *testing.T) {
 	t.Run("nothing_wrong", func(t *testing.T) {
 		code, out, errOut := cascadeRun(t, "a\nb\n", "OOPS")
-		want := "cascade p.ki: 6 mutants, 2 still valid, 4 with errors (1: 4), 0 grow, 0 at correct text, 0 far from the edit, 0 on the known limit, 0 crash\n"
+		want := "cascade p.ki: 6 mutants, 2 still valid, 4 with errors (1: 4), 0 grow, 0 at correct text, 0 far from the edit, 0 per arm, 0 on the known limit, 0 crash\n"
 		if code != exitOK || out != want || errOut != "" {
 			t.Errorf("code %d, stdout %q, stderr %q; want 0, %q", code, out, errOut, want)
 		}
@@ -245,8 +299,8 @@ func TestCascadeRun(t *testing.T) {
 	t.Run("diagnostics_that_grow_with_correct_text", func(t *testing.T) {
 		code, out, _ := cascadeRun(t, "a\n", "OPEN")
 		for _, want := range []string{
-			"p.ki:1:1: grows: rep `a` -> `OPEN`: 0 diagnostics, then 8, then 16, with 0, 4 and 8 correct additions after it: E1 m\n",
-			"cascade p.ki: 3 mutants, 3 still valid, 0 with errors (none), 2 grow, 2 at correct text, 0 far from the edit, 0 on the known limit, 0 crash\n",
+			"p.ki:1:1: grows: rep `a` -> `OPEN`: 0 diagnostics, then 12, then 24, with 0, 4 and 8 correct additions after it: E1 m\n",
+			"cascade p.ki: 3 mutants, 3 still valid, 0 with errors (none), 2 grow, 2 at correct text, 0 far from the edit, 0 per arm, 0 on the known limit, 0 crash\n",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("want %q in:\n%s", want, out)
@@ -254,6 +308,64 @@ func TestCascadeRun(t *testing.T) {
 		}
 		if code != exitFail {
 			t.Errorf("code %d", code)
+		}
+	})
+
+	t.Run("a_call_among_the_added_statements_is_seen", func(t *testing.T) {
+		// The added statements have calls as well as `let`s, because a mistake may cost
+		// an error for each statement of one kind and none for the other: the errors
+		// that grow with the calls are found (and, being on lines that the tool added,
+		// are text that is correct as well).
+		code, out, _ := cascadeRun(t, "a\n", "CALLS")
+		for _, want := range []string{
+			"p.ki:1:1: grows: rep `a` -> `CALLS`: 0 diagnostics, then 4, then 8, with 0, 4 and 8 correct additions after it: E1 m\n",
+			"p.ki:1:1: correct-text: rep `a` -> `CALLS`: an error on an added correct line: E1 m\n",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("want %q in:\n%s", want, out)
+			}
+		}
+		if code != exitFail {
+			t.Errorf("code %d", code)
+		}
+	})
+
+	t.Run("the_second_call_is_next_to_the_edit_too", func(t *testing.T) {
+		// A `(` that an edit leaves open takes the first call with it and is noticed at
+		// the second, two lines after the edit: that is the mistake's own error, and not
+		// text that is correct.
+		code, out, _ := cascadeRun(t, "a\n", "SECOND")
+		if !strings.Contains(out, " 0 grow, 0 at correct text, ") || code != exitOK {
+			t.Errorf("code %d, output:\n%s", code, out)
+		}
+	})
+
+	t.Run("copies_of_an_arm_among_the_added_lines_are_seen", func(t *testing.T) {
+		// A match that lost its keyword costs errors for each arm that it has, which no
+		// statement after the edit shows: a copy of the arm that follows the edit does.
+		// The program has two arms, so the edit starts with two errors and each copy
+		// adds one. It is listed and counted, and it fails nothing: a scrutinee that is
+		// wrong costs an error for each arm too.
+		code, out, _ := cascadeRun(t, "a\n  A => 1\n  B => 2\n", "ARMS")
+		want := "p.ki:1:1: per-arm: rep `a` -> `ARMS`: 2 diagnostics, then 6, then 10, with 0, 4 and 8 correct additions after it: none on the added lines\n"
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in:\n%s", want, out)
+		}
+		if strings.Contains(out, "grows:") || strings.Contains(out, "correct-text:") || code != exitOK {
+			t.Errorf("the growth per arm is no failure: code %d, output:\n%s", code, out)
+		}
+		// The errors of the copies are on the copies, which are arms of the program: the
+		// run for the arms does not call them correct text, as it does for the lines of
+		// the other runs, and says what the error is.
+		code, out, _ = cascadeRun(t, "a\n  A => 1\n  B => 2\n", "ARMLINE")
+		want = "p.ki:1:1: per-arm: rep `a` -> `ARMLINE`: 2 diagnostics, then 6, then 10, with 0, 4 and 8 correct additions after it: E1 m\n"
+		if !strings.Contains(out, want) || strings.Contains(out, "correct-text:") || code != exitOK {
+			t.Errorf("errors on the copies: code %d, output:\n%s", code, out)
+		}
+		// A program with no arm has no copies, so it adds no run.
+		code, out, _ = cascadeRun(t, "a\nb\n", "ARMS")
+		if strings.Contains(out, "per-arm") || code != exitOK {
+			t.Errorf("a program with no arms: code %d, output:\n%s", code, out)
 		}
 	})
 
@@ -298,7 +410,7 @@ func TestCascadeRun(t *testing.T) {
 				t.Errorf("%s in:\n%s", kind, out)
 			}
 		}
-		if !strings.Contains(out, " 0 grow, 0 at correct text, 0 far from the edit, 20 on the known limit, 0 crash\n") {
+		if !strings.Contains(out, " 0 grow, 0 at correct text, 0 far from the edit, 0 per arm, 20 on the known limit, 0 crash\n") {
 			t.Errorf("counts:\n%s", out)
 		}
 	})

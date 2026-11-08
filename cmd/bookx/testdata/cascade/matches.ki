@@ -1,0 +1,42 @@
+// Areas and codes of shapes: matches in the middle of a block, with arms of
+// every kind (guarded, or-patterns) and statements after them.
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+  Square(side: Float)
+}
+
+fn area(s: Shape) -> Float {
+  let base = match s {
+    Circle(r) => 3.0 * r * r
+    Rect(w, h) => w * h
+    Square(a) => a * a
+  }
+  let scaled = base * 2.0
+  let shifted = scaled + 1.0
+  shifted
+}
+
+fn code(s: Shape) -> Int {
+  let kind = match s {
+    Circle(_) => 1
+    Rect(w, h) if w > h => 2
+    Rect(_, _) | Square(_) => 3
+  }
+  let doubled = kind * 2
+  print(doubled)
+  doubled + 1
+}
+
+fn main() {
+  let first = Rect(2.0, 3.0)
+  printFloat(area(first))
+  let c = code(first)
+  print(c)
+  let d = match c {
+    7 => 70
+    8 => 80
+    _ => 0
+  }
+  print(d)
+}

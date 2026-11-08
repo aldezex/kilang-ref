@@ -1,0 +1,13 @@
+// test: T12.88
+// run: check
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn main() {
+  let s = Rect(2.0, 3.0)
+  let big = match s {
+    Circle(r) => 2.0 * r
+    Rect(w, h) => w > h  // ERROR(E0401) @19
+  }
+}

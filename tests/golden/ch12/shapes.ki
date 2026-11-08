@@ -1,0 +1,19 @@
+// test: T12.85
+// run: run
+// expect-stdout:
+// | 6.0
+// | 3.141592653589793
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {
+    Circle(r) => 3.141592653589793 * r * r
+    Rect(w, h) => w * h
+  }
+}
+fn main() {
+  printFloat(area(Rect(2.0, 3.0)))
+  printFloat(area(Circle(1.0)))
+}

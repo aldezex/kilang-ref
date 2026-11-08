@@ -1,0 +1,26 @@
+// test: T12.91
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0301]: unknown name `ares`
+// |   --> tests/errors/ch12/unknown_name_render.ki:25:14
+// |    |
+// | 25 |   printFloat(ares(Rect(2.0, 3.0)))
+// |    |              ^^^^ not found in this scope
+// |    = help: did you mean `area`?
+// |    |
+// | 25 -   printFloat(ares(Rect(2.0, 3.0)))
+// | 25 +   printFloat(area(Rect(2.0, 3.0)))
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {
+    Circle(r) => 3.141592653589793 * r * r
+    Rect(w, h) => w * h
+  }
+}
+fn main() {
+  printFloat(ares(Rect(2.0, 3.0)))
+}

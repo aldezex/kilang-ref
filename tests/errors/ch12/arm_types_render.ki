@@ -1,0 +1,22 @@
+// test: T12.89
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0401]: mismatched types
+// |   --> tests/errors/ch12/arm_types_render.ki:20:19
+// |    |
+// | 19 |     Circle(r) => 2.0 * r
+// |    |                  ------- the first arm has type `Float`
+// | 20 |     Rect(w, h) => w > h
+// |    |                   ^^^^^ expected `Float`, found `Bool`
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn main() {
+  let s = Rect(2.0, 3.0)
+  let big = match s {
+    Circle(r) => 2.0 * r
+    Rect(w, h) => w > h
+  }
+}

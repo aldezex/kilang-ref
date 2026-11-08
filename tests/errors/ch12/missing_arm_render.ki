@@ -1,0 +1,23 @@
+// test: T12.87
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0701]: non-exhaustive match
+// |   --> tests/errors/ch12/missing_arm_render.ki:17:9
+// |    |
+// | 17 |   match s {
+// |    |         ^ pattern `Rect(_, _)` not covered
+// |    = note: a `match` must cover every value; guards do not count
+// |    = help: add an arm for `Rect(_, _)`
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {
+    Circle(r) => 3.141592653589793 * r * r
+  }
+}
+fn main() {
+  printFloat(area(Rect(2.0, 3.0)))
+}

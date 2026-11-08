@@ -669,3 +669,99 @@ input:   un programa con `Opt` y dos funciones: una con `let (a, _)` y un `match
 expect:  sale con 0 y stdout exactamente el volcado de `Opt` y de sus dos constructores, las dos funciones y `main`, con `(a, _) => match a { … }` y `(Yes(x), _) | (_, Yes(x)) if gt_int(x, 0) => x`
 why:     es cómo se ven los patrones en Core con el binario: lo que el libro enseña a leer en `emit core`.
 ref:     tests/golden/ch12/match_core.ki
+
+[T12.85] check.shapes_milestone                             level: core
+kind:    run                 file: tests/golden/ch12/shapes.ki
+case:    el hito M2: `ki run` ejecuta de punta a punta un `Shape` con `Circle` y `Rect`, un `area` con un `match` de dos brazos y `printFloat`, con el `Float` escrito como lo escribe `kirt/fmtnum`
+input:   `type Shape` con `Circle(radius: Float)` y `Rect(w: Float, h: Float)`, `area` con `3.141592653589793 * r * r` y `w * h`, y un `main` que imprime `area(Rect(2.0, 3.0))` y `area(Circle(1.0))`
+expect:  sale con 0 y stdout exactamente `6.0` y `3.141592653589793`, cada uno en su línea
+why:     si `Float` se imprimiera sin el `.0` o el `match` tomara el brazo equivocado, el hito no imprimiría `6.0` y lo verías aquí.
+ref:     tests/golden/ch12/shapes.ki
+
+[T12.86] check.missing_arm                                  level: core
+kind:    diag                file: tests/errors/ch12/missing_arm.ki
+case:    `ki check` sobre un `match` al que le falta el brazo de `Rect` da un único E0701, anotado en línea sobre el escrutinio
+input:   `area` con `match s` y solo el brazo `Circle(r)`, y un `main` que la llama con un `Rect`
+expect:  sale con 1 y el único diagnóstico es el E0701 en 8:9, la `s` del `match`; ningún E0401 ni otro error por el brazo que falta
+why:     un brazo que falta es un olvido, un error: la anotación fija el código y la posición, y cualquier diagnóstico de más falla la prueba.
+ref:     tests/errors/ch12/missing_arm.ki
+
+[T12.87] check.missing_arm_render                           level: core
+kind:    diag                file: tests/errors/ch12/missing_arm_render.ki
+case:    `ki check` sobre ese mismo `match` dibuja el E0701 con el testigo en la etiqueta, la nota de las guardas y la ayuda
+input:   el programa de T12.86, sin la anotación
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 7 líneas: «non-exhaustive match», «pattern `Rect(_, _)` not covered» bajo la `s`, la nota «a `match` must cover every value; guards do not count» y la ayuda «add an arm for `Rect(_, _)`», sin edición
+why:     el testigo `Rect(_, _)` te dice qué valor falta: el mensaje nombra el patrón que añadirías, no solo que falta algo.
+ref:     tests/errors/ch12/missing_arm_render.ki
+
+[T12.88] check.arm_types                                    level: core
+kind:    diag                file: tests/errors/ch12/arm_types.ki
+case:    `ki check` sobre un `match` sin tipo esperado, con un brazo `Float` y otro `Bool`, da un único E0401 en el segundo brazo
+input:   en `main`, `let big = match s { Circle(r) => 2.0 * r; Rect(w, h) => w > h }` con un `Rect` en `s`
+expect:  sale con 1 y el único diagnóstico es el E0401 en 11:19, el `w > h`; ninguno en el primer brazo
+why:     cuando los brazos no coinciden, el error cae en el que desentona con el primero, no en el primero.
+ref:     tests/errors/ch12/arm_types.ki
+
+[T12.89] check.arm_types_render                             level: core
+kind:    diag                file: tests/errors/ch12/arm_types_render.ki
+case:    `ki check` sobre esos brazos dibuja el E0401 con la etiqueta de «el primer brazo» bajo el brazo que sirve de modelo
+input:   el programa de T12.88, sin la anotación
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 7 líneas: «mismatched types», la secundaria «the first arm has type `Float`» bajo `2.0 * r` y la primaria «expected `Float`, found `Bool`» bajo `w > h`, sin nota ni ayuda
+why:     la etiqueta del primer brazo te dice con qué se compara el que falla; sin ella el error parecería venir de la nada.
+ref:     tests/errors/ch12/arm_types_render.ki
+
+[T12.90] check.unknown_name                                 level: core
+kind:    diag                file: tests/errors/ch12/unknown_name.ki
+case:    `ki check` sobre la llamada a `ares`, que no existe, da un único E0301, anotado en línea sobre el nombre
+input:   el `area` del hito y un `main` con `printFloat(ares(Rect(2.0, 3.0)))`
+expect:  sale con 1 y el único diagnóstico es el E0301 en 14:14, la `a` de `ares`; ningún E0401 en `printFloat` por lo que habría devuelto
+why:     un nombre desconocido es un solo error: lo que dependa de su valor tiene el tipo de error y no repite el aviso.
+ref:     tests/errors/ch12/unknown_name.ki
+
+[T12.91] check.unknown_name_render                          level: core
+kind:    diag                file: tests/errors/ch12/unknown_name_render.ki
+case:    `ki check` sobre `ares` dibuja el E0301 con la ayuda «did you mean `area`?» y la edición que cambia el nombre
+input:   el programa de T12.90, sin la anotación
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 9 líneas: «unknown name `ares`», «not found in this scope» bajo `ares`, la ayuda «did you mean `area`?» y las líneas `25 -` y `25 +` que cambian `ares` por `area`
+why:     la ayuda propone `area` y su edición: una errata de una letra se corrige leyendo el mensaje, sin buscarla en el código.
+ref:     tests/errors/ch12/unknown_name_render.ki
+
+[T12.92] check.bad_argument                                 level: core
+kind:    diag                file: tests/errors/ch12/bad_argument.ki
+case:    `ki check` sobre `area(2.0)`, donde `area` pide un `Shape`, da un único E0401, anotado en línea sobre el argumento
+input:   el `area` del hito y un `main` con `printFloat(area(2.0))`
+expect:  sale con 1 y el único diagnóstico es el E0401 en 14:19, el `2.0`; ninguno en `area` ni en `printFloat`, que lo envuelven
+why:     el error cae en el argumento que no es un `Shape`; ni `area` ni `printFloat`, que lo envuelven, añaden uno propio.
+ref:     tests/errors/ch12/bad_argument.ki
+
+[T12.93] check.bad_argument_render                          level: core
+kind:    diag                file: tests/errors/ch12/bad_argument_render.ki
+case:    `ki check` sobre ese argumento dibuja el E0401 con la etiqueta del parámetro en la declaración de `area`, lejos de la llamada
+input:   el programa de T12.92, sin la anotación
+expect:  sale con 1, stdout vacío y stderr exactamente el diagnóstico humano de 8 líneas: «mismatched types», la secundaria «the parameter is declared here» bajo `s: Shape` en la línea 17, un salto `...` y la primaria «expected `Shape`, found `Float`» bajo `2.0`, sin nota ni ayuda
+why:     la etiqueta del parámetro señala qué tipo pedía la función: ves a la vez el argumento y lo que esperaba.
+ref:     tests/errors/ch12/bad_argument_render.ki
+
+[T12.94] check.warning_render                               level: core
+kind:    diag                file: tests/errors/ch12/warning_render.ki
+case:    `ki check` sobre un programa cuyo único diagnóstico es el W0701 sale con 0 y lo escribe, con la etiqueta, la ayuda y la edición que borra el brazo
+input:   el `area` del hito con un tercer brazo, `Rect(w, _) => w`, detrás de `Rect(w, h) => w * h`
+expect:  sale con 0, stdout vacío y stderr exactamente el diagnóstico humano de 9 líneas: «warning[W0701]: unreachable pattern», «covered by the arms above» bajo `Rect(w, _)`, la ayuda «remove this arm» y las líneas `22 -` y `22 +` que lo borran
+why:     una advertencia avisa y no impide nada: el programa sale con 0 y ves el brazo que sobra con su edición.
+ref:     tests/errors/ch12/warning_render.ki
+
+[T12.95] check.sorted_by_position_render                    level: core
+kind:    diag                file: tests/errors/ch12/sorted_by_position_render.ki
+case:    `ki check` sobre un fichero con dos errores de tipo y una advertencia entre ellos los escribe por su posición en el fichero, no por pase ni por gravedad
+input:   `double` con `perimeter(s) + true`, `perimeter` con el brazo `Rect(w, _)` que sobra y `main` con `perimeter(2.0)`
+expect:  sale con 1, stdout vacío y stderr exactamente tres diagnósticos humanos separados por una línea en blanco: el E0401 de la línea 35, el W0701 de la 41 y el E0401 de la 45
+why:     los patrones se comprueban al final: sin ordenar, la advertencia saldría la última; así sale entre los dos errores, en su sitio.
+ref:     tests/errors/ch12/sorted_by_position_render.ki
+
+[T12.96] check.missing_brace_after_the_scrutinee            level: core
+kind:    diag                file: tests/errors/ch12/missing_brace.ki
+case:    `ki check` sobre un `match` al que le falta la `{` tras el escrutinio da un único E0201, y los brazos que siguen se leen como brazos
+input:   `area` con `match s` sin `{` en su línea y los brazos `Circle(r)` y `Rect(w, h)` debajo, con su `}`, y un `main` que la llama con un `Rect`
+expect:  sale con 1 y el único diagnóstico es el E0201 en 8:31, el salto de línea tras `match s`; ningún E0301 por `r`, `w` o `h` ni otro E0201 por una `=>` o por la `}`
+why:     leídos como sentencias, los brazos darían un E0301 falso por variable y un E0201 por flecha, con una ayuda que reescribe `r` como `s`.
+ref:     tests/errors/ch12/missing_brace.ki

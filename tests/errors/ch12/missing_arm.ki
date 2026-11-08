@@ -1,0 +1,14 @@
+// test: T12.86
+// run: check
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {  // ERROR(E0701) @9
+    Circle(r) => 3.141592653589793 * r * r
+  }
+}
+fn main() {
+  printFloat(area(Rect(2.0, 3.0)))
+}

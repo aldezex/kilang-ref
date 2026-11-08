@@ -1,0 +1,27 @@
+// test: T12.94
+// run: check
+// expect-exit: 0
+// expect-stderr:
+// | warning[W0701]: unreachable pattern
+// |   --> tests/errors/ch12/warning_render.ki:22:5
+// |    |
+// | 22 |     Rect(w, _) => w
+// |    |     ^^^^^^^^^^ covered by the arms above
+// |    = help: remove this arm
+// |    |
+// | 22 -     Rect(w, _) => w
+// | 22 +
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {
+    Circle(r) => 3.141592653589793 * r * r
+    Rect(w, h) => w * h
+    Rect(w, _) => w
+  }
+}
+fn main() {
+  printFloat(area(Rect(2.0, 3.0)))
+}

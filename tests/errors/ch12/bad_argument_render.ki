@@ -1,0 +1,25 @@
+// test: T12.93
+// run: check
+// expect-exit: 1
+// expect-stderr:
+// | error[E0401]: mismatched types
+// |   --> tests/errors/ch12/bad_argument_render.ki:24:19
+// |    |
+// | 17 | fn area(s: Shape) -> Float {
+// |    |         -------- the parameter is declared here
+// |    ...
+// | 24 |   printFloat(area(2.0))
+// |    |                   ^^^ expected `Shape`, found `Float`
+type Shape {
+  Circle(radius: Float)
+  Rect(w: Float, h: Float)
+}
+fn area(s: Shape) -> Float {
+  match s {
+    Circle(r) => 3.141592653589793 * r * r
+    Rect(w, h) => w * h
+  }
+}
+fn main() {
+  printFloat(area(2.0))
+}
