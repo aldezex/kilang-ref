@@ -89,7 +89,8 @@ const checkFind = (o) => (r, label) => {
       need(!o.codeOnly, name, 'this lens may only report owner code')
     } else {
       need(!f.where.startsWith('book/ch'), name, 'owner code but where is the chapter text: ' + f.where)
-      need(f.kind !== 'text', name, 'owner code cannot have kind text')
+      // Text the code owns (a card's why, a comment, an error page) is kept as kind other, not a reason to stop.
+      if (f.kind === 'text') f.kind = 'other'
     }
     // Only the truth readers grade Nits; another reader's Nit is kept as a Minor, not a reason to stop.
     if (f.severity === 'Nit' && o.nits !== true) f.severity = 'Minor'

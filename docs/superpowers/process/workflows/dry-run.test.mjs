@@ -131,7 +131,6 @@ test('a bad result is a stop too: owner, kind, Nit, emptiness, report path', asy
     'owner missing, the rest of a code finding': finds({ ...F('pass-facts-1', 'Important', 'code', 'output', true), owner: undefined }),
     'prose pointing at code': finds(F('pass-facts-1', 'Important', 'prose', 'text', true, 'internal/x/y.go:1')),
     'code pointing at the text': finds(F('pass-facts-1', 'Important', 'code', 'output', true, 'book/ch11-x.md:1')),
-    'code of kind text': finds(F('pass-facts-1', 'Important', 'code', 'text', true)),
     'prose not visible': finds(F('pass-facts-1', 'Minor', 'prose', 'text', false)),
     'id of another lens': finds(F('pass-whys-1', 'Important', 'prose', 'text', true)),
     'duplicate id': finds(F('pass-facts-1', 'Minor', 'prose', 'text', true), F('pass-facts-1', 'Minor', 'prose', 'text', true)),
@@ -147,6 +146,8 @@ test('a bad result is a stop too: owner, kind, Nit, emptiness, report path', asy
     assert.ok(r.stopped, why + ' passed')
     none(w, LATER)
   }
+  const codeText = await chapter({}, { [lens]: finds(F('pass-facts-1', 'Important', 'code', 'text', true)) })
+  assert.ok(!codeText.r.stopped, 'code-owned text is kept as kind other, not a stop')
   const nit = await chapter({}, { 'ch11:pass:apprentice': finds(F('pass-apprentice-1', 'Nit', 'prose', 'text', true)) })
   assert.ok(!nit.r.stopped, 'another reader\'s Nit is kept as a Minor, not a stop')
   const ok = await chapter({}, { [lens]: finds(F('pass-facts-1', 'Nit', 'prose', 'text', true)) })
