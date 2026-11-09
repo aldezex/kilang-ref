@@ -37,9 +37,10 @@ Un patrón dice qué forma tiene un valor y qué nombres reciben sus partes.
 pat   = alt { '|' alt }
 alt   = '_' | lower | entero | '-' entero | 'true' | 'false'
       | Upper [ '(' pat { ',' pat } [ ',' ] ')' ]
-      | Upper '{' [ fpat { ',' fpat } [ ',' ] ] [ '..' ] '}'
+      | Upper '{' [ fpat { ',' fpat } [ ',' [ '..' ] ] | '..' ] '}'
       | '(' pat ')' | '(' pat ',' pat { ',' pat } ')'
-      | '[' [ pat { ',' pat } ] [ '..' ( lower | '_' ) ] ']'      listas: sin tipo hasta su capítulo
+      | '[' [ pat { ',' pat } [ ',' resto ] | resto ] ']'          listas: sin tipo hasta su capítulo
+resto = '..' ( lower | '_' )                                      el resto va siempre el último
 fpat  = lower [ ':' pat ]                                         x sola liga el campo x (pun)
 match = 'match' expr '{' { pat [ 'if' expr ] '=>' expr sep } '}'
 stmt += 'let' pat [ ':' ty ] '=' expr
